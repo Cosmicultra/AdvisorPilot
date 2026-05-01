@@ -1,0 +1,81 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+);
+
+export async function POST(req: Request) {
+  try {
+    const { email, password, type } = await req.json();
+
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return NextResponse.json(
+        { error: "Missing Supabase environment variables." },
+        { status: 500 }
+      );
+    }
+
+    if (!email || !password) {
+      return NextResponse.json(
+        { error: "Email and password are required." },
+        { status: 400 }
+      );
+    }
+
+    if (String(password).length < 6) {
+      return NextResponse.json(
+        { error: "Password must be at least 6 characters." },
+        { status: 400 }
+      );
+    }
+
+    if (type === "signup") {
+      const { data, error } = await supabaseAdmin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+      });
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
+
+      return NextResponse.json({
+        ok: true,
+        user: data.user,
+        message: "Account created successfully.",
+      });
+    }
+
+    if (type === "login") {
+      const { data, error } = await supabaseAdmin.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 401 });
+      }
+
+      return NextResponse.json({
+        ok: true,
+        user: data.user,
+        session: data.session,
+        message: "Logged in successfully.",
+      });
+    }
+
+    return NextResponse.json(
+      { error: "Invalid request type." },
+      { status: 400 }
+    );
+  } catch (err: any) {
+    console.error("SUPABASE EMAIL AUTH ERROR:", err);
+    return NextResponse.json(
+      { error: err?.message || "Email authentication failed." },
+      { status: 500 }
+    );
+  }
+}
