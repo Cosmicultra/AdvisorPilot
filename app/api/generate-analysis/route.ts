@@ -60,9 +60,9 @@ Write concise research notes only. Do not return JSON.
     const researchNotes = researchResponse.output_text || "";
 
     const jsonPrompt = `
-You are AdvisorPilot, an elite advisor-facing portfolio analysis assistant.
+You are AdvisorPilot, an elite portfolio analysis assistant for licensed financial advisors.
 
-Using the portfolio data and the current market research notes below, generate a professional advisor-level review.
+Using the portfolio data and current market research notes below, generate a professional portfolio review.
 
 Today's analysis date is ${analysisDate}.
 
@@ -85,12 +85,16 @@ Return ONLY valid JSON. No markdown. No code fences.
 
 Use this exact JSON shape:
 {
-  "synopsis": "A detailed advisor-level paragraph dated with today's analysis date. It should explain the client's portfolio in depth, discuss current market context, identify a few specific holdings or asset categories that may be overexposed, underperforming, overly concentrated, or misaligned with the client's age, risk profile, retirement objective, and stated goal.",
+  "synopsis": "Client-facing executive summary dated with today's analysis date.",
+  "portfolioHighlights": [
+    "highlight 1",
+    "highlight 2",
+    "highlight 3"
+  ],
   "strategies": [
     "strategy 1",
     "strategy 2",
-    "strategy 3",
-    "strategy 4"
+    "strategy 3"
   ],
   "redFlags": [
     "advisor red flag 1",
@@ -103,24 +107,23 @@ Use this exact JSON shape:
     "overlap and concentration insight 2",
     "overlap and concentration insight 3"
   ],
-  "whatThisMeans": [
+  "displayWhatThisMeans": [
     "client impact 1",
     "client impact 2",
     "client impact 3"
   ],
   "recommendations": [
-    "advisor-only rebalance consideration 1 written as 1-2 detailed sentences",
-    "advisor-only rebalance consideration 2 written as 1-2 detailed sentences",
-    "advisor-only rebalance consideration 3 written as 1-2 detailed sentences",
-    "advisor-only rebalance consideration 4 written as 1-2 detailed sentences"
+    "advisor-only rebalance consideration 1",
+    "advisor-only rebalance consideration 2",
+    "advisor-only rebalance consideration 3",
+    "advisor-only rebalance consideration 4"
   ],
   "talkingPoints": [
-    "meeting overview point 1",
-    "meeting overview point 2",
-    "meeting overview point 3",
-    "meeting overview point 4"
+    "advisor meeting agenda point 1",
+    "advisor meeting agenda point 2",
+    "advisor meeting agenda point 3"
   ],
-  "advisorOpeningScript": "Detailed professional opening script.",
+  "advisorOpeningScript": "Professional advisor opening script.",
   "objectionHandling": [
     "objection and response 1",
     "objection and response 2",
@@ -128,50 +131,106 @@ Use this exact JSON shape:
   ]
 }
 
-Rules:
-- This report is for a licensed advisor's internal review and meeting preparation.
-- Do not phrase recommendations as final client instructions.
-- Do not say "buy this" or "sell this."
-- Use advisor-review language such as review, evaluate, consider, potential, rotate, reduce exposure, replace with, rebalance toward, or compare against.
-- Make it specific to the client age, retirement timeline, risk profile, goals, holdings, and allocation.
-- In the synopsis, reference several actual holdings from the statement when relevant, especially holdings that appear concentrated, growth-heavy, interest-rate sensitive, under-diversified, underperforming, or potentially mismatched to the client's retirement timeline.
-- Discuss whether the portfolio appears overweight or underweight equities, fixed, cash, dividend exposure, international exposure, and retirement income positioning.
-- The redFlags array should be advisor-eyes-only and should identify the biggest portfolio concerns before recommending strategy.
-- Red flags should identify issues such as equity overweight, fund overlap, sector overexposure, concentration risk, low income readiness, excess cash, lack of fixed income, weak diversification, interest-rate sensitivity, or mismatch with the client's retirement timeline.
-- Red flags should be direct, specific, and analytical, but still compliance-aware.
-- Do not phrase red flags as final client instructions.
-- Use language such as appears, may, review, evaluate, potential concern, or worth stress-testing.
-- The overlapInsights array should focus specifically on hidden concentration and overlap.
-- Overlap insights should identify whether multiple funds, ETFs, mutual funds, or individual stock holdings may create similar underlying exposure.
-- Specifically look for overlap across S&P 500 funds, large-cap funds, growth funds, tech stocks, dividend funds, bond funds, cash/money market positions, and any repeated asset category exposure.
-- If exact fund-level overlap is unknown, say "may" or "should be reviewed" rather than claiming exact overlap percentages.
-- The overlapInsights array should be useful for both advisor review and a simplified client conversation.
-- The recommendations array should be advisor-eyes-only and sharper than the client-facing sections.
-- Each recommendation should be 1-2 clean sentences, not a long paragraph.
-- Each recommendation should identify: the specific holding or category to review, why it may be an issue, and what type of replacement or rebalance direction may be worth comparing.
-- The recommendations should feel like a portfolio manager reviewing the statement, not a generic planning checklist.
-- The recommendations array should identify specific holdings or categories that may be overexposed, concentrated, sector-sensitive, high-volatility, underperforming, overlapping, or mismatched to the client's retirement objective.
-- When appropriate, include potential replacement examples or comparison ideas such as broad-market ETFs, dividend ETFs, short-duration bond ETFs, Treasuries, high-quality bond funds, money market funds, MYGAs, FIAs, SPIAs, or income rider strategies.
-- If mentioning individual stock examples, frame them as holdings to review, reduce concentration in, compare, stress-test, rotate away from, or rebalance around, not as final trade instructions.
-- Avoid vague recommendations like "diversify more" unless paired with specific portfolio context and a practical comparison idea.
-- Keep all language compliance-aware and advisor-facing.
-- Do not claim exact live prices unless they were found in research notes.
+NON-NEGOTIABLE SECTION SEPARATION RULE:
+Each section has a distinct job. Do not repeat the same talking point across sections. If a topic appears in multiple sections, it must serve a different purpose each time. The report should feel intentionally structured, not repetitive.
 
-- Avoid repeating the same concern across multiple sections.
-- Each section must have a separate job:
-  - synopsis = detailed executive summary/deep dive, dated with today's analysis date, about 8-12 sentences if needed.
-  - redFlags = advisor-only concerns, direct and specific.
-  - overlapInsights = hidden concentration or fund/stock overlap only; do not repeat broad allocation percentages.
-  - whatThisMeans = client-friendly impact only; no ticker symbols, no fund names, no percentages.
-  - strategies = planning direction only; do not repeat overlap language.
-  - recommendations = advisor-only review ideas; be specific but do not duplicate redFlags.
-  - talkingPoints = meeting agenda only; keep brief.
+SECTION ROLES:
+
+1. synopsis
+- Client-facing executive summary.
+- Must start with: "As of ${analysisDate}, ..."
+- Keep the date.
+- 6-8 sentences max.
+- Include the most important portfolio facts and holdings when relevant.
+- It may reference actual tickers/holdings because the client report is based on their statement.
+- It should explain the portfolio in a clear advisor voice, not a generic AI voice.
+- It should prioritize the 3-5 most important observations only.
+- It should NOT include a checklist of every possible issue.
+- It should NOT duplicate exact wording from portfolioHighlights, overlapInsights, displayWhatThisMeans, strategies, or next steps.
+- Avoid phrase stacking such as "demonstrates," "highlighting a need," "suggesting an opportunity," "may benefit from adjustments," or "ensure alignment" unless truly necessary.
+- Use confident but compliance-aware language.
+
+2. portfolioHighlights
+- Client-facing.
+- Exactly 3 bullets.
+- One sentence each.
+- These are headline takeaways, not explanations.
+- No repeated wording from the synopsis.
+- No "consider," "evaluate," or "review" language.
+- No generic filler.
+- Each bullet should identify one distinct takeaway.
+
+3. overlapInsights
+- Hidden concentration and overlap only.
+- Do not repeat broad allocation commentary.
+- Focus on duplicated exposure across funds, ETFs, mutual funds, sector exposure, individual stocks, or bond categories.
+- Use tickers/holding names when helpful.
+- If exact fund-level overlap is unknown, use "may" or "should be reviewed" rather than claiming exact overlap percentages.
+- Do not turn this into a recommendation section.
+
+4. displayWhatThisMeans
+- Client-facing impact only.
+- Plain English.
+- No tickers.
+- No fund names.
+- No percentages.
+- Focus on what the client may experience: volatility, confidence, flexibility, income stability, behavior during pullbacks, retirement planning impact.
+- Do not repeat the technical explanation from overlapInsights.
+
+5. strategies
+- Client-facing planning direction only.
+- 3 bullets max.
+- Do not repeat the diagnosis.
+- Use wording such as "Review," "Discuss," "Compare," "Stress-test," or "Evaluate."
+- Keep it practical and calm.
+- Do not mention advisor-only trade ideas.
+
+6. redFlags
+- Advisor-eyes-only.
+- Direct, specific, and analytical.
+- Identify the biggest portfolio concerns before strategy.
+- May mention tickers, sectors, asset classes, allocation gaps, liquidity, income readiness, overlap, interest-rate sensitivity, or retirement timeline mismatch.
+- Do not duplicate recommendations.
+- Do not phrase as final client instructions.
+
+7. recommendations
+- Advisor-eyes-only.
+- Sharper than client-facing sections.
+- Each recommendation should be 1-2 clean sentences.
+- Each recommendation should identify:
+  a) the holding or category to review,
+  b) why it may be an issue,
+  c) what comparison or rebalance direction may be worth evaluating.
+- Mention specific holdings or categories when appropriate.
+- Use advisor-review language such as review, evaluate, compare, stress-test, reduce exposure, rebalance toward, or rotate.
+- Do not say "buy this" or "sell this."
+
+8. talkingPoints
+- Advisor meeting agenda only.
+- Brief and advisor-facing.
+- This is not intended to appear as the final client report section if Portfolio Highlights is used instead.
+- No repeated full analysis.
+
+9. advisorOpeningScript
+- Advisor-facing.
+- Professional and concise.
+
+10. objectionHandling
+- Advisor-facing.
+- Common client concerns and response framing.
+- Keep each item concise.
+
+STYLE RULES:
+- Make it specific to the client age, retirement timeline, risk profile, goals, holdings, and allocation.
 - Use "Fixed" instead of "Fixed Income" in short labels.
 - Do not call dividend equity exposure fixed income or guaranteed income.
 - Distinguish bond funds, Treasuries, cash, dividend equity, annuities, and guaranteed income as different tools.
-- When a holding appears in more than one section, it should serve a different purpose in each section.
-- Keep the client-facing language clean, calm, and non-alarming.
-- Make the synopsis the deepest narrative section and include today's analysis date. It can be detailed, but avoid copying the exact bullet language from the other sections.
+- Keep client-facing language clear, calm, and non-alarming.
+- Avoid generic filler such as "optimize the portfolio," "ensure alignment," "monitor closely," or "maintain diversification" unless paired with specific context.
+- Avoid saying the same thing in different words across sections.
+- Do not claim exact live prices unless they were found in research notes.
+- Do not phrase anything as tax, legal, or investment advice.
+- Do not make final trade instructions.
 `;
 
     const jsonResponse = await openai.responses.create({
@@ -188,10 +247,19 @@ Rules:
 
     return NextResponse.json({
       synopsis: parsed.synopsis || "",
+      portfolioHighlights: Array.isArray(parsed.portfolioHighlights)
+        ? parsed.portfolioHighlights
+        : [],
       strategies: Array.isArray(parsed.strategies) ? parsed.strategies : [],
       redFlags: Array.isArray(parsed.redFlags) ? parsed.redFlags : [],
-      overlapInsights: Array.isArray(parsed.overlapInsights) ? parsed.overlapInsights : [],
-      whatThisMeans: Array.isArray(parsed.whatThisMeans) ? parsed.whatThisMeans : [],
+      overlapInsights: Array.isArray(parsed.overlapInsights)
+        ? parsed.overlapInsights
+        : [],
+      displayWhatThisMeans: Array.isArray(parsed.displayWhatThisMeans)
+        ? parsed.displayWhatThisMeans
+        : Array.isArray(parsed.whatThisMeans)
+          ? parsed.whatThisMeans
+          : [],
       recommendations: Array.isArray(parsed.recommendations)
         ? parsed.recommendations
         : [],

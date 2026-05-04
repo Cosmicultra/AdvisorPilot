@@ -9,11 +9,7 @@ const openai = new OpenAI({
 });
 
 function safeParseJson(text: string) {
-  const cleaned = text
-    .replace(/```json/g, "")
-    .replace(/```/g, "")
-    .trim();
-
+  const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
   return JSON.parse(cleaned);
 }
 
@@ -28,10 +24,7 @@ export async function POST(request: Request) {
     }
 
     if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: "Missing OPENAI_API_KEY. Check your .env.local file." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Missing OPENAI_API_KEY in .env.local" }, { status: 500 });
     }
 
     const client = clientRaw ? JSON.parse(clientRaw) : {};
@@ -55,35 +48,45 @@ export async function POST(request: Request) {
     const prompt = `
 You are AdvisorPilot, an advisor-facing financial statement extraction assistant.
 
-Extract holdings from the uploaded investment statement.
+Extract all investment holdings from the uploaded statement.
 
 Client context:
 ${JSON.stringify(client, null, 2)}
 
 Return ONLY valid JSON. No markdown.
 
-Use this exact shape:
+Use this exact format:
 {
   "holdings": [
     {
       "rawName": "name exactly as shown on statement",
-      "suggested": "best ticker/fund/CUSIP match if possible, otherwise Needs advisor confirmation",
+      "suggested": "best match, ticker, fund name, or Needs advisor confirmation",
       "confidence": 0-100,
-      "assetClass": "U.S. Large Cap Equity / Bond Fund / Cash / ETF / Mutual Fund / Individual Stock / Unknown",
+      "assetClass": "U.S. Large Cap Equity / Bond Fund / ETF / Mutual Fund / Individual Stock / Treasury / Corporate Bond / Cash / Annuity / Unknown",
       "value": number,
       "status": "matched or review",
-      "options": ["possible option 1", "possible option 2", "Manual ticker / CUSIP entry"]
+      "options": [
+        "Likely ticker or fund option 1",
+        "Likely ticker or fund option 2",
+        "Likely ticker or fund option 3",
+        "Manual ticker / CUSIP entry"
+      ]
     }
   ]
 }
 
 Rules:
-- If ticker is clearly shown, use it.
-- If no ticker is shown, infer only when reasonably confident.
+- If ticker is clearly visible, use it.
+- If ticker is not visible, infer likely options from the name.
+- Always provide 3-5 possible options when the name is ambiguous.
+- If a holding could be multiple share classes, confidence should usually be below 75.
 - If confidence is below 75, status must be "review".
 - If confidence is 75 or higher, status can be "matched".
-- If a holding could be multiple share classes, confidence should usually be below 75.
 - Do not invent account values. Use 0 if value cannot be found.
+- For mutual funds, include possible share class tickers.
+- For ETFs, include likely ticker options.
+- For bonds, include CUSIP if visible. If not visible, classify by bond type.
+- For annuities or proprietary indexes, mark as review if no public ticker exists.
 - Do not provide trade recommendations here. Only extract and classify holdings.
 `;
 
@@ -106,25 +109,15 @@ Rules:
     const text = response.output_text || "";
 
     if (!text) {
-      throw new Error("OpenAI returned an empty response.");
+      throw new Error("OpenAI returned an empty extraction response.");
     }
 
-    const parsed = safeParseJson(text);
-
-    return NextResponse.json(parsed);
+    return NextResponse.json(safeParseJson(text));
   } catch (error: any) {
-    console.error("ANALYZE ERROR FULL:", error);
-    console.error("STATUS:", error?.status);
-    console.error("MESSAGE:", error?.message);
-    console.error("ERROR BODY:", error?.error);
+    console.error("ANALYZE ERROR:", error);
 
     return NextResponse.json(
-      {
-        error:
-          error?.message ||
-          error?.error?.message ||
-          "Could not analyze statement. Try a clearer PDF or screenshot.",
-      },
+      { error: error?.message || "Could not analyze statement." },
       { status: 500 }
     );
   }

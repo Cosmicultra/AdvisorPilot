@@ -159,18 +159,29 @@ export async function POST(req: Request) {
         : calculateOverlapInsights();
 
     const whatThisMeansItems =
-      Array.isArray(analysis?.whatThisMeans) && analysis.whatThisMeans.length
-        ? uniqueItems(analysis.whatThisMeans, 3)
-        : [
-            "The portfolio may feel more volatile than the client expects during market pullbacks.",
-            "The current positioning may not provide enough stability for a retirement income conversation.",
-            "A more balanced approach may help the client stay invested with greater confidence.",
-          ];
+      Array.isArray(analysis?.displayWhatThisMeans) && analysis.displayWhatThisMeans.length
+        ? uniqueItems(analysis.displayWhatThisMeans, 3)
+        : Array.isArray(analysis?.whatThisMeans) && analysis.whatThisMeans.length
+          ? uniqueItems(analysis.whatThisMeans, 3)
+          : [
+              "The portfolio may feel more volatile than the client expects during market pullbacks.",
+              "The current positioning may not provide enough stability for a retirement income conversation.",
+              "A more balanced approach may help the client stay invested with greater confidence.",
+            ];
 
     const strategyItems = Array.isArray(analysis?.strategies) ? analysis.strategies : [];
     const redFlagItems = Array.isArray(analysis?.redFlags) ? analysis.redFlags : [];
     const recommendationItems = Array.isArray(analysis?.recommendations) ? analysis.recommendations : [];
     const meetingItems = Array.isArray(analysis?.talkingPoints) ? analysis.talkingPoints : [];
+
+    const portfolioHighlightItems =
+      Array.isArray(analysis?.portfolioHighlights) && analysis.portfolioHighlights.length
+        ? uniqueItems(analysis.portfolioHighlights, 3)
+        : [
+            "Portfolio is positioned primarily for growth based on the current allocation mix.",
+            "Concentration and overlap should be reviewed where similar equity exposure appears across multiple holdings.",
+            "Liquidity and stability should be evaluated against the client's retirement timeline and planning goals.",
+          ];
 
 
 
@@ -844,7 +855,9 @@ export async function POST(req: Request) {
 
     function drawMonteCarloExplanation() {
       const explanation =
-        "This Retirement Success Model is based on a Monte Carlo simulation designed to evaluate the long-term sustainability of a portfolio under a wide range of market conditions. The analysis runs 5,000 simulated scenarios incorporating equity returns, fixed income performance, cash reserves, inflation, retirement withdrawals, sequence-of-return risk, and a retirement horizon to age 95.";
+        mode === "client"
+          ? "This model estimates how the portfolio may hold up under many different market environments. It uses 5,000 simulated scenarios that include market returns, fixed performance, cash reserves, inflation, withdrawals, sequence-of-return risk, and a retirement horizon to age 95."
+          : "This Retirement Success Model is based on a Monte Carlo simulation designed to evaluate the long-term sustainability of a portfolio under a wide range of market conditions. The analysis runs 5,000 simulated scenarios incorporating equity returns, fixed performance, cash reserves, inflation, retirement withdrawals, sequence-of-return risk, and a retirement horizon to age 95.";
 
       const sectionHeight = paragraphBlockHeight(explanation, "Methodology summary.");
       ensureBlock(sectionHeight);
@@ -946,7 +959,7 @@ export async function POST(req: Request) {
     drawOverview();
 
 
-    drawTextSection("Synopsis", "Executive summary of the portfolio review.", analysis?.synopsis || "No analysis available.");
+    drawTextSection("Synopsis", "Summary of the portfolio review.", analysis?.synopsis || "No analysis available.");
 
     newPage();
     drawRetirementSuccessModel();
@@ -961,7 +974,7 @@ export async function POST(req: Request) {
 
     drawCardSection("Overlap & Concentration Insights", "Hidden exposure that may not be obvious from the number of holdings alone.", overlapInsightItems, indigo, softBlue);
     drawCardSection("What This Means for You", "Plain-English impact without technical detail.", mode === "client" ? whatThisMeansItems.slice(0, 3) : whatThisMeansItems, teal, softTeal);
-    drawCardSection("Strategic Considerations", "Planning direction only.", mode === "client" ? strategyItems.slice(0, 3) : strategyItems, blue, soft);
+    drawCardSection("Strategic Considerations", "Planning areas to review.", mode === "client" ? strategyItems.slice(0, 3) : strategyItems, blue, soft);
 
     if (mode === "advisor") {
       drawCardSection("Advisor Example Recommendations", "Advisor-only rebalance ideas for review, not final trade instructions.", recommendationItems, gold, rgb(1.0, 0.985, 0.92));
@@ -974,7 +987,11 @@ export async function POST(req: Request) {
       ], teal, softTeal);
     }
 
-    drawCardSection("Meeting Overview", "Talking points for the next conversation.", mode === "client" ? meetingItems.slice(0, 3) : meetingItems, navy, soft);
+    if (mode === "client") {
+      drawCardSection("Portfolio Highlights", "Three headline takeaways from the portfolio review.", portfolioHighlightItems.slice(0, 3), navy, soft);
+    } else {
+      drawCardSection("Meeting Overview", "Talking points for the next conversation.", meetingItems.slice(0, 4), navy, soft);
+    }
 
     if (mode === "advisor" && analysis?.advisorOpeningScript) {
       drawTextSection("Advisor Opening Script", "Suggested meeting opener.", analysis.advisorOpeningScript);

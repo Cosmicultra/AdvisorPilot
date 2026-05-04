@@ -57,6 +57,7 @@ type Holding = {
 
 type AIAnalysis = {
   synopsis: string;
+  portfolioHighlights?: string[];
   strategies: string[];
   redFlags?: string[];
   overlapInsights?: string[];
@@ -75,6 +76,8 @@ type SavedReview = {
   meetingNotes: string;
   demoMode: boolean;
   analysis: AIAnalysis | null;
+  status?: string;
+  lastContactedAt?: string;
 };
 
 const ASSET_CLASSES = [
@@ -488,6 +491,7 @@ export default function AdvisorPilotPage() {
         const res = await fetch("/api/auth/session");
         const data = await res.json();
         setSession(data?.user ? data : null);
+        if (data?.user?.email) await loadAdvisorProfile(data.user.email);
       } catch {
         setSession(null);
       } finally {
@@ -522,6 +526,19 @@ export default function AdvisorPilotPage() {
   const [emailCopied, setEmailCopied] = useState(false);
   const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
   const [saveMessage, setSaveMessage] = useState("");
+  const [clientSearch, setClientSearch] = useState("");
+  const [activeReviewId, setActiveReviewId] = useState<string | null>(null);
+  const [emailSignature, setEmailSignature] = useState("");
+  const [signatureDraft, setSignatureDraft] = useState("");
+  const [showSignatureSetup, setShowSignatureSetup] = useState(false);
+  const [signatureName, setSignatureName] = useState("");
+  const [signatureTitle, setSignatureTitle] = useState("");
+  const [signatureLicense, setSignatureLicense] = useState("");
+  const [signatureCalendarLink, setSignatureCalendarLink] = useState("");
+  const [signatureAddress, setSignatureAddress] = useState("");
+  const [signatureOfficePhone, setSignatureOfficePhone] = useState("");
+  const [signatureCellPhone, setSignatureCellPhone] = useState("");
+  const [signatureWebsite, setSignatureWebsite] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [emailAuthUser, setEmailAuthUser] = useState<any>(null);
@@ -595,6 +612,12 @@ export default function AdvisorPilotPage() {
     "Evaluate whether fixed income, dividend strategies, or protected income solutions are appropriate for the client’s objective.",
   ];
 
+  const fallbackPortfolioHighlights = [
+    "Portfolio is positioned primarily for growth based on the current allocation mix.",
+    "Concentration and overlap should be reviewed where similar equity exposure appears across multiple holdings.",
+    "Liquidity and stability should be evaluated against the client's retirement timeline and planning goals.",
+  ];
+
   const clientNextSteps = [
     "Confirm goals, time horizon, liquidity needs, and income expectations.",
     "Review tax considerations before making any portfolio changes.",
@@ -602,6 +625,7 @@ export default function AdvisorPilotPage() {
   ];
 
   const displaySynopsis = analysis?.synopsis || fallbackSynopsis;
+  const displayPortfolioHighlights = analysis?.portfolioHighlights?.length ? analysis.portfolioHighlights : fallbackPortfolioHighlights;
   const displayStrategies = analysis?.strategies?.length ? analysis.strategies : fallbackStrategies;
   const displayRecommendations = analysis?.recommendations?.length ? analysis.recommendations : fallbackRecommendations;
   const calculatedOverlapInsights = useMemo(() => {
@@ -801,6 +825,7 @@ export default function AdvisorPilotPage() {
       const data = await response.json();
       setAnalysis({
         synopsis: data.synopsis || "",
+        portfolioHighlights: Array.isArray(data.portfolioHighlights) ? data.portfolioHighlights : [],
         strategies: Array.isArray(data.strategies) ? data.strategies : [],
         redFlags: Array.isArray(data.redFlags) ? data.redFlags : [],
         overlapInsights: Array.isArray(data.overlapInsights) ? data.overlapInsights : [],
@@ -869,6 +894,7 @@ export default function AdvisorPilotPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          id: activeReviewId,
           ownerEmail,
           client,
           holdings,
@@ -876,6 +902,7 @@ export default function AdvisorPilotPage() {
           demoMode,
           analysis,
           totalValue,
+          status: activeReviewId ? undefined : "Analyzed",
         }),
       });
 
@@ -886,6 +913,7 @@ export default function AdvisorPilotPage() {
         return;
       }
 
+      if (data?.client?.id) setActiveReviewId(data.client.id);
       setSaveMessage(`Saved ${client.name || "Client"} client profile.`);
       setTimeout(() => setSaveMessage(""), 2500);
       await loadSavedReviews();
@@ -895,6 +923,7 @@ export default function AdvisorPilotPage() {
   }
 
   function openSavedReview(review: SavedReview) {
+    setActiveReviewId(review.id);
     setClient({ ...review.client, advisorEmail: review.client?.advisorEmail || "" });
     setHoldings(review.holdings);
     setMeetingNotes(review.meetingNotes || "");
@@ -903,6 +932,72 @@ export default function AdvisorPilotPage() {
     setFollowUpEmail("");
     setEmailCopied(false);
     setStep("analysis");
+  }
+
+
+  function createFollowUpEmailForReview(review: SavedReview) {
+    const savedClient = review.client || client;
+    const savedAnalysis = review.analysis || analysis;
+    const firstName = (savedClient.name || "there").trim().split(" ")[0] || "there";
+
+    const synopsis =
+      savedAnalysis?.synopsis
+        ?.split(/(?<=[.!?])\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .join(" ") || "The attached Client Snapshot provides a high-level overview of your current portfolio positioning and areas we may want to review together.";
+
+    const highlight =
+      savedAnalysis?.portfolioHighlights?.[0] ||
+      "Your portfolio review includes a few key areas worth discussing together.";
+
+    const strategy =
+      savedAnalysis?.strategies?.[0] ||
+      "review your portfolio together and confirm it aligns with your goals.";
+
+    return [
+      "Subject: Next Steps from Our Portfolio Review",
+      "",
+      `Hi ${firstName},`,
+      "",
+      "Thank you again for taking the time to review your portfolio with me.",
+      "",
+      "I wanted to send over your Client Snapshot and briefly highlight a couple key takeaways.",
+      "",
+      synopsis,
+      "",
+      `Key highlight: ${highlight.charAt(0).toLowerCase() + highlight.slice(1)}`,
+      "",
+      `Next step: ${strategy.charAt(0).toLowerCase() + strategy.slice(1)}`,
+      "",
+      "The full breakdown is included in the attached Client Snapshot.",
+      "",
+      "Please take a look when you have a chance and let me know if any questions come up.",
+      "",
+      getCleanEmailSignature(),
+    ].join("\n");
+  }
+
+  function sendFollowUpFromDatabase(review: SavedReview) {
+    openSavedReview(review);
+    setFollowUpEmail(createFollowUpEmailForReview(review));
+    setEmailCopied(false);
+    markCurrentClientContacted();
+    setStep("report");
+  }
+
+  function updateAnalysisFromDatabase(review: SavedReview) {
+    setActiveReviewId(review.id);
+    setClient({ ...review.client, advisorEmail: review.client?.advisorEmail || "" });
+    setHoldings(review.holdings);
+    setMeetingNotes(review.meetingNotes || "");
+    setDemoMode(Boolean(review.demoMode));
+    setAnalysis(null);
+    setFollowUpEmail("");
+    setEmailCopied(false);
+    setUploadedFile(null);
+    setExtractError("");
+    setStep("upload");
   }
 
   async function deleteSavedReview(id: string) {
@@ -958,6 +1053,143 @@ export default function AdvisorPilotPage() {
   function getCurrentOwnerEmail() {
     return String(session?.user?.email || emailAuthUser?.email || "").trim().toLowerCase();
   }
+
+  function composeEmailSignature() {
+    return [
+      signatureName,
+      signatureTitle,
+      signatureLicense,
+      signatureCalendarLink ? "Book a time on my calendar" : "",
+      signatureAddress,
+      signatureOfficePhone ? `Office: ${signatureOfficePhone}` : "",
+      signatureCellPhone ? `Cell: ${signatureCellPhone}` : "",
+      signatureWebsite,
+    ].filter(Boolean).join("\n");
+  }
+
+  function getCleanEmailSignature() {
+    return emailSignature.trim() || composeEmailSignature().trim() || "[Email signature]";
+  }
+
+  async function loadAdvisorProfile(ownerEmail = getCurrentOwnerEmail()) {
+    if (!ownerEmail) return;
+
+    try {
+      const res = await fetch(`/api/advisor-profile?ownerEmail=${encodeURIComponent(ownerEmail)}`);
+      const data = await res.json();
+
+      if (!res.ok) return;
+
+      const profile = data?.profile || {};
+      const savedSignature = profile.emailSignature || "";
+
+      setEmailSignature(savedSignature);
+      setSignatureDraft(savedSignature);
+
+      setSignatureName(profile.advisorName || "");
+      setSignatureTitle(profile.advisorTitle || "");
+      setSignatureLicense(profile.advisorLicense || "");
+      setSignatureCalendarLink(profile.calendarLink || "");
+      setSignatureAddress(profile.officeAddress || "");
+      setSignatureOfficePhone(profile.officePhone || "");
+      setSignatureCellPhone(profile.cellPhone || "");
+      setSignatureWebsite(profile.website || "");
+
+      setShowSignatureSetup(!savedSignature && !profile.advisorName);
+    } catch {
+      // Non-blocking. The app can still run without a saved advisor profile.
+    }
+  }
+
+  async function saveAdvisorProfile() {
+    const ownerEmail = getCurrentOwnerEmail();
+
+    if (!ownerEmail) {
+      setAuthMessage("Please log in before saving your advisor profile.");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/advisor-profile", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ownerEmail,
+          advisorName: signatureName,
+          advisorTitle: signatureTitle,
+          advisorLicense: signatureLicense,
+          calendarLink: signatureCalendarLink,
+          officeAddress: signatureAddress,
+          officePhone: signatureOfficePhone,
+          cellPhone: signatureCellPhone,
+          website: signatureWebsite,
+          emailSignature: composeEmailSignature(),
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setAuthMessage(data.error || "Could not save advisor profile.");
+        return;
+      }
+
+      setEmailSignature(data?.profile?.emailSignature || composeEmailSignature());
+      setSignatureDraft(data?.profile?.emailSignature || composeEmailSignature());
+
+      setSignatureName(data?.profile?.advisorName || signatureName);
+      setSignatureTitle(data?.profile?.advisorTitle || signatureTitle);
+      setSignatureLicense(data?.profile?.advisorLicense || signatureLicense);
+      setSignatureCalendarLink(data?.profile?.calendarLink || signatureCalendarLink);
+      setSignatureAddress(data?.profile?.officeAddress || signatureAddress);
+      setSignatureOfficePhone(data?.profile?.officePhone || signatureOfficePhone);
+      setSignatureCellPhone(data?.profile?.cellPhone || signatureCellPhone);
+      setSignatureWebsite(data?.profile?.website || signatureWebsite);
+      setShowSignatureSetup(false);
+      setSaveMessage("Advisor email signature saved.");
+      setTimeout(() => setSaveMessage(""), 2500);
+    } catch {
+      setAuthMessage("Could not save advisor profile.");
+    }
+  }
+
+  async function markCurrentClientContacted() {
+    const ownerEmail = getCurrentOwnerEmail();
+    if (!ownerEmail) return;
+
+    try {
+      const res = await fetch("/api/client-database", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          id: activeReviewId,
+          ownerEmail,
+          client,
+          holdings,
+          meetingNotes,
+          demoMode,
+          analysis,
+          totalValue,
+          status: "Report Sent",
+          lastContactedAt: new Date().toISOString(),
+        }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data?.client?.id) {
+        setActiveReviewId(data.client.id);
+        await loadSavedReviews();
+      }
+    } catch {
+      // Non-blocking.
+    }
+  }
+
 
 
 
@@ -1015,6 +1247,7 @@ async function handleEmailLogin() {
 
     setEmailAuthUser(data.user);
     setAuthMessage("Logged in successfully.");
+    await loadAdvisorProfile(data.user?.email);
   } catch {
     setAuthMessage("Could not log in.");
   }
@@ -1112,7 +1345,7 @@ const generatedEmailBody = [
   "",
   "Please take a look when you have a chance and let me know if any questions come up.",
   "",
-  "[Email signature]",
+  getCleanEmailSignature(),
 ].join("\\n");
 
     const res = await fetch("/api/email-client-snapshot", {
@@ -1127,6 +1360,7 @@ const generatedEmailBody = [
         client,
         analysis: {
           synopsis: displaySynopsis,
+          portfolioHighlights: displayPortfolioHighlights,
           strategies: displayStrategies,
           redFlags: displayRedFlags,
           overlapInsights: displayOverlapInsights,
@@ -1167,6 +1401,7 @@ const generatedEmailBody = [
       return;
     }
 
+    await markCurrentClientContacted();
     alert("Client Snapshot sent successfully.");
   } catch (err) {
     console.error(err);
@@ -1186,6 +1421,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         client,
         analysis: {
           synopsis: displaySynopsis,
+          portfolioHighlights: displayPortfolioHighlights,
           strategies: displayStrategies,
           redFlags: displayRedFlags,
           overlapInsights: displayOverlapInsights,
@@ -1240,12 +1476,41 @@ async function downloadPDFReport(mode: "client" | "advisor") {
   }
 }
 
+  function openGmailWithFollowUp() {
+    const emailText = followUpEmail || "";
+    const subjectLine = "Next Steps from Our Portfolio Review";
+    const body = emailText.replace(/^Subject:.*\n\n/, "");
+    const url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(client.advisorEmail || "")}&su=${encodeURIComponent(subjectLine)}&body=${encodeURIComponent(body)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+    markCurrentClientContacted();
+  }
+
+  function openOutlookWithFollowUp() {
+    const emailText = followUpEmail || "";
+    const subjectLine = "Next Steps from Our Portfolio Review";
+    const body = emailText.replace(/^Subject:.*\n\n/, "");
+    const url = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(client.advisorEmail || "")}&subject=${encodeURIComponent(subjectLine)}&body=${encodeURIComponent(body)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+    markCurrentClientContacted();
+  }
+
   function buildFollowUpEmail() {
     const firstName = (client.name || "there").trim().split(" ")[0] || "there";
 
-    const primaryRedFlag = displayRedFlags?.[0] || "your current portfolio positioning";
-    const primaryMeaning = displayWhatThisMeans?.[0] || "your portfolio may benefit from a closer review to make sure it remains aligned with your goals.";
-    const primaryNextStep = clientNextSteps?.[0] || "review the portfolio in more detail and prepare a final advisor-approved plan.";
+    const shortSynopsis =
+      displaySynopsis
+        ?.split(/(?<=[.!?])\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .join(" ") || "The attached Client Snapshot provides a high-level overview of your current portfolio positioning and areas we may want to review together.";
+
+    const primaryHighlight =
+      displayPortfolioHighlights?.[0] ||
+      "Your portfolio review includes a few key areas worth discussing together.";
+
+    const primaryNextStep =
+      clientNextSteps?.[0] ||
+      "review the portfolio in more detail and prepare a final advisor-approved plan.";
 
     const email = [
       "Subject: Next Steps from Our Portfolio Review",
@@ -1254,24 +1519,22 @@ async function downloadPDFReport(mode: "client" | "advisor") {
       "",
       "Thank you again for taking the time to review your portfolio with me.",
       "",
-      "I wanted to briefly recap the main points from our conversation. We reviewed your current allocation, how it compares to your retirement goals, and a few areas that may be worth evaluating more closely.",
+      "I wanted to send over your Client Snapshot and briefly highlight a couple key takeaways from the review.",
       "",
-      `One item that stood out was: ${primaryRedFlag}`,
+      shortSynopsis,
       "",
-      `In plain English, ${primaryMeaning.charAt(0).toLowerCase() + primaryMeaning.slice(1)}`,
+      `Key highlight: ${primaryHighlight.charAt(0).toLowerCase() + primaryHighlight.slice(1)}`,
       "",
-      "The goal is not to make changes just for the sake of making changes. The goal is to make sure your portfolio is still aligned with your risk comfort, income needs, retirement timeline, and overall financial plan.",
-      "",
-      `As a next step, I will ${primaryNextStep.charAt(0).toLowerCase() + primaryNextStep.slice(1)}`,
+      `Next step: I will ${primaryNextStep.charAt(0).toLowerCase() + primaryNextStep.slice(1)}`,
       "",
       "Please review the attached Client Snapshot when you have a chance, and let me know if any questions come up.",
       "",
-      "Best,",
-      "Chris",
+      getCleanEmailSignature(),
     ].join("\n");
 
     setFollowUpEmail(email);
     setEmailCopied(false);
+    markCurrentClientContacted();
   }
 
   async function copyFollowUpEmail() {
@@ -1280,6 +1543,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
     try {
       await navigator.clipboard.writeText(followUpEmail);
       setEmailCopied(true);
+      markCurrentClientContacted();
     } catch {
       const textArea = document.createElement("textarea");
       textArea.value = followUpEmail;
@@ -1288,8 +1552,19 @@ async function downloadPDFReport(mode: "client" | "advisor") {
       document.execCommand("copy");
       textArea.remove();
       setEmailCopied(true);
+      markCurrentClientContacted();
     }
   }
+
+  const filteredSavedReviews = savedReviews.filter((review: SavedReview) => {
+    const query = clientSearch.trim().toLowerCase();
+    if (!query) return true;
+
+    const name = String(review.client?.name || "").toLowerCase();
+    const email = String(review.client?.advisorEmail || "").toLowerCase();
+
+    return name.includes(query) || email.includes(query);
+  });
 
   const isLoggedIn = Boolean(session || emailAuthUser);
 
@@ -1399,12 +1674,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
           <LogoBlock />
           <div className="flex flex-wrap items-center justify-end gap-2">
             {demoMode && <Badge variant="outline" className="hidden rounded-full border-amber-200 bg-amber-50 text-amber-800 sm:inline-flex">Demo data</Badge>}
-            {analysis && <Badge variant="outline" className="hidden rounded-full border-blue-200 bg-blue-50 text-blue-800 sm:inline-flex">AI analysis ready</Badge>}
+            {analysis && <Badge variant="outline" className="hidden rounded-full border-blue-200 bg-blue-50 text-blue-800 sm:inline-flex">Analysis ready</Badge>}
             {session && (
               <>
                 <Badge variant="outline" className="rounded-full border-emerald-200 bg-emerald-50 text-emerald-800">
                   Google: {session.user?.email}
                 </Badge>
+                <Button variant="outline" className="rounded-2xl" onClick={() => setShowSignatureSetup(true)}>
+                  Email Signature
+                </Button>
                 <Button variant="outline" className="rounded-2xl" onClick={() => signOut({ callbackUrl: "/" })}>
                   Sign out Google
                 </Button>
@@ -1415,6 +1693,9 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <Badge variant="outline" className="rounded-full border-blue-200 bg-blue-50 text-blue-800">
                   Email: {emailAuthUser.email}
                 </Badge>
+                <Button variant="outline" className="rounded-2xl" onClick={() => setShowSignatureSetup(true)}>
+                  Email Signature
+                </Button>
                 <Button variant="outline" className="rounded-2xl" onClick={handleEmailPasswordLogout}>
                   Sign out
                 </Button>
@@ -1431,6 +1712,77 @@ async function downloadPDFReport(mode: "client" | "advisor") {
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-800">
             {saveMessage}
           </div>
+        )}
+
+        {showSignatureSetup && (
+          <Card className="rounded-[2rem] border-blue-100 bg-white/95 shadow-xl shadow-blue-950/10">
+            <CardContent className="space-y-5 p-6 md:p-8">
+              <div>
+                <h2 className="font-serif text-2xl font-bold text-slate-950">Set up your email signature</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Fill this out once. AdvisorPilot will add it to generated emails and client snapshot emails.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label className="text-sm font-semibold text-slate-700">Advisor name</label>
+                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureName} onChange={(e) => setSignatureName(e.target.value)} placeholder="Christopher Perussina" />
+                </div>
+
+                <div>
+                  <label className="text-sm font-semibold text-slate-700">Title</label>
+                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureTitle} onChange={(e) => setSignatureTitle(e.target.value)} placeholder="President" />
+                </div>
+
+                <div>
+                  <label className="text-sm font-semibold text-slate-700">License line</label>
+                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureLicense} onChange={(e) => setSignatureLicense(e.target.value)} placeholder="License #0H38298" />
+                </div>
+
+                <div>
+                  <label className="text-sm font-semibold text-slate-700">Calendar booking link</label>
+                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureCalendarLink} onChange={(e) => setSignatureCalendarLink(e.target.value)} placeholder="https://calendly.com/your-link" />
+                  <p className="mt-1 text-xs text-slate-500">Clients will see this as “Book a time on my calendar.”</p>
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="text-sm font-semibold text-slate-700">Office address</label>
+                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureAddress} onChange={(e) => setSignatureAddress(e.target.value)} placeholder="1255 Treat Blvd Suite 300 Floor 3, Walnut Creek, CA 94597" />
+                </div>
+
+                <div>
+                  <label className="text-sm font-semibold text-slate-700">Office phone</label>
+                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureOfficePhone} onChange={(e) => setSignatureOfficePhone(e.target.value)} placeholder="(415) 991-2800 X102" />
+                </div>
+
+                <div>
+                  <label className="text-sm font-semibold text-slate-700">Cell phone</label>
+                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureCellPhone} onChange={(e) => setSignatureCellPhone(e.target.value)} placeholder="(925) 413-8100" />
+                </div>
+
+                <div className="md:col-span-2">
+                  <label className="text-sm font-semibold text-slate-700">Website</label>
+                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureWebsite} onChange={(e) => setSignatureWebsite(e.target.value)} placeholder="www.AssuredWealthAdvisors.com" />
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                <p className="text-sm font-semibold text-slate-700">Signature preview</p>
+                <pre className="mt-3 whitespace-pre-wrap rounded-2xl bg-white p-4 text-sm leading-6 text-slate-700">{composeEmailSignature() || "Your signature preview will appear here."}</pre>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={saveAdvisorProfile}>
+                  Save Signature
+                </Button>
+
+                <Button variant="outline" className="rounded-2xl" onClick={() => setShowSignatureSetup(false)}>
+                  Skip for now
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {step === "intake" && intakeStep === 0 && <IntakeShell progress={progress} eyebrow="Question 1" title="Who is this review for?" helper="Start with the client name. This can later appear on the report." onBack={backIntake} backDisabled onNext={nextIntake}><div className="space-y-4">
@@ -1492,7 +1844,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   );
                 })}
               </div>
-              <div className="flex gap-3"><Button variant="outline" className="rounded-2xl" onClick={() => setStep("upload")}>Back</Button><Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={runAIAnalysis} disabled={isAnalyzing}>{isAnalyzing ? "Generating AI analysis..." : "Run AI analysis"}</Button></div>
+              <div className="flex gap-3"><Button variant="outline" className="rounded-2xl" onClick={() => setStep("upload")}>Back</Button><Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={runAIAnalysis} disabled={isAnalyzing}>{isAnalyzing ? "Generating AdvisorPilot Analysis..." : "Run AdvisorPilot Analysis"}</Button></div>
             </CardContent>
           </Card>
         )}
@@ -1500,7 +1852,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         {step === "analysis" && (
           <div className="space-y-5">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3"><MetricCard icon={<TrendingUp className="h-5 w-5" />} label="Total value" value={currency(totalValue)} /><MetricCard icon={<User className="h-5 w-5" />} label="Client age" value={derivedAge ? String(derivedAge) : "Not set"} /><MetricCard icon={<ShieldCheck className="h-5 w-5" />} label="Risk profile" value={client.riskProfile.replace("-", " ")} /></div>
-            <Card className="rounded-[2rem] border-slate-200 bg-white/95 shadow-xl shadow-blue-950/10"><CardContent className="space-y-6 p-6 md:p-8"><div className="flex items-center gap-3"><div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-white"><BarChart3 className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Portfolio Review</h2><p className="text-sm text-slate-500">Advisor-facing analysis based on confirmed holdings and selected calibration.</p></div></div>{analysisError && <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">{analysisError}</div>}<div className="grid grid-cols-1 gap-5 md:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Based on confirmed holdings" data={currentPie} /><ProfessionalDonutChart title="Potential baseline" subtitle="Age and risk-profile calibration" data={targetPie} /></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Scores</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-3"><ScoreCard label="Risk Alignment" value={scores.riskAlignment} helper="How closely risk matches the baseline" /><ScoreCard label="Diversification" value={scores.diversification} helper="Balance across major asset groups" /><ScoreCard label="Income Readiness" value={scores.incomeReadiness} helper="Support for retirement income stability" /></div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Current vs Proposed Positioning</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><div className="mt-4 space-y-3 text-sm"><div className="flex justify-between"><span>Equity</span><strong>{currentAllocation.equity}%</strong></div><div className="flex justify-between"><span>Fixed Income</span><strong>{currentAllocation.fixedIncome}%</strong></div><div className="flex justify-between"><span>Cash</span><strong>{currentAllocation.cash}%</strong></div></div></div><div className="rounded-3xl border border-teal-200 bg-gradient-to-br from-white to-teal-50 p-5"><p className="text-sm font-semibold text-teal-800">Proposed Discussion Baseline</p><div className="mt-4 space-y-3 text-sm"><div className="flex justify-between"><span>Equity</span><strong>{target.equity}%</strong></div><div className="flex justify-between"><span>Fixed Income</span><strong>{target.fixedIncome}%</strong></div><div className="flex justify-between"><span>Cash</span><strong>{target.cash}%</strong></div></div></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{positioningImpact.map((item) => <li key={item} className="rounded-2xl border border-blue-100 bg-gradient-to-br from-white to-blue-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Retirement Success Model</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{currentSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(currentSuccessRate)} estimated success</p><Progress value={currentSuccessRate} className="mt-4" /></div><div className="rounded-3xl border border-teal-200 bg-gradient-to-br from-white to-teal-50 p-5"><p className="text-sm font-semibold text-teal-800">Proposed Baseline</p><p className="mt-2 text-4xl font-bold text-slate-950">{proposedSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p><Progress value={proposedSuccessRate} className="mt-4" /></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-white to-emerald-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">AI Synopsis</h3><div className="rounded-2xl border bg-white p-5 text-sm leading-7 text-slate-700">{displaySynopsis}</div></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-2xl border border-red-200 bg-gradient-to-br from-white to-red-50 p-4 text-sm leading-6 text-slate-700">{flag}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-white to-indigo-50 p-4 text-sm leading-6 text-slate-700">{insight}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-emerald-900">What This Means for You</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-white to-emerald-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Strategic Considerations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-2xl border border-blue-100 bg-gradient-to-br from-white to-blue-50 p-4 text-sm leading-6 text-slate-700">{idea}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Advisor Example Recommendations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-2xl border border-amber-100 bg-gradient-to-br from-white to-amber-50 p-4 text-sm leading-6 text-slate-700">{rec}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Key findings</h3><ul className="space-y-2 text-sm">{findings.map((f) => <li key={f} className="rounded-2xl border bg-white p-4">{f}</li>)}</ul></div><div className="flex gap-3"><Button variant="outline" className="rounded-2xl" onClick={() => setStep("confirm")}>Back</Button><Button variant="outline" className="rounded-2xl" onClick={runAIAnalysis} disabled={isAnalyzing}><BrainCircuit className="mr-2 h-4 w-4" />{isAnalyzing ? "Regenerating..." : "Regenerate AI analysis"}</Button><Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={() => setStep("meeting")}>Start meeting mode</Button></div></CardContent></Card>
+            <Card className="rounded-[2rem] border-slate-200 bg-white/95 shadow-xl shadow-blue-950/10"><CardContent className="space-y-6 p-6 md:p-8"><div className="flex items-center gap-3"><div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-white"><BarChart3 className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Portfolio Review</h2><p className="text-sm text-slate-500">Advisor-facing analysis based on confirmed holdings and selected calibration.</p></div></div>{analysisError && <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">{analysisError}</div>}<div className="grid grid-cols-1 gap-5 md:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Based on confirmed holdings" data={currentPie} /><ProfessionalDonutChart title="Potential baseline" subtitle="Age and risk-profile calibration" data={targetPie} /></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Scores</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-3"><ScoreCard label="Risk Alignment" value={scores.riskAlignment} helper="How closely risk matches the baseline" /><ScoreCard label="Diversification" value={scores.diversification} helper="Balance across major asset groups" /><ScoreCard label="Income Readiness" value={scores.incomeReadiness} helper="Support for retirement income stability" /></div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Current vs Proposed Positioning</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><div className="mt-4 space-y-3 text-sm"><div className="flex justify-between"><span>Equity</span><strong>{currentAllocation.equity}%</strong></div><div className="flex justify-between"><span>Fixed Income</span><strong>{currentAllocation.fixedIncome}%</strong></div><div className="flex justify-between"><span>Cash</span><strong>{currentAllocation.cash}%</strong></div></div></div><div className="rounded-3xl border border-teal-200 bg-gradient-to-br from-white to-teal-50 p-5"><p className="text-sm font-semibold text-teal-800">Proposed Discussion Baseline</p><div className="mt-4 space-y-3 text-sm"><div className="flex justify-between"><span>Equity</span><strong>{target.equity}%</strong></div><div className="flex justify-between"><span>Fixed Income</span><strong>{target.fixedIncome}%</strong></div><div className="flex justify-between"><span>Cash</span><strong>{target.cash}%</strong></div></div></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{positioningImpact.map((item) => <li key={item} className="rounded-2xl border border-blue-100 bg-gradient-to-br from-white to-blue-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Retirement Success Model</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{currentSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(currentSuccessRate)} estimated success</p><Progress value={currentSuccessRate} className="mt-4" /></div><div className="rounded-3xl border border-teal-200 bg-gradient-to-br from-white to-teal-50 p-5"><p className="text-sm font-semibold text-teal-800">Proposed Baseline</p><p className="mt-2 text-4xl font-bold text-slate-950">{proposedSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p><Progress value={proposedSuccessRate} className="mt-4" /></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-white to-emerald-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Synopsis</h3><div className="rounded-2xl border bg-white p-5 text-sm leading-7 text-slate-700">{displaySynopsis}</div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Highlights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-3">{displayPortfolioHighlights.slice(0, 3).map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-2xl border border-red-200 bg-gradient-to-br from-white to-red-50 p-4 text-sm leading-6 text-slate-700">{flag}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-white to-indigo-50 p-4 text-sm leading-6 text-slate-700">{insight}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-emerald-900">What This Means for You</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-white to-emerald-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Strategic Considerations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-2xl border border-blue-100 bg-gradient-to-br from-white to-blue-50 p-4 text-sm leading-6 text-slate-700">{idea}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Advisor Example Recommendations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-2xl border border-amber-100 bg-gradient-to-br from-white to-amber-50 p-4 text-sm leading-6 text-slate-700">{rec}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Key findings</h3><ul className="space-y-2 text-sm">{findings.map((f) => <li key={f} className="rounded-2xl border bg-white p-4">{f}</li>)}</ul></div><div className="flex gap-3"><Button variant="outline" className="rounded-2xl" onClick={() => setStep("confirm")}>Back</Button><Button variant="outline" className="rounded-2xl" onClick={runAIAnalysis} disabled={isAnalyzing}><BrainCircuit className="mr-2 h-4 w-4" />{isAnalyzing ? "Regenerating..." : "Regenerate Analysis"}</Button><Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={() => setStep("meeting")}>Start meeting mode</Button></div></CardContent></Card>
           </div>
         )}
 
@@ -1594,7 +1946,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   </div>
                   <div>
                     <h2 className="font-serif text-3xl font-bold">Client Database</h2>
-                    <p className="text-sm text-slate-500">Reviews saved in this browser. This is local storage only for now.</p>
+                    <p className="text-sm text-slate-500">Search and manage client profiles saved to your AdvisorPilot account.</p>
                   </div>
                 </div>
                 <Button variant="outline" className="rounded-2xl" onClick={loadSavedReviews}>
@@ -1602,15 +1954,30 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </Button>
               </div>
 
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                <label className="text-sm font-semibold text-slate-700">Search Client</label>
+                <Input
+                  className="mt-2 h-12 rounded-2xl bg-white"
+                  placeholder="Search by client name or email"
+                  value={clientSearch}
+                  onChange={(e) => setClientSearch(e.target.value)}
+                />
+              </div>
+
               {savedReviews.length === 0 ? (
                 <div className="rounded-3xl border border-slate-200 bg-slate-50 p-8 text-center">
                   <p className="font-semibold text-slate-800">No client database yet.</p>
                   <p className="mt-2 text-sm text-slate-500">Run an analysis, then click Save Client Profile from the Analysis or Report screen.</p>
                 </div>
+              ) : filteredSavedReviews.length === 0 ? (
+                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-8 text-center">
+                  <p className="font-semibold text-slate-800">No matching clients found.</p>
+                  <p className="mt-2 text-sm text-slate-500">Try searching by a different name or email.</p>
+                </div>
               ) : (
                 <div className="grid grid-cols-1 gap-4">
-                  {savedReviews.map((review) => {
-                    const reviewTotal = review.holdings.reduce((sum, h) => sum + Number(h.value || 0), 0);
+                  {filteredSavedReviews.map((review: SavedReview) => {
+                    const reviewTotal = review.holdings.reduce((sum: number, h: Holding) => sum + Number(h.value || 0), 0);
                     const reviewAge = review.client.age || (review.client.dob ? String(getAgeFromDob(review.client.dob) || "N/A") : "N/A");
 
                     return (
@@ -1624,12 +1991,28 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                               Saved {formatSavedDate(review.savedAt)} | Age {reviewAge} | Risk: {(review.client.riskProfile || "N/A").replace("-", " ")}
                             </p>
                             <p className="mt-1 text-sm text-slate-500">
+                              Status: {review.status || "Analyzed"} | Last Contacted: {review.lastContactedAt ? formatSavedDate(review.lastContactedAt) : "Not contacted yet"}
+                            </p>
+                            <p className="mt-1 text-sm text-slate-500">
                               Holdings: {review.holdings.length} | Approx. value: {currency(reviewTotal)}
                             </p>
+                            {review.client.advisorEmail && (
+                              <p className="mt-1 text-sm text-slate-500">
+                                Email: {review.client.advisorEmail}
+                              </p>
+                            )}
                           </div>
                           <div className="flex flex-wrap gap-2">
                             <Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={() => openSavedReview(review)}>
                               Open Profile
+                            </Button>
+                            <Button variant="outline" className="rounded-2xl" onClick={() => sendFollowUpFromDatabase(review)}>
+                              <Mail className="mr-2 h-4 w-4" />
+                              Send Follow-Up Email
+                            </Button>
+                            <Button variant="outline" className="rounded-2xl" onClick={() => updateAnalysisFromDatabase(review)}>
+                              <Upload className="mr-2 h-4 w-4" />
+                              Update Analysis
                             </Button>
                             <Button variant="outline" className="rounded-2xl border-red-200 text-red-700 hover:bg-red-50" onClick={() => deleteSavedReview(review.id)}>
                               <Trash2 className="mr-2 h-4 w-4" />

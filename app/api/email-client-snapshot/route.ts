@@ -1,7 +1,16 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { google } from "googleapis";
+import { createClient } from "@supabase/supabase-js";
 import { authOptions } from "../auth/[...nextauth]/route";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+);
 
 function base64UrlEncode(value: Buffer | string) {
   return Buffer.from(value)
@@ -13,6 +22,86 @@ function base64UrlEncode(value: Buffer | string) {
 
 function sanitizeHeader(value: string) {
   return String(value || "").replace(/[\r\n]/g, " ").trim();
+}
+
+function normalizeEmail(value: unknown) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function firstNameFromClientName(value: unknown) {
+  return String(value || "there").trim().split(" ")[0] || "there";
+}
+
+function sentenceCase(value: string) {
+  const cleaned = String(value || "").trim();
+  if (!cleaned) return "";
+  return cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+}
+
+function getFirstSentences(value: unknown, count = 2) {
+  return String(value || "")
+    .trim()
+    .split(/(?<=[.!?])\s+/)
+    .filter(Boolean)
+    .slice(0, count)
+    .join(" ");
+}
+
+async function getSavedEmailSignature(ownerEmail: string) {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return "";
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("advisorpilot_advisor_profiles")
+    .select("email_signature")
+    .eq("owner_email", normalizeEmail(ownerEmail))
+    .maybeSingle();
+
+  if (error) {
+    console.error("EMAIL SIGNATURE LOOKUP ERROR:", error);
+    return "";
+  }
+
+  return String(data?.email_signature || "").trim();
+}
+
+function buildClientEmailBody(params: {
+  firstName: string;
+  synopsis: string;
+  highlight: string;
+  nextStep: string;
+  signature: string;
+}) {
+  const synopsis =
+    params.synopsis ||
+    "The attached Client Snapshot provides a high-level overview of your current portfolio positioning and a few areas we can review together.";
+
+  const highlight =
+    params.highlight ||
+    "your portfolio review includes a few key areas worth discussing together.";
+
+  const nextStep =
+    params.nextStep ||
+    "walk through the report together and confirm the portfolio still fits your goals, timeline, and comfort level.";
+
+  return [
+    `Hi ${params.firstName},`,
+    "",
+    "Thank you again for taking the time to review everything with me.",
+    "",
+    "I wanted to send over your Client Snapshot and highlight a couple key points we discussed.",
+    "",
+    synopsis,
+    "",
+    `One thing that stood out is that ${sentenceCase(highlight)}`,
+    "",
+    `From here, the next step will be to ${sentenceCase(nextStep)}`,
+    "",
+    "Take a look at the report when you have a chance, and let me know what questions come up. We can walk through everything together and make sure it is aligned with what you want moving forward.",
+    "",
+    params.signature || "[Email signature]",
+  ].join("\n");
 }
 
 function buildEmailWithAttachment(params: {
@@ -82,40 +171,33 @@ export async function POST(req: Request) {
       body?.subject ||
       `Next Steps from Our Portfolio Review - ${body?.client?.name || "Client"}`;
 
-    const clientName = body?.client?.name || "Client";
-    const firstName = String(clientName).trim().split(" ")[0] || "there";
+    const firstName = firstNameFromClientName(body?.client?.name);
 
-    const synopsis = String(body?.analysis?.synopsis || "").trim();
-    const synopsisSentences = synopsis
-      .split(/(?<=[.!?])\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .join(" ");
+    const synopsisSentences = getFirstSentences(body?.analysis?.synopsis, 2);
+
+    const portfolioHighlight =
+      Array.isArray(body?.analysis?.portfolioHighlights) && body.analysis.portfolioHighlights.length
+        ? String(body.analysis.portfolioHighlights[0])
+        : "";
 
     const strategy =
       Array.isArray(body?.analysis?.strategies) && body.analysis.strategies.length
         ? String(body.analysis.strategies[0])
-        : "review your portfolio together and confirm it aligns with your goals.";
+        : "review the portfolio together and confirm it aligns with your goals.";
 
-    const emailSignature = body?.emailSignature || "[Email signature]";
+    const savedSignature = await getSavedEmailSignature(senderEmail);
+    const emailSignature =
+      String(body?.emailSignature || "").trim() ||
+      savedSignature ||
+      "[Email signature]";
 
-    const emailBody = [
-      `Hi ${firstName},`,
-      "",
-      "Thank you again for taking the time to review your portfolio with me.",
-      "",
-      "I wanted to send over your Client Snapshot and briefly highlight a couple key takeaways from our conversation.",
-      "",
-      synopsisSentences || "The attached Client Snapshot provides a high-level overview of your current portfolio positioning and areas we may want to review together.",
-      "",
-      `Next step: ${strategy.charAt(0).toLowerCase() + strategy.slice(1)}`,
-      "",
-      "The full breakdown is included in the attached Client Snapshot.",
-      "",
-      "Please take a look when you have a chance and let me know if any questions come up.",
-      "",
-      emailSignature,
-    ].join("\n");
+    const emailBody = buildClientEmailBody({
+      firstName,
+      synopsis: synopsisSentences,
+      highlight: portfolioHighlight,
+      nextStep: strategy,
+      signature: emailSignature,
+    });
 
     const origin = new URL(req.url).origin;
 
