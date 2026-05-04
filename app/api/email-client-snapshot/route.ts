@@ -28,6 +28,26 @@ function normalizeEmail(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
 
+function clean(value: unknown) {
+  return String(value || "").trim();
+}
+
+function escapeHtml(value: unknown) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function ensureUrl(value: unknown) {
+  const raw = clean(value);
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `https://${raw}`;
+}
+
 function firstNameFromClientName(value: unknown) {
   return String(value || "there").trim().split(" ")[0] || "there";
 }
@@ -47,31 +67,105 @@ function getFirstSentences(value: unknown, count = 2) {
     .join(" ");
 }
 
-async function getSavedEmailSignature(ownerEmail: string) {
+function paragraphsToHtml(lines: string[]) {
+  return lines
+    .map((line) => {
+      if (!line.trim()) return "<br />";
+      return `<p style="margin:0 0 12px 0;">${escapeHtml(line)}</p>`;
+    })
+    .join("");
+}
+
+function buildPlainSignature(profile: any, fallbackSignature = "") {
+  if (clean(fallbackSignature) && !profile) return clean(fallbackSignature);
+
+  const lines = [
+    clean(profile?.advisor_name),
+    clean(profile?.advisor_title),
+    clean(profile?.advisor_license),
+    profile?.calendar_link ? "Book a time on my calendar" : "",
+    clean(profile?.office_address),
+    profile?.office_phone ? `Office: ${clean(profile.office_phone)}` : "",
+    profile?.cell_phone ? `Cell: ${clean(profile.cell_phone)}` : "",
+    clean(profile?.website),
+  ].filter(Boolean);
+
+  return lines.length ? lines.join("\n") : clean(fallbackSignature);
+}
+
+function buildHtmlSignature(profile: any, fallbackSignature = "") {
+  if (!profile) {
+    return escapeHtml(fallbackSignature || "[Email signature]").replace(/\n/g, "<br />");
+  }
+
+  const parts: string[] = [];
+
+  if (profile.advisor_name) {
+    parts.push(`<strong>${escapeHtml(profile.advisor_name)}</strong>`);
+  }
+
+  if (profile.advisor_title) {
+    parts.push(escapeHtml(profile.advisor_title));
+  }
+
+  if (profile.advisor_license) {
+    parts.push(escapeHtml(profile.advisor_license));
+  }
+
+  if (profile.calendar_link) {
+    parts.push(`<a href="${escapeHtml(ensureUrl(profile.calendar_link))}" style="color:#0f766e;text-decoration:underline;">Book a time on my calendar</a>`);
+  }
+
+  if (profile.office_address) {
+    parts.push(escapeHtml(profile.office_address));
+  }
+
+  if (profile.office_phone) {
+    parts.push(`Office: ${escapeHtml(profile.office_phone)}`);
+  }
+
+  if (profile.cell_phone) {
+    parts.push(`Cell: ${escapeHtml(profile.cell_phone)}`);
+  }
+
+  if (profile.website) {
+    const websiteUrl = ensureUrl(profile.website);
+    parts.push(`<a href="${escapeHtml(websiteUrl)}" style="color:#0f766e;text-decoration:underline;">${escapeHtml(profile.website)}</a>`);
+  }
+
+  if (!parts.length) {
+    return escapeHtml(fallbackSignature || "[Email signature]").replace(/\n/g, "<br />");
+  }
+
+  return parts.join("<br />");
+}
+
+async function getAdvisorProfile(ownerEmail: string) {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return "";
+    return null;
   }
 
   const { data, error } = await supabaseAdmin
     .from("advisorpilot_advisor_profiles")
-    .select("email_signature")
+    .select("*")
     .eq("owner_email", normalizeEmail(ownerEmail))
     .maybeSingle();
 
   if (error) {
     console.error("EMAIL SIGNATURE LOOKUP ERROR:", error);
-    return "";
+    return null;
   }
 
-  return String(data?.email_signature || "").trim();
+  return data || null;
 }
 
-function buildClientEmailBody(params: {
+function buildClientEmailBodies(params: {
   firstName: string;
   synopsis: string;
   highlight: string;
   nextStep: string;
-  signature: string;
+  plainSignature: string;
+  htmlSignature: string;
 }) {
   const synopsis =
     params.synopsis ||
@@ -85,7 +179,7 @@ function buildClientEmailBody(params: {
     params.nextStep ||
     "walk through the report together and confirm the portfolio still fits your goals, timeline, and comfort level.";
 
-  return [
+  const plainLines = [
     `Hi ${params.firstName},`,
     "",
     "Thank you again for taking the time to review everything with me.",
@@ -100,19 +194,45 @@ function buildClientEmailBody(params: {
     "",
     "Take a look at the report when you have a chance, and let me know what questions come up. We can walk through everything together and make sure it is aligned with what you want moving forward.",
     "",
-    params.signature || "[Email signature]",
-  ].join("\n");
+    params.plainSignature || "[Email signature]",
+  ];
+
+  const htmlIntro = [
+    `Hi ${params.firstName},`,
+    "Thank you again for taking the time to review everything with me.",
+    "I wanted to send over your Client Snapshot and highlight a couple key points we discussed.",
+    synopsis,
+    `One thing that stood out is that ${sentenceCase(highlight)}`,
+    `From here, the next step will be to ${sentenceCase(nextStep)}`,
+    "Take a look at the report when you have a chance, and let me know what questions come up. We can walk through everything together and make sure it is aligned with what you want moving forward.",
+  ];
+
+  const htmlBody = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#0f172a;font-size:14px;line-height:1.55;">
+      ${paragraphsToHtml(htmlIntro)}
+      <div style="margin-top:18px;">
+        ${params.htmlSignature || "[Email signature]"}
+      </div>
+    </div>
+  `;
+
+  return {
+    plainText: plainLines.join("\n"),
+    html: htmlBody,
+  };
 }
 
 function buildEmailWithAttachment(params: {
   from?: string;
   to: string;
   subject: string;
-  body: string;
+  plainBody: string;
+  htmlBody: string;
   pdfBytes: Buffer;
   filename: string;
 }) {
-  const boundary = `advisorpilot_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const mixedBoundary = `advisorpilot_mixed_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const altBoundary = `advisorpilot_alt_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const to = sanitizeHeader(params.to);
   const subject = sanitizeHeader(params.subject);
   const from = sanitizeHeader(params.from || "");
@@ -123,22 +243,33 @@ function buildEmailWithAttachment(params: {
     `To: ${to}`,
     `Subject: ${subject}`,
     "MIME-Version: 1.0",
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
     "",
-    `--${boundary}`,
+    `--${mixedBoundary}`,
+    `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+    "",
+    `--${altBoundary}`,
     'Content-Type: text/plain; charset="UTF-8"',
     "Content-Transfer-Encoding: 7bit",
     "",
-    params.body || "",
+    params.plainBody || "",
     "",
-    `--${boundary}`,
+    `--${altBoundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    "Content-Transfer-Encoding: 7bit",
+    "",
+    params.htmlBody || "",
+    "",
+    `--${altBoundary}--`,
+    "",
+    `--${mixedBoundary}`,
     `Content-Type: application/pdf; name="${params.filename}"`,
     "Content-Transfer-Encoding: base64",
     `Content-Disposition: attachment; filename="${params.filename}"`,
     "",
     pdfBase64,
     "",
-    `--${boundary}--`,
+    `--${mixedBoundary}--`,
   ];
 
   return messageParts.join("\r\n");
@@ -172,7 +303,6 @@ export async function POST(req: Request) {
       `Next Steps from Our Portfolio Review - ${body?.client?.name || "Client"}`;
 
     const firstName = firstNameFromClientName(body?.client?.name);
-
     const synopsisSentences = getFirstSentences(body?.analysis?.synopsis, 2);
 
     const portfolioHighlight =
@@ -185,18 +315,17 @@ export async function POST(req: Request) {
         ? String(body.analysis.strategies[0])
         : "review the portfolio together and confirm it aligns with your goals.";
 
-    const savedSignature = await getSavedEmailSignature(senderEmail);
-    const emailSignature =
-      String(body?.emailSignature || "").trim() ||
-      savedSignature ||
-      "[Email signature]";
+    const advisorProfile = await getAdvisorProfile(senderEmail);
+    const plainSignature = buildPlainSignature(advisorProfile, body?.emailSignature);
+    const htmlSignature = buildHtmlSignature(advisorProfile, body?.emailSignature);
 
-    const emailBody = buildClientEmailBody({
+    const emailBodies = buildClientEmailBodies({
       firstName,
       synopsis: synopsisSentences,
       highlight: portfolioHighlight,
       nextStep: strategy,
-      signature: emailSignature,
+      plainSignature,
+      htmlSignature,
     });
 
     const origin = new URL(req.url).origin;
@@ -236,7 +365,8 @@ export async function POST(req: Request) {
       from: senderEmail,
       to,
       subject,
-      body: emailBody,
+      plainBody: emailBodies.plainText,
+      htmlBody: emailBodies.html,
       pdfBytes,
       filename: "Client_Snapshot.pdf",
     });

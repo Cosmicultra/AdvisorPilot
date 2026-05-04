@@ -1,36 +1,96 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AdvisorPilot
 
-## Getting Started
+AdvisorPilot is a Next.js (App Router) web app for financial advisors to:
+- Upload a client statement (PDF/image) and **extract holdings** via OpenAI.
+- Generate an **advisor-style portfolio review** (with current market context).
+- Generate polished **PDFs** (Client Snapshot + Advisor Deep Dive).
+- Save/load a simple **client database** in Supabase.
+- Optionally **email the Client Snapshot via Gmail** using Google OAuth.
 
-First, run the development server:
+## Tech stack
+
+- **Next.js**: 16.x (App Router) + **React** 19
+- **UI**: Tailwind CSS v4 + shadcn-style components in `components/ui`
+- **AI**: OpenAI (`openai` SDK, Responses API)
+- **PDF**: `pdf-lib`
+- **Data**: Supabase (`@supabase/supabase-js`)
+- **Auth**:
+  - **Google OAuth (Gmail send)** via `next-auth`
+  - **Email/password** via a Supabase-backed API route (`/api/auth/email`)
+
+## How the app works (end-to-end)
+
+The primary workflow lives in `app/page.tsx` and calls these route handlers:
+
+- **`POST /api/analyze-statement`**: sends the uploaded statement to OpenAI and returns extracted holdings JSON.
+- **`POST /api/generate-analysis`**: generates market research notes + a structured portfolio review JSON.
+- **`POST /api/generate-report`**: generates a PDF (client/advisor mode) using `pdf-lib` and returns bytes.
+- **`GET/POST/DELETE /api/client-database`**: stores and retrieves saved reviews in Supabase.
+- **`GET/POST /api/advisor-profile`**: stores and loads an advisor email signature in Supabase.
+- **`POST /api/email-client-snapshot`**: generates the client PDF and sends it via Gmail (requires Google sign-in).
+
+## Local development
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Create a `.env.local` in the project root:
+
+### OpenAI
+
+```bash
+OPENAI_API_KEY=...
+```
+
+### Supabase
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
+SUPABASE_SERVICE_ROLE_KEY=...
+```
+
+### Google OAuth / NextAuth (for Gmail sending)
+
+```bash
+NEXTAUTH_SECRET=...
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+```
+
+Run the dev server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run dev      # start dev server
+npm run build    # production build
+npm run start    # run production server
+npm run lint     # eslint
+```
 
-## Learn More
+## Project layout
 
-To learn more about Next.js, take a look at the following resources:
+- **`app/page.tsx`**: main UI + workflow state
+- **`app/api/*/route.ts`**: server-side route handlers (OpenAI, Supabase, PDF generation, Gmail send, auth)
+- **`components/ui/*`**: UI primitives
+- **`app/globals.css`**: Tailwind v4 + shadcn theme imports
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Notes / gotchas
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Google sign-in is required for sending emails via Gmail** (`/api/email-client-snapshot`). Email/password accounts can still use the app, download PDFs, and copy follow-up emails manually.
+- **`SUPABASE_SERVICE_ROLE_KEY` is highly privileged.** Keep it server-side only (in `.env.local` / deployment secrets) and never expose it to the browser.
+- This repo includes a rule in `AGENTS.md` warning that this Next.js version may differ from typical docs; if behavior looks “off”, consult `node_modules/next/dist/docs/`.
 
-## Deploy on Vercel
+## Optional: logo
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`/api/generate-report` will try to embed `public/logo.png` if present; otherwise it falls back to text branding.

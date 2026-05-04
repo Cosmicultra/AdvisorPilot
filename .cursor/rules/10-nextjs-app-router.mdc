@@ -1,0 +1,33 @@
+---
+description: Conventions for Next.js App Router + route handlers in this repo
+globs: app/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# Next.js App Router conventions (AdvisorPilot)
+
+## Repo-specific warning
+
+- This repo explicitly warns that Next.js behavior may differ from what typical online docs show.
+- Before implementing framework-level changes, consult the local docs under `node_modules/next/dist/docs/` and heed deprecations.
+
+## Route handlers (`app/api/**/route.ts`)
+
+- Keep route handlers **thin**: validate input, call the service (OpenAI/Supabase/Google), return `NextResponse`.
+- Fail with **clear status codes** and **stable JSON error shapes**:
+  - `400` for missing/invalid inputs
+  - `401` for auth required
+  - `500` for server/env issues
+- Never return secrets; validate required env vars and return a helpful error message.
+
+## Runtime constraints
+
+- If a handler uses Node-only APIs (e.g. `Buffer`, `fs`, `googleapis`), set:
+  - `export const runtime = "nodejs";`
+  - and consider `export const dynamic = "force-dynamic";` when appropriate
+
+## Main entry points
+
+- UI workflow is centralized in `app/page.tsx`.
+- API endpoints live in `app/api/*/route.ts`.
+

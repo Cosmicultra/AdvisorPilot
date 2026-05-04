@@ -1,0 +1,28 @@
+---
+description: Beginner-safe defaults for all work in this repo
+alwaysApply: true
+---
+
+# Beginner-safe workflow
+
+- Make **small, reversible changes**. Avoid large refactors unless the user explicitly asks.
+- Prefer editing **existing code** over rewriting files.
+- When unsure, **search the codebase** and follow existing patterns.
+- If you make a behavior change, also update any related UI copy or docs.
+
+## Before you change code
+
+- Identify the exact file(s) involved and read them first.
+- State what you’ll do in plain English (1-2 sentences), then do it.
+
+## After you change code
+
+- Check for TypeScript/ESLint issues in the files you touched.
+- If there’s a dev server running, don’t start a second one.
+
+## Do not do these without being asked
+
+- Don’t add new dependencies unless necessary.
+- Don’t change formatting/project-wide settings.
+- Don’t rename lots of files or restructure directories.
+

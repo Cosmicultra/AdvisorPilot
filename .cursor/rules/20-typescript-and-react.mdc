@@ -1,0 +1,18 @@
+---
+description: TypeScript + React conventions for this codebase
+globs: "**/*.{ts,tsx}"
+alwaysApply: false
+---
+
+# TypeScript + React conventions
+
+- Use **TypeScript types** for API payloads and component props.
+- Prefer **pure helper functions** for calculations and formatting (easy to test and reuse).
+- Avoid `any` unless there’s no practical alternative; if you must use it, keep it localized.
+- Keep UI components readable: if a component grows large, extract helpers or subcomponents in the same file first.
+
+## Error handling
+
+- Don’t swallow errors silently.
+- For network calls, handle `!res.ok` and surface a user-friendly message.
+

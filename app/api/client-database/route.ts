@@ -30,6 +30,8 @@ function mapRecord(record: any) {
     demoMode: Boolean(record.demo_mode),
     analysis: record.analysis || null,
     totalValue: Number(record.total_value || 0),
+    status: record.status || "Analyzed",
+    lastContactedAt: record.last_contacted_at || null,
   };
 }
 
@@ -95,7 +97,9 @@ export const POST = async (req: Request) => {
       );
     }
 
-    const payload = {
+    const existingId = body?.id || null;
+
+    const payload: any = {
       owner_email: ownerEmail,
       client: body?.client || {},
       holdings: Array.isArray(body?.holdings) ? body.holdings : [],
@@ -105,7 +109,15 @@ export const POST = async (req: Request) => {
       total_value: Number(body?.totalValue || 0),
     };
 
-    const existingId = body?.id || null;
+    if (typeof body?.status === "string" && body.status.trim()) {
+      payload.status = body.status.trim();
+    } else if (!existingId) {
+      payload.status = "Analyzed";
+    }
+
+    if (body?.lastContactedAt) {
+      payload.last_contacted_at = body.lastContactedAt;
+    }
 
     const result = existingId
       ? await supabaseAdmin
