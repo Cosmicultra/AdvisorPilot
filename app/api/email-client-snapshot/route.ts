@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { google } from "googleapis";
 import { createClient } from "@supabase/supabase-js";
 import { authOptions } from "../auth/[...nextauth]/route";
+import { clientDisplayName, clientFirstNameSalutation } from "@/lib/intake-config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,10 +49,6 @@ function ensureUrl(value: unknown) {
   return `https://${raw}`;
 }
 
-function firstNameFromClientName(value: unknown) {
-  return String(value || "there").trim().split(" ")[0] || "there";
-}
-
 function sentenceCase(value: string) {
   const cleaned = String(value || "").trim();
   if (!cleaned) return "";
@@ -76,24 +73,74 @@ function paragraphsToHtml(lines: string[]) {
     .join("");
 }
 
-function buildPlainSignature(profile: any, fallbackSignature = "") {
-  if (clean(fallbackSignature) && !profile) return clean(fallbackSignature);
+function buildPlainSignature(profile: any, fallbackSignature = "", calendarLinkFallback = "") {
+  const calendarRaw = clean(profile?.calendar_link) || clean(calendarLinkFallback);
+  const calendarUrl = calendarRaw ? ensureUrl(calendarRaw) : "";
+
+  const savedBlock = clean(profile?.email_signature);
+  if (savedBlock) {
+    // Plain text cannot embed clickable text links.
+    // Include the URL so clients can auto-link it.
+    if (calendarUrl) {
+      const lines = savedBlock.split(/\r?\n/).map((line) => {
+        const trimmed = line.trim();
+        if (/book( a time)? on my calendar\.?$/i.test(trimmed)) {
+          return `Book a time on my calendar: ${calendarUrl}`;
+        }
+        return line;
+      });
+      if (!lines.some((l) => /Book a time on my calendar:/i.test(l))) {
+        lines.push(`Book a time on my calendar: ${calendarUrl}`);
+      }
+      return lines.join("\n").trim();
+    }
+    return savedBlock;
+  }
 
   const lines = [
     clean(profile?.advisor_name),
     clean(profile?.advisor_title),
     clean(profile?.advisor_license),
-    profile?.calendar_link ? "Book a time on my calendar" : "",
+    calendarUrl ? `Book a time on my calendar: ${calendarUrl}` : "",
     clean(profile?.office_address),
     profile?.office_phone ? `Office: ${clean(profile.office_phone)}` : "",
     profile?.cell_phone ? `Cell: ${clean(profile.cell_phone)}` : "",
     clean(profile?.website),
   ].filter(Boolean);
 
-  return lines.length ? lines.join("\n") : clean(fallbackSignature);
+  if (lines.length) return lines.join("\n");
+
+  return clean(fallbackSignature);
 }
 
-function buildHtmlSignature(profile: any, fallbackSignature = "") {
+function buildHtmlSignature(profile: any, fallbackSignature = "", calendarLinkFallback = "") {
+  const savedBlock = clean(profile?.email_signature);
+  if (savedBlock) {
+    const calendarRaw = clean(profile?.calendar_link) || clean(calendarLinkFallback);
+    const calendarUrl = calendarRaw ? ensureUrl(calendarRaw) : "";
+    const lines = savedBlock.split(/\r?\n/);
+    const renderedLines = lines.map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return "<br />";
+
+      // If the user included the calendar placeholder text (with optional punctuation),
+      // render it as a clickable link using the saved calendar_link.
+      if (calendarUrl && /book( a time)? on my calendar\.?$/i.test(trimmed)) {
+        return `<a href="${escapeHtml(calendarUrl)}" style="color:#0f766e;text-decoration:underline;">Book a time on my calendar</a>`;
+      }
+
+      return escapeHtml(line);
+    });
+
+    // If we have a calendar link but the signature block didn't include the placeholder line,
+    // append the clickable link anyway so it always appears in the HTML signature.
+    if (calendarUrl && !renderedLines.some((l) => l.includes('href="'))) {
+      renderedLines.push(`<a href="${escapeHtml(calendarUrl)}" style="color:#0f766e;text-decoration:underline;">Book a time on my calendar</a>`);
+    }
+
+    return renderedLines.join("<br />");
+  }
+
   if (!profile) {
     return escapeHtml(fallbackSignature || "[Email signature]").replace(/\n/g, "<br />");
   }
@@ -114,6 +161,8 @@ function buildHtmlSignature(profile: any, fallbackSignature = "") {
 
   if (profile.calendar_link) {
     parts.push(`<a href="${escapeHtml(ensureUrl(profile.calendar_link))}" style="color:#0f766e;text-decoration:underline;">Book a time on my calendar</a>`);
+  } else if (clean(calendarLinkFallback)) {
+    parts.push(`<a href="${escapeHtml(ensureUrl(calendarLinkFallback))}" style="color:#0f766e;text-decoration:underline;">Book a time on my calendar</a>`);
   }
 
   if (profile.office_address) {
@@ -222,6 +271,72 @@ function buildClientEmailBodies(params: {
   };
 }
 
+function buildFollowUpClientEmailBodies(params: {
+  firstName: string;
+  synopsis: string;
+  highlight: string;
+  nextStep: string;
+  plainSignature: string;
+  htmlSignature: string;
+}) {
+  const synopsis =
+    params.synopsis ||
+    "The attached Client Snapshot reflects your saved holdings with an updated analysis as of today.";
+
+  const highlight =
+    params.highlight ||
+    "your portfolio review includes a few key areas worth discussing together.";
+
+  const nextStep =
+    params.nextStep ||
+    "walk through the report together and confirm the portfolio still fits your goals, timeline, and comfort level.";
+
+  const closing =
+    "I haven't heard back from you since our meeting. In case my email got buried, here is an up-to-date look at your analysis report as of today. Book a time on my calendar and let's review.";
+
+  const plainLines = [
+    `Hi ${params.firstName},`,
+    "",
+    "Thank you again for taking the time to meet with me.",
+    "",
+    "I am sending an updated Client Snapshot based on the holdings we have on file, with today's refreshed analysis.",
+    "",
+    synopsis,
+    "",
+    `One thing that stood out is that ${sentenceCase(highlight)}`,
+    "",
+    `From here, the next step will be to ${sentenceCase(nextStep)}`,
+    "",
+    closing,
+    "",
+    params.plainSignature || "[Email signature]",
+  ];
+
+  const htmlIntro = [
+    `Hi ${params.firstName},`,
+    "Thank you again for taking the time to meet with me.",
+    "I am sending an updated Client Snapshot based on the holdings we have on file, with today's refreshed analysis.",
+    synopsis,
+    `One thing that stood out is that ${sentenceCase(highlight)}`,
+    `From here, the next step will be to ${sentenceCase(nextStep)}`,
+    closing,
+  ];
+
+  const htmlBody = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#0f172a;font-size:14px;line-height:1.55;">
+      ${paragraphsToHtml(htmlIntro)}
+      <div style="margin-top:18px;">
+        ${params.htmlSignature || "[Email signature]"}
+      </div>
+    </div>
+  `;
+
+  return {
+    plainText: plainLines.join("\n"),
+    html: htmlBody,
+  };
+}
+
 function buildEmailWithAttachment(params: {
   from?: string;
   to: string;
@@ -298,11 +413,16 @@ export async function POST(req: Request) {
       );
     }
 
-    const subject =
-      body?.subject ||
-      `Next Steps from Our Portfolio Review - ${body?.client?.name || "Client"}`;
+    const emailVariant = body?.emailVariant === "follow_up" ? "follow_up" : "standard";
 
-    const firstName = firstNameFromClientName(body?.client?.name);
+    const defaultSubject =
+      emailVariant === "follow_up"
+        ? "Following-up Financial Review - Have Not Heard Back"
+        : `Next Steps from Our Portfolio Review - ${clientDisplayName(body?.client || {}) || "Client"}`;
+
+    const subject = body?.subject || defaultSubject;
+
+    const firstName = clientFirstNameSalutation(body?.client || {});
     const synopsisSentences = getFirstSentences(body?.analysis?.synopsis, 2);
 
     const portfolioHighlight =
@@ -316,17 +436,27 @@ export async function POST(req: Request) {
         : "review the portfolio together and confirm it aligns with your goals.";
 
     const advisorProfile = await getAdvisorProfile(senderEmail);
-    const plainSignature = buildPlainSignature(advisorProfile, body?.emailSignature);
-    const htmlSignature = buildHtmlSignature(advisorProfile, body?.emailSignature);
+    const plainSignature = buildPlainSignature(advisorProfile, body?.emailSignature, body?.calendarLink);
+    const htmlSignature = buildHtmlSignature(advisorProfile, body?.emailSignature, body?.calendarLink);
 
-    const emailBodies = buildClientEmailBodies({
-      firstName,
-      synopsis: synopsisSentences,
-      highlight: portfolioHighlight,
-      nextStep: strategy,
-      plainSignature,
-      htmlSignature,
-    });
+    const emailBodies =
+      emailVariant === "follow_up"
+        ? buildFollowUpClientEmailBodies({
+            firstName,
+            synopsis: synopsisSentences,
+            highlight: portfolioHighlight,
+            nextStep: strategy,
+            plainSignature,
+            htmlSignature,
+          })
+        : buildClientEmailBodies({
+            firstName,
+            synopsis: synopsisSentences,
+            highlight: portfolioHighlight,
+            nextStep: strategy,
+            plainSignature,
+            htmlSignature,
+          });
 
     const origin = new URL(req.url).origin;
 
@@ -380,7 +510,11 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      message: "Client Snapshot email sent successfully.",
+      message:
+        emailVariant === "follow_up"
+          ? "Follow-up email with an updated Client Snapshot was sent successfully."
+          : "Client Snapshot email sent successfully.",
+      plainTextBody: emailBodies.plainText,
     });
   } catch (err: any) {
     console.error("EMAIL CLIENT SNAPSHOT ERROR:", err);

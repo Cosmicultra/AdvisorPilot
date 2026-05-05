@@ -3,6 +3,7 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { Buffer } from "buffer";
 import fs from "fs/promises";
 import path from "path";
+import { clientDisplayName } from "@/lib/intake-config";
 
 type ReportMode = "client" | "advisor";
 
@@ -440,7 +441,7 @@ export async function POST(req: Request) {
       page.drawText(pageTitle(), { x: 32, y: 756, size: 24, font: serif, color: white });
       page.drawText(mode === "client" ? "Client-facing summary" : "Advisor-only planning view", { x: 34, y: 739, size: 8.4, font: regular, color: rgb(0.75, 0.86, 0.96) });
 
-      const meta = `Prepared for ${client.name || "Client"} | Age ${client.age || "N/A"} | Risk Profile: ${(client.riskProfile || "N/A").replace("-", " ")} | Total Portfolio Value: ${money(totalValue)}`;
+      const meta = `Prepared for ${clientDisplayName(client) || "Client"} | Age ${client.age || "N/A"} | Risk Profile: ${(client.riskProfile || "N/A").replace("-", " ")} | Total Portfolio Value: ${money(totalValue)}`;
       page.drawText(cleanText(meta), { x: 32, y: 704, size: 8.2, font: regular, color: navy });
 
       if (logoImage) {

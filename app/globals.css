@@ -128,3 +128,217 @@
     @apply font-sans;
   }
 }
+
+/* ============================================================
+   AdvisorPilot — futuristic UI utilities
+   Light-blue aurora background, glassmorphic cards, smooth
+   screen transitions, and a unified brand gradient.
+   ============================================================ */
+
+@keyframes ap-aurora-drift {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  35%  { transform: translate3d(6%, -5%, 0) scale(1.08); }
+  65%  { transform: translate3d(-7%, 4%, 0) scale(0.95); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes ap-aurora-drift-alt {
+  0%   { transform: translate3d(0, 0, 0) scale(1.02); }
+  50%  { transform: translate3d(-8%, 6%, 0) scale(1.12); }
+  100% { transform: translate3d(0, 0, 0) scale(1.02); }
+}
+
+@keyframes ap-step-enter {
+  0%   { opacity: 0; transform: translate3d(0, 18px, 0); filter: blur(8px); }
+  60%  { filter: blur(0); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
+}
+
+/* Page-level aurora background */
+.ap-app-bg {
+  position: relative;
+  isolation: isolate;
+  overflow-x: hidden;
+  background:
+    radial-gradient(ellipse 80% 60% at 70% 0%, rgba(186, 230, 253, 0.45), transparent 60%),
+    radial-gradient(ellipse 70% 60% at 0% 90%, rgba(199, 210, 254, 0.35), transparent 60%),
+    linear-gradient(180deg, #f4f9ff 0%, #eaf2ff 55%, #f4f9ff 100%);
+}
+
+/* Soft animated colour blobs */
+.ap-app-bg::before {
+  content: "";
+  position: fixed;
+  inset: -15%;
+  z-index: -2;
+  pointer-events: none;
+  background-image:
+    radial-gradient(closest-side, rgba(56, 189, 248, 0.42), transparent 72%),
+    radial-gradient(closest-side, rgba(59, 130, 246, 0.32), transparent 72%),
+    radial-gradient(closest-side, rgba(99, 102, 241, 0.26), transparent 72%);
+  background-repeat: no-repeat;
+  background-size: 55% 55%, 48% 48%, 50% 50%;
+  background-position: 78% 18%, 12% 78%, 50% 55%;
+  filter: blur(70px) saturate(125%);
+  animation: ap-aurora-drift 26s ease-in-out infinite;
+}
+
+/* Faint futuristic grid overlay, masked to the page center */
+.ap-app-bg::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(15, 58, 122, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 58, 122, 0.07) 1px, transparent 1px);
+  background-size: 56px 56px;
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, black 35%, transparent 78%);
+          mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, black 35%, transparent 78%);
+}
+
+/* Floating accent orbs */
+.ap-app-bg .ap-orb {
+  position: fixed;
+  z-index: -2;
+  width: 32rem;
+  height: 32rem;
+  border-radius: 9999px;
+  filter: blur(80px);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.ap-app-bg .ap-orb-1 {
+  top: -8rem;
+  right: -6rem;
+  background: radial-gradient(circle at 30% 30%, rgba(125, 211, 252, 0.7), rgba(125, 211, 252, 0) 70%);
+  animation: ap-aurora-drift-alt 30s ease-in-out infinite;
+}
+.ap-app-bg .ap-orb-2 {
+  bottom: -10rem;
+  left: -8rem;
+  width: 36rem;
+  height: 36rem;
+  background: radial-gradient(circle at 60% 60%, rgba(165, 180, 252, 0.55), rgba(165, 180, 252, 0) 70%);
+  animation: ap-aurora-drift 38s ease-in-out infinite reverse;
+}
+
+/* Glassmorphic surface — used for header and major step cards */
+.ap-glass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(244, 249, 255, 0.72));
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid rgba(125, 184, 245, 0.32);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 28px 60px -28px rgba(15, 58, 122, 0.32),
+    0 8px 24px -10px rgba(15, 58, 122, 0.16);
+}
+
+.ap-glass-strong {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(238, 246, 255, 0.82));
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid rgba(125, 184, 245, 0.4);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 18px 40px -22px rgba(15, 58, 122, 0.32);
+}
+
+/* Step nav button — futuristic resting + active state */
+.ap-step-btn {
+  position: relative;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(238, 246, 255, 0.78));
+  border: 1px solid rgba(148, 197, 255, 0.4);
+  color: rgb(51, 65, 85);
+  transition:
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 220ms ease,
+    border-color 220ms ease,
+    background 220ms ease,
+    color 220ms ease;
+}
+.ap-step-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(56, 189, 248, 0.55);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(224, 240, 255, 0.85));
+  box-shadow: 0 12px 28px -18px rgba(14, 165, 233, 0.55);
+}
+.ap-step-btn-active {
+  background:
+    linear-gradient(135deg, #0b3a7a 0%, #1d4ed8 45%, #38bdf8 100%);
+  color: #ffffff;
+  border-color: rgba(56, 189, 248, 0.6);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 18px 40px -18px rgba(14, 165, 233, 0.6),
+    0 0 24px -2px rgba(56, 189, 248, 0.45);
+}
+.ap-step-btn-active:hover {
+  transform: translateY(-1px);
+}
+
+/* Brand gradient used for icon tiles & primary CTAs */
+.ap-brand-gradient {
+  background-image: linear-gradient(135deg, #0b3a7a 0%, #1d4ed8 45%, #38bdf8 100%);
+}
+
+.ap-icon-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-image: linear-gradient(135deg, #0b3a7a 0%, #1d4ed8 45%, #38bdf8 100%);
+  color: #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 12px 28px -14px rgba(14, 165, 233, 0.55);
+}
+
+/* Light-blue callout panel */
+.ap-callout {
+  background:
+    radial-gradient(ellipse 90% 65% at 100% 0%, rgba(125, 211, 252, 0.20), transparent 65%),
+    linear-gradient(180deg, rgba(241, 248, 255, 0.92), rgba(255, 255, 255, 0.85));
+  border: 1px solid rgba(125, 184, 245, 0.4);
+}
+
+/* Soft inner panel — used inside IntakeShell etc. */
+.ap-soft-panel {
+  background:
+    radial-gradient(ellipse 90% 60% at 100% 0%, rgba(125, 211, 252, 0.20), transparent 65%),
+    linear-gradient(180deg, rgba(238, 246, 255, 0.85), rgba(247, 251, 255, 0.92));
+  border: 1px solid rgba(148, 197, 255, 0.35);
+}
+
+/* Section eyebrow used in toolbar groups */
+.ap-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #1e3a8a;
+}
+
+/* Smooth step transitions — re-runs whenever the keyed wrapper remounts */
+.ap-step-enter {
+  animation: ap-step-enter 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Respect users who request reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .ap-app-bg::before,
+  .ap-app-bg .ap-orb,
+  .ap-step-enter {
+    animation: none !important;
+  }
+}
+
+/* Don't show animated background when printing */
+@media print {
+  .ap-app-bg::before,
+  .ap-app-bg::after,
+  .ap-app-bg .ap-orb {
+    display: none !important;
+  }
+}

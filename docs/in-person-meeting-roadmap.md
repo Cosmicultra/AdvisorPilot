@@ -1,6 +1,6 @@
 # AdvisorPilot — In-person meeting roadmap
 
-This document captures the product goal, what the codebase already supports, gaps vs. that goal, and a phased plan to close them. It is grounded in the app as of the roadmap authoring date.
+This document captures the product goal, what the codebase already supports, gaps vs. that goal, and a phased plan to close them. It is grounded in the app as of the roadmap authoring date. **Stack context** (Next.js App Router, OpenAI, Supabase, NextAuth + Google OAuth for Gmail, email/password via Supabase) matches `[README.md](../README.md)` in the repo root.
 
 ## Product goal
 
@@ -59,6 +59,8 @@ Accepts `mode: "client" | "advisor"` and builds different PDFs (client snapshot 
 - Optional **Gmail send** of client snapshot: `POST /api/email-client-snapshot`.  
 - Follow-up email helpers (copy, Gmail/Outlook compose links).
 
+**Constraint (from app behavior):** one-click **Gmail send** requires **Google sign-in** for that flow; advisors on **email/password** can still generate PDFs and copy/share manually (`[README.md](../README.md)` — “Notes / gotchas”).
+
 **Product bar:** the **client snapshot** should stay **easy to find and send** after the meeting (minimal taps, clear recipient vs advisor identity—see Phase 1).
 
 ---
@@ -66,15 +68,15 @@ Accepts `mode: "client" | "advisor"` and builds different PDFs (client snapshot 
 ## Gaps between the vision and the current product
 
 
-| Your goal                                                  | Today                                                                                                                                                                                                                        |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Client **emails statement to you** and it lands in the app | **Manual only:** they email you → you save/open the attachment → **upload** in the app. There is **no inbound-email → auto-import** pipeline.                                                                                |
-| **Camera “on the spot”** feels as reliable as file upload  | Camera/upload pipeline may still need hardening for consistent extraction → deep AI; file path is the fallback until then.                                                                                                   |
-| **Fast enough** for a live first meeting                   | Extraction (`/api/analyze-statement`) + analysis (`/api/generate-analysis`) are **two sequential OpenAI calls**; on slow networks this can feel long. Limited progress UX beyond button loading states.                      |
-| **Ticker-level correctness** beyond advisor edits          | One AI extraction pass; **no second “normalize / validate tickers”** step (e.g. against a securities reference database).                                                                                                    |
-| **Multi-page or multiple statements**                      | One file per run; no “add page 2” or merge multiple accounts in one flow.                                                                                                                                                    |
-| **Multi-advisor / production security**                    | Several APIs accept `ownerEmail` from the client; fine for personal use, **not** safe if untrusted users share the same deployment.                                                                                          |
-| **Advisor profile extra fields**                           | `app/api/advisor-profile/route.ts` persists `**email_signature`** and `**logo_url**` (and maps those from Supabase). Extra UI fields for name/title/phone/etc. may **not** round-trip unless the table and API are extended. |
+| Your goal                                                  | Today                                                                                                                                                                                                                |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client **emails statement to you** and it lands in the app | **Manual only:** they email you → you save/open the attachment → **upload** in the app. There is **no inbound-email → auto-import** pipeline.                                                                        |
+| **Camera “on the spot”** feels as reliable as file upload  | Camera/upload pipeline may still need hardening for consistent extraction → deep AI; file path is the fallback until then.                                                                                           |
+| **Fast enough** for a live first meeting                   | Extraction (`/api/analyze-statement`) + analysis (`/api/generate-analysis`) are **two sequential OpenAI calls**; on slow networks this can feel long. Limited progress UX beyond button loading states.              |
+| **Ticker-level correctness** beyond advisor edits          | One AI extraction pass; **no second “normalize / validate tickers”** step (e.g. against a securities reference database).                                                                                            |
+| **Multi-page or multiple statements**                      | One file per run; no “add page 2” or merge multiple accounts in one flow.                                                                                                                                            |
+| **Multi-advisor / production security**                    | Several APIs accept `ownerEmail` from the client; fine for personal use, **not** safe if untrusted users share the same deployment.                                                                                  |
+| **Advisor profile extra fields**                           | `app/api/advisor-profile/route.ts` persists `email_signature` and `logo_url` (and maps those from Supabase). Extra UI fields for name/title/phone/etc. may **not** round-trip unless the table and API are extended. |
 
 
 ---
@@ -148,8 +150,9 @@ Choose **one** path first (simplest wins):
 
 ### Phase 5 — Production hardening (when others use the app)
 
-**If Supabase / server work is new to you:** this phase is mostly “make the backend enforce what the UI already *intends*.” You do not need to become a DBA overnight—work item by item with someone who knows NextAuth + Supabase, or follow official Supabase RLS tutorials scoped to your tables.
+**If Supabase / server work is new to you:** this phase is mostly “make the backend enforce what the UI already *intends*.” You do not need to become a DBA overnight—work item by item with someone who knows NextAuth + Supabase, or follow official Supabase RLS tutorials scoped to your tables. Env and keys for local/prod are documented in `[README.md](../README.md)` (never commit `.env.local`; `SUPABASE_SERVICE_ROLE_KEY` stays server-only).
 
+- **Two auth paths today:** Google OAuth (Gmail) and **email/password** via Supabase-backed routes—Phase 5 should treat **both** as first-class when enforcing “who owns this row” (not only Google sessions).  
 - **Server-side ownership:** derive advisor identity from **session/JWT** (the signed-in user); **do not trust** client-supplied `ownerEmail` (or any email in JSON bodies) for writes.  
 - **Supabase RLS:** row-level security so each authenticated user only reads/writes **their** rows (clients, drafts, uploads metadata).  
 - **Magic-link uploads (ties to Phase 2):** tokens map to **one advisor id**; uploads land in that advisor’s storage prefix + pending queue.  
@@ -191,7 +194,7 @@ Choose **one** path first (simplest wins):
 ## Open decision (pick one to prioritize next 30 days)
 
 - **(A)** Faster, clearer **in-room meeting flow** (Phase 1).  
-- **(B)** **Email auto-import** or QR upload (Phase 2).  
-- **(C)** **Ticker / data validation** layer (Phase 3).
+- **(B)** **Email auto-import** (Option A) or **advisor-scoped magic link** (Option B — QR optional).  
+- **(C)** **Ticker / data validation** + tax bucket / multi-page flow (Phase 3).
 
 Document owner: align the next sprint with whichever of A/B/C matters most for your first real client meetings.

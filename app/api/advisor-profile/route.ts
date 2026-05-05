@@ -18,6 +18,14 @@ function mapProfile(record: any) {
     ownerEmail: record.owner_email,
     emailSignature: record.email_signature || "",
     logoUrl: record.logo_url || "",
+    advisorName: record.advisor_name || "",
+    advisorTitle: record.advisor_title || "",
+    advisorLicense: record.advisor_license || "",
+    calendarLink: record.calendar_link || "",
+    officeAddress: record.office_address || "",
+    officePhone: record.office_phone || "",
+    cellPhone: record.cell_phone || "",
+    website: record.website || "",
     createdAt: record.created_at,
     updatedAt: record.updated_at,
   };
@@ -58,6 +66,14 @@ export const POST = async (req: Request) => {
     owner_email: ownerEmail,
     email_signature: String(body?.emailSignature || "").trim(),
     logo_url: body?.logoUrl || null,
+    advisor_name: String(body?.advisorName || "").trim() || null,
+    advisor_title: String(body?.advisorTitle || "").trim() || null,
+    advisor_license: String(body?.advisorLicense || "").trim() || null,
+    calendar_link: String(body?.calendarLink || "").trim() || null,
+    office_address: String(body?.officeAddress || "").trim() || null,
+    office_phone: String(body?.officePhone || "").trim() || null,
+    cell_phone: String(body?.cellPhone || "").trim() || null,
+    website: String(body?.website || "").trim() || null,
   };
 
   const { data, error } = await supabaseAdmin

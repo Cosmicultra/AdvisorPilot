@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import type { Session } from "next-auth";
 import { signIn, signOut } from "next-auth/react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -32,18 +33,24 @@ import {
   Wand2,
   MessageSquareText,
   BrainCircuit,
+  Link2,
+  Copy,
+  Check,
 } from "lucide-react";
+import {
+  INTAKE_STEPS,
+  INTAKE_STEP_COUNT,
+  type IntakeClient,
+  normalizeIntakeClient,
+  clientDisplayName,
+  clientFirstNameSalutation,
+} from "@/lib/intake-config";
+import type { LiveIntakeHandoffAction } from "@/lib/live-intake-scripts";
+import { LiveIntakeOverlay } from "../components/live-intake-overlay";
 
-type Client = {
-  name: string;
-  dob: string;
-  age: string;
-  retirementAge: string;
-  riskProfile: string;
-  calibration: string;
-  goal: string;
-  advisorEmail: string;
-};
+type Client = IntakeClient;
+
+type EmailAuthUser = { email?: string | null };
 
 type Holding = {
   rawName: string;
@@ -139,6 +146,18 @@ const demoHoldings: Holding[] = [
     options: ["Cash Equivalent", "Money Market Fund", "Manual ticker / CUSIP entry"],
   },
 ];
+
+const EXTRACT_PROGRESS_MESSAGES = [
+  "Uploading statement…",
+  "Reading the document and locating holdings…",
+  "Building your confirmation table…",
+] as const;
+
+const ANALYSIS_PROGRESS_MESSAGES = [
+  "Sending confirmed holdings to the analysis model…",
+  "Scoring risk, diversification, and income readiness…",
+  "Drafting synopsis, talking points, and meeting prep…",
+] as const;
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value || 0);
@@ -253,7 +272,7 @@ function ScoreCard({ label, value, helper }: { label: string; value: number; hel
             <p className="mt-1 text-3xl font-semibold text-slate-950">{value}<span className="text-base font-medium text-slate-400">/100</span></p>
             <p className="mt-1 text-xs text-slate-500">{helper}</p>
           </div>
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-sm font-bold text-white">
+          <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl text-sm font-bold">
             {value}
           </div>
         </div>
@@ -334,16 +353,77 @@ function successLabel(score: number) {
   return "Needs Review";
 }
 
+function computePortfolioContextFromReview(client: Client, holdings: Holding[], demoMode: boolean) {
+  const totalValue = holdings.reduce((sum, h) => sum + Number(h.value || 0), 0);
+  const reviewCount = holdings.filter((h) => h.confidence < 75 || h.status === "review").length;
+  const canRunDeepAnalysis = demoMode || reviewCount === 0;
+  const buckets = holdings.reduce(
+    (acc, h) => {
+      const bucket = classifyBucket(h.assetClass);
+      acc[bucket] += Number(h.value || 0);
+      return acc;
+    },
+    { equity: 0, fixedIncome: 0, cash: 0 }
+  );
+  const equity = totalValue ? Math.round((buckets.equity / totalValue) * 100) : 0;
+  const fixedIncome = totalValue ? Math.round((buckets.fixedIncome / totalValue) * 100) : 0;
+  const cash = totalValue ? Math.max(0, 100 - equity - fixedIncome) : 0;
+  const currentAllocation = { equity, fixedIncome, cash };
+  const derivedAge = client.age ? Number(client.age) : getAgeFromDob(client.dob);
+  const target = targetAllocation(derivedAge || 62, client.riskProfile);
+  const scores = portfolioScores(currentAllocation, target);
+  const currentSuccessRate = calculateRetirementSuccessModel({
+    age: derivedAge,
+    retirementAge: Number(client.retirementAge || 67),
+    portfolioValue: totalValue,
+    equity: currentAllocation.equity,
+    fixedIncome: currentAllocation.fixedIncome,
+    cash: currentAllocation.cash,
+    riskProfile: client.riskProfile,
+  });
+  const proposedSuccessRate = calculateRetirementSuccessModel({
+    age: derivedAge,
+    retirementAge: Number(client.retirementAge || 67),
+    portfolioValue: totalValue,
+    equity: target.equity,
+    fixedIncome: target.fixedIncome,
+    cash: target.cash,
+    riskProfile: client.riskProfile,
+  });
+  const successImprovement = proposedSuccessRate - currentSuccessRate;
+  const retirementModelInsights = [
+    `Current allocation estimate: ${currentSuccessRate}/100 (${successLabel(currentSuccessRate)}).`,
+    `Proposed baseline estimate: ${proposedSuccessRate}/100 (${successLabel(proposedSuccessRate)}).`,
+    successImprovement >= 0
+      ? `Illustrative improvement: +${successImprovement} points.`
+      : `Illustrative change: ${successImprovement} points.`,
+    "Model considers allocation mix, volatility, sequence risk, income support, liquidity, and retirement horizon.",
+  ];
+  return {
+    totalValue,
+    currentAllocation,
+    target,
+    scores,
+    canRunDeepAnalysis,
+    reviewCount,
+    derivedAge,
+    currentSuccessRate,
+    proposedSuccessRate,
+    successImprovement,
+    retirementModelInsights,
+  };
+}
+
 function LogoBlock({ compact = false }: { compact?: boolean }) {
   const [broken, setBroken] = useState(false);
 
   if (broken) {
     return (
       <div className="flex items-center gap-3">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 to-blue-900 text-lg font-bold text-white">AP</div>
+        <div className="ap-icon-tile flex h-14 w-14 items-center justify-center rounded-2xl text-lg font-bold md:h-16 md:w-16 md:text-xl">AP</div>
         {!compact && (
           <div>
-            <p className="font-serif text-2xl font-bold tracking-tight text-slate-950">AdvisorPilot</p>
+            <p className="font-serif text-2xl font-bold tracking-tight text-slate-950 md:text-[1.7rem]">AdvisorPilot</p>
             <p className="text-sm text-slate-500">Portfolio review assistant</p>
           </div>
         )}
@@ -353,10 +433,15 @@ function LogoBlock({ compact = false }: { compact?: boolean }) {
 
   return (
     <div className="flex items-center gap-3">
-      <img src="/logo.png?v=3" alt="AdvisorPilot logo" className="h-14 w-auto rounded-xl object-contain" onError={() => setBroken(true)} />
+      <img
+        src="/logo.png?v=3"
+        alt="AdvisorPilot logo"
+        className="h-16 w-auto rounded-xl object-contain drop-shadow-[0_8px_18px_rgba(14,116,235,0.18)] md:h-[4.5rem]"
+        onError={() => setBroken(true)}
+      />
       {!compact && (
         <div className="hidden sm:block">
-          <p className="font-serif text-2xl font-bold tracking-tight text-slate-950">AdvisorPilot</p>
+          <p className="font-serif text-2xl font-bold tracking-tight text-slate-950 md:text-[1.7rem]">AdvisorPilot</p>
           <p className="text-sm text-slate-500">Portfolio review assistant</p>
         </div>
       )}
@@ -368,7 +453,6 @@ function ProfessionalDonutChart({ data, title, subtitle }: { data: { label: stri
   const radius = 72;
   const stroke = 22;
   const circumference = 2 * Math.PI * radius;
-  let offset = 0;
 
   return (
     <div className="rounded-[1.5rem] border border-slate-200 bg-white p-6 shadow-sm print:break-inside-avoid print:border-slate-300 print:shadow-none">
@@ -379,9 +463,10 @@ function ProfessionalDonutChart({ data, title, subtitle }: { data: { label: stri
       <div className="flex flex-col items-center gap-6 md:flex-row">
         <svg width="190" height="190" viewBox="0 0 190 190" className="shrink-0 print:h-44 print:w-44">
           <circle cx="95" cy="95" r={radius} fill="transparent" stroke="#e5e7eb" strokeWidth={stroke} />
-          {data.map((item) => {
+          {data.map((item, index) => {
             const dash = (item.value / 100) * circumference;
-            const segment = (
+            const offset = data.slice(0, index).reduce((sum, d) => sum + (d.value / 100) * circumference, 0);
+            return (
               <circle
                 key={item.label}
                 cx="95"
@@ -396,8 +481,6 @@ function ProfessionalDonutChart({ data, title, subtitle }: { data: { label: stri
                 transform="rotate(-90 95 95)"
               />
             );
-            offset += dash;
-            return segment;
           })}
           <circle cx="95" cy="95" r="45" fill="#ffffff" />
           <text x="95" y="88" textAnchor="middle" className="fill-slate-500 text-xs font-medium">Total</text>
@@ -422,14 +505,14 @@ function ProfessionalDonutChart({ data, title, subtitle }: { data: { label: stri
 function StepButton({ label, active, index, onClick }: { label: string; active: boolean; index: number; onClick: () => void }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`rounded-2xl border px-3 py-3 text-sm capitalize transition-all ${
-        active
-          ? "border-teal-700 bg-gradient-to-br from-teal-700 to-blue-800 text-white shadow-lg shadow-blue-950/20"
-          : "border-slate-200 bg-white/85 text-slate-600 hover:border-teal-200 hover:bg-teal-50"
+      aria-current={active ? "step" : undefined}
+      className={`ap-step-btn min-h-[3rem] touch-manipulation rounded-2xl px-3 py-3.5 text-sm font-medium capitalize md:min-h-0 md:py-3 ${
+        active ? "ap-step-btn-active" : ""
       }`}
     >
-      <span className="mr-1 text-xs opacity-70">{index}.</span>
+      <span className={`mr-1 text-xs ${active ? "text-sky-100/80" : "text-slate-400"}`}>{index}.</span>
       {label}
     </button>
   );
@@ -445,36 +528,74 @@ function MetricCard({ icon, label, value, helper }: { icon: React.ReactNode; lab
             <p className="mt-1 text-2xl font-semibold capitalize text-slate-950">{value}</p>
             {helper && <p className="mt-1 text-xs text-slate-500">{helper}</p>}
           </div>
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-white">{icon}</div>
+          <div className="flex ap-icon-tile h-11 w-11 items-center justify-center rounded-2xl">{icon}</div>
         </div>
       </CardContent>
     </Card>
   );
 }
 
-function IntakeShell({ progress, eyebrow, title, helper, children, onBack, onNext, nextLabel = "Continue", backDisabled = false }: { progress: number; eyebrow: string; title: string; helper: string; children: React.ReactNode; onBack: () => void; onNext: () => void; nextLabel?: string; backDisabled?: boolean }) {
+function IntakeShell({
+  progress,
+  eyebrow,
+  title,
+  helper,
+  children,
+  onBack,
+  onNext,
+  nextLabel = "Continue",
+  backDisabled = false,
+  footerCenter,
+}: {
+  progress: number;
+  eyebrow: string;
+  title: string;
+  helper: string;
+  children: React.ReactNode;
+  onBack: () => void;
+  onNext: () => void;
+  nextLabel?: string;
+  backDisabled?: boolean;
+  footerCenter?: React.ReactNode;
+}) {
   return (
-    <Card className="rounded-[2rem] border-slate-200 bg-white/95 shadow-xl shadow-blue-950/10">
+    <Card className="rounded-[2rem] ap-glass border-0">
       <CardContent className="p-6 md:p-10">
         <div className="mx-auto max-w-3xl space-y-7">
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-4">
-              <Badge variant="outline" className="rounded-full border-teal-200 bg-teal-50 text-teal-800">{eyebrow}</Badge>
+              <Badge variant="outline" className="rounded-full border-sky-200 bg-sky-50 text-blue-700">{eyebrow}</Badge>
               <span className="text-sm text-slate-500">{progress}% complete</span>
             </div>
             <Progress value={progress} />
             <h2 className="font-serif text-3xl font-bold tracking-tight text-slate-950 md:text-5xl">{title}</h2>
             <p className="text-lg text-slate-600">{helper}</p>
           </div>
-          <div className="rounded-3xl border border-blue-100 bg-gradient-to-br from-blue-50 to-teal-50/60 p-5 md:p-7">{children}</div>
-          <div className="flex items-center justify-between gap-3">
-            <Button variant="outline" className="h-12 rounded-2xl px-5" onClick={onBack} disabled={backDisabled}>
-              <ArrowLeft className="mr-2 h-4 w-4" /> Back
-            </Button>
-            <Button className="h-12 rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 px-6 hover:from-teal-800 hover:to-blue-900" onClick={onNext}>
-              {nextLabel} <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
-          </div>
+          <div className="ap-soft-panel rounded-3xl p-5 md:p-7">{children}</div>
+          {footerCenter ? (
+            <div className="grid grid-cols-1 items-center gap-3 sm:grid-cols-[1fr_auto_1fr]">
+              <div className="flex justify-start">
+                <Button variant="outline" className="h-14 rounded-2xl px-5 md:h-12" onClick={onBack} disabled={backDisabled}>
+                  <ArrowLeft className="mr-2 h-4 w-4" /> Back
+                </Button>
+              </div>
+              <div className="order-first flex justify-center px-1 sm:order-none">{footerCenter}</div>
+              <div className="flex justify-end">
+                <Button className="h-14 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 px-6 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 md:h-12" onClick={onNext}>
+                  {nextLabel} <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <Button variant="outline" className="h-14 rounded-2xl px-5 md:h-12" onClick={onBack} disabled={backDisabled}>
+                <ArrowLeft className="mr-2 h-4 w-4" /> Back
+              </Button>
+              <Button className="h-14 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 px-6 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 md:h-12" onClick={onNext}>
+                {nextLabel} <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -482,7 +603,7 @@ function IntakeShell({ progress, eyebrow, title, helper, children, onBack, onNex
 }
 
 export default function AdvisorPilotPage() {
-  const [session, setSession] = useState<any>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
 
   useEffect(() => {
@@ -503,8 +624,26 @@ export default function AdvisorPilotPage() {
   }, []);
   const [step, setStep] = useState("intake");
   const [intakeStep, setIntakeStep] = useState(0);
+  const [liveIntakeOpen, setLiveIntakeOpen] = useState(false);
+  /** After live intake, scroll Statement Capture to client link vs advisor upload. */
+  const [uploadSectionFocus, setUploadSectionFocus] = useState<"client_link" | "advisor_upload" | null>(null);
+
+  useEffect(() => {
+    if (step !== "upload" || !uploadSectionFocus) return;
+    const id =
+      uploadSectionFocus === "client_link"
+        ? "upload-section-client-link"
+        : "upload-section-advisor-upload";
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setUploadSectionFocus(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [step, uploadSectionFocus]);
+
   const [client, setClient] = useState<Client>({
-    name: "",
+    firstName: "",
+    lastName: "",
     dob: "",
     age: "",
     retirementAge: "67",
@@ -541,12 +680,35 @@ export default function AdvisorPilotPage() {
   const [signatureWebsite, setSignatureWebsite] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
-  const [emailAuthUser, setEmailAuthUser] = useState<any>(null);
+  const [emailAuthUser, setEmailAuthUser] = useState<EmailAuthUser | null>(null);
   const [authMessage, setAuthMessage] = useState("");
+  const [draftAutosaveStatus, setDraftAutosaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [extractProgressIndex, setExtractProgressIndex] = useState(0);
+  const [analysisProgressIndex, setAnalysisProgressIndex] = useState(0);
+  const [magicLinkUrl, setMagicLinkUrl] = useState("");
+  const [magicLinkExpiresAt, setMagicLinkExpiresAt] = useState("");
+  const [magicLinkBusy, setMagicLinkBusy] = useState(false);
+  const [magicLinkErr, setMagicLinkErr] = useState("");
+  const [magicLinkCopied, setMagicLinkCopied] = useState(false);
+  const [followUpEmailSendingId, setFollowUpEmailSendingId] = useState<string | null>(null);
+
+  const advisorVoiceName = useMemo(() => {
+    const fromProfile = signatureName.trim();
+    if (fromProfile) return fromProfile;
+    const googleName = String(session?.user?.name || "").trim();
+    if (googleName) return googleName;
+    const local = String(session?.user?.email || emailAuthUser?.email || "")
+      .split("@")[0]
+      .trim();
+    if (local) return local;
+    return "your advisor";
+  }, [signatureName, session?.user?.name, session?.user?.email, emailAuthUser?.email]);
 
   const derivedAge = useMemo(() => (client.age ? Number(client.age) : getAgeFromDob(client.dob)), [client.age, client.dob]);
   const totalValue = useMemo(() => holdings.reduce((sum, h) => sum + Number(h.value || 0), 0), [holdings]);
   const reviewCount = holdings.filter((h) => h.confidence < 75 || h.status === "review").length;
+  /** Real statements: no deep analysis until the confirmation table is clean. Demo mode keeps the sample path usable. */
+  const canRunDeepAnalysis = demoMode || reviewCount === 0;
 
   const currentAllocation = useMemo(() => {
     const buckets = holdings.reduce((acc, h) => {
@@ -596,7 +758,63 @@ export default function AdvisorPilotPage() {
     "Model considers allocation mix, volatility, sequence risk, income support, liquidity, and retirement horizon.",
   ];
 
-  const progress = Math.round(((intakeStep + 1) / 6) * 100);
+  const progress = Math.round(((intakeStep + 1) / INTAKE_STEP_COUNT) * 100);
+
+  useEffect(() => {
+    if (!isExtracting) return;
+    const id = window.setInterval(() => {
+      setExtractProgressIndex((i) => (i + 1) % EXTRACT_PROGRESS_MESSAGES.length);
+    }, 3200);
+    return () => window.clearInterval(id);
+  }, [isExtracting]);
+
+  useEffect(() => {
+    if (!isAnalyzing) return;
+    const id = window.setInterval(() => {
+      setAnalysisProgressIndex((i) => (i + 1) % ANALYSIS_PROGRESS_MESSAGES.length);
+    }, 3500);
+    return () => window.clearInterval(id);
+  }, [isAnalyzing]);
+
+  useEffect(() => {
+    if (step !== "confirm" || demoMode) return;
+    const ownerEmail = String(session?.user?.email || emailAuthUser?.email || "")
+      .trim()
+      .toLowerCase();
+    if (!ownerEmail) return;
+
+    const handle = window.setTimeout(async () => {
+      setDraftAutosaveStatus("saving");
+      try {
+        const res = await fetch("/api/client-database", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: activeReviewId,
+            ownerEmail,
+            client,
+            holdings,
+            meetingNotes,
+            demoMode: false,
+            analysis: null,
+            totalValue,
+            status: "Draft",
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "Draft save failed.");
+        if (data?.client?.id) setActiveReviewId(data.client.id);
+        setDraftAutosaveStatus("saved");
+        window.setTimeout(() => {
+          setDraftAutosaveStatus((s) => (s === "saved" ? "idle" : s));
+        }, 2000);
+      } catch {
+        setDraftAutosaveStatus("error");
+      }
+    }, 2500);
+
+    return () => window.clearTimeout(handle);
+  }, [step, demoMode, holdings, client, meetingNotes, activeReviewId, totalValue, session, emailAuthUser]);
 
   const fallbackSynopsis = `Based on the client profile and confirmed holdings, the portfolio review focuses on whether the current allocation remains appropriate for the client’s age, retirement timeline, and risk profile. Current allocation appears to be approximately ${currentAllocation.equity}% equity, ${currentAllocation.fixedIncome}% fixed income, and ${currentAllocation.cash}% cash. The potential baseline shown is ${target.equity}% equity, ${target.fixedIncome}% fixed income, and ${target.cash}% cash. Final recommendations should be reviewed by the advisor in the context of the client’s full financial plan, liquidity needs, tax situation, and income goals.`;
 
@@ -760,6 +978,7 @@ export default function AdvisorPilotPage() {
 
     try {
       setIsExtracting(true);
+      setExtractProgressIndex(0);
       setExtractError("");
       setAnalysis(null);
 
@@ -798,12 +1017,21 @@ export default function AdvisorPilotPage() {
       setExtractError(error instanceof Error ? error.message : "Something went wrong analyzing the statement.");
     } finally {
       setIsExtracting(false);
+      setExtractProgressIndex(0);
     }
   }
 
   async function runAIAnalysis() {
+    if (!canRunDeepAnalysis) {
+      setAnalysisError(
+        `Resolve every holding that still needs review (${reviewCount} left) before running the deep analysis.`
+      );
+      return;
+    }
+
     try {
       setIsAnalyzing(true);
+      setAnalysisProgressIndex(0);
       setAnalysisError("");
 
       const response = await fetch("/api/generate-analysis", {
@@ -841,17 +1069,132 @@ export default function AdvisorPilotPage() {
       setStep("analysis");
     } finally {
       setIsAnalyzing(false);
+      setAnalysisProgressIndex(0);
     }
   }
 
   function nextIntake() {
-    if (intakeStep < 5) setIntakeStep(intakeStep + 1);
-    else setStep("upload");
+    setIntakeStep((current) => {
+      if (current < INTAKE_STEP_COUNT - 1) return current + 1;
+      setStep("upload");
+      return current;
+    });
+  }
+
+  type MintUploadLinkResult =
+    | { ok: true; uploadUrl: string; expiresAt: string }
+    | { ok: false; error: string };
+
+  async function mintClientUploadLink(): Promise<MintUploadLinkResult> {
+    const owner = getCurrentOwnerEmail();
+    if (!owner) return { ok: false, error: "Sign in to create a client upload link." };
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const at = typeof window !== "undefined" ? sessionStorage.getItem("ap_supabase_at") : null;
+    if (at) headers.Authorization = `Bearer ${at}`;
+
+    try {
+      const res = await fetch("/api/client-upload-token", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: String(data.error || "Could not create link.") };
+      }
+      return {
+        ok: true,
+        uploadUrl: String(data.uploadUrl || ""),
+        expiresAt: String(data.expiresAt || ""),
+      };
+    } catch {
+      return { ok: false, error: "Could not create link." };
+    }
+  }
+
+  async function completeLiveIntakeToUpload(handoff: LiveIntakeHandoffAction) {
+    try {
+      if (handoff === "digital_email") {
+        const minted = await mintClientUploadLink();
+        if (!minted.ok) {
+          setMagicLinkErr(minted.error);
+          setLiveIntakeOpen(false);
+          setStep("upload");
+          setUploadSectionFocus("client_link");
+          return;
+        }
+        setMagicLinkUrl(minted.uploadUrl);
+        setMagicLinkExpiresAt(minted.expiresAt);
+
+        const to = client.advisorEmail?.trim();
+        if (!to) {
+          setMagicLinkErr("Add the client email on the intake form to send the upload link.");
+          setLiveIntakeOpen(false);
+          setStep("upload");
+          setUploadSectionFocus("client_link");
+          return;
+        }
+
+        const advisorNameForEmail =
+          signatureName.trim() || String(session?.user?.name || "").trim() || "";
+
+        const em = await fetch("/api/email-client-upload-link", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to,
+            uploadUrl: minted.uploadUrl,
+            clientFirstName: clientFirstNameSalutation(client),
+            advisorName: advisorNameForEmail,
+          }),
+        });
+        const mailData = await em.json();
+        if (!em.ok) {
+          setMagicLinkErr(mailData.error || "Could not send email.");
+          setLiveIntakeOpen(false);
+          setStep("upload");
+          setUploadSectionFocus("client_link");
+          return;
+        }
+        setMagicLinkErr("");
+        setLiveIntakeOpen(false);
+        setStep("upload");
+        setUploadSectionFocus("client_link");
+        return;
+      }
+
+      setLiveIntakeOpen(false);
+      setStep("upload");
+      if (handoff === "advisor_upload") {
+        setUploadSectionFocus("advisor_upload");
+      } else {
+        setUploadSectionFocus(null);
+      }
+    } catch {
+      setMagicLinkErr("Something went wrong finishing live intake.");
+      setLiveIntakeOpen(false);
+      setStep("upload");
+    }
   }
 
   function backIntake() {
     if (intakeStep > 0) setIntakeStep(intakeStep - 1);
   }
+
+  const liveIntakeFooter = useMemo(
+    () => (
+      <Button
+        type="button"
+        variant="outline"
+        className="h-14 max-w-full whitespace-normal rounded-2xl border-sky-400 bg-gradient-to-b from-white to-sky-50/90 px-3 text-center text-xs font-semibold leading-tight text-blue-900 shadow-sm hover:to-sky-100 sm:px-4 sm:text-sm md:h-12 md:max-w-[12.5rem] md:text-sm"
+        onClick={() => setLiveIntakeOpen(true)}
+      >
+        AdvisorPilot Live Intake
+      </Button>
+    ),
+    []
+  );
 
   async function loadSavedReviews() {
     const ownerEmail = getCurrentOwnerEmail();
@@ -902,7 +1245,7 @@ export default function AdvisorPilotPage() {
           demoMode,
           analysis,
           totalValue,
-          status: activeReviewId ? undefined : "Analyzed",
+          status: analysis ? "Analyzed" : activeReviewId ? undefined : "Analyzed",
         }),
       });
 
@@ -914,7 +1257,7 @@ export default function AdvisorPilotPage() {
       }
 
       if (data?.client?.id) setActiveReviewId(data.client.id);
-      setSaveMessage(`Saved ${client.name || "Client"} client profile.`);
+      setSaveMessage(`Saved ${clientDisplayName(client) || "Client"} client profile.`);
       setTimeout(() => setSaveMessage(""), 2500);
       await loadSavedReviews();
     } catch {
@@ -924,71 +1267,173 @@ export default function AdvisorPilotPage() {
 
   function openSavedReview(review: SavedReview) {
     setActiveReviewId(review.id);
-    setClient({ ...review.client, advisorEmail: review.client?.advisorEmail || "" });
+    setClient(normalizeIntakeClient(review.client));
     setHoldings(review.holdings);
     setMeetingNotes(review.meetingNotes || "");
     setDemoMode(Boolean(review.demoMode));
     setAnalysis(review.analysis || null);
     setFollowUpEmail("");
     setEmailCopied(false);
-    setStep("analysis");
+    const resumeConfirm =
+      String(review.status || "").trim().toLowerCase() === "draft" && !review.analysis;
+    setStep(resumeConfirm ? "confirm" : "analysis");
   }
 
 
-  function createFollowUpEmailForReview(review: SavedReview) {
-    const savedClient = review.client || client;
-    const savedAnalysis = review.analysis || analysis;
-    const firstName = (savedClient.name || "there").trim().split(" ")[0] || "there";
+  async function sendFollowUpFromDatabase(review: SavedReview) {
+    if (!session) {
+      alert("Please sign in with Google first to send an automated follow-up email.");
+      return;
+    }
 
-    const synopsis =
-      savedAnalysis?.synopsis
-        ?.split(/(?<=[.!?])\s+/)
-        .filter(Boolean)
-        .slice(0, 2)
-        .join(" ") || "The attached Client Snapshot provides a high-level overview of your current portfolio positioning and areas we may want to review together.";
+    const to = String(review.client?.advisorEmail || "").trim();
+    if (!to) {
+      alert("Add the client's email (snapshot recipient) on their profile before sending.");
+      return;
+    }
 
-    const highlight =
-      savedAnalysis?.portfolioHighlights?.[0] ||
-      "Your portfolio review includes a few key areas worth discussing together.";
+    const normalizedClient = normalizeIntakeClient(review.client);
+    const reviewHoldings = Array.isArray(review.holdings) ? review.holdings : [];
+    if (reviewHoldings.length === 0) {
+      alert("This profile has no saved holdings. Open the profile and save statement holdings before sending a follow-up.");
+      return;
+    }
 
-    const strategy =
-      savedAnalysis?.strategies?.[0] ||
-      "review your portfolio together and confirm it aligns with your goals.";
+    const ctx = computePortfolioContextFromReview(normalizedClient, reviewHoldings, Boolean(review.demoMode));
+    if (!ctx.canRunDeepAnalysis) {
+      alert(
+        `Resolve every holding that still needs review (${ctx.reviewCount} left) before sending. Open the profile and confirm holdings, or use Update Analysis from the client list.`
+      );
+      return;
+    }
 
-    return [
-      "Subject: Next Steps from Our Portfolio Review",
-      "",
-      `Hi ${firstName},`,
-      "",
-      "Thank you again for taking the time to review your portfolio with me.",
-      "",
-      "I wanted to send over your Client Snapshot and briefly highlight a couple key takeaways.",
-      "",
-      synopsis,
-      "",
-      `Key highlight: ${highlight.charAt(0).toLowerCase() + highlight.slice(1)}`,
-      "",
-      `Next step: ${strategy.charAt(0).toLowerCase() + strategy.slice(1)}`,
-      "",
-      "The full breakdown is included in the attached Client Snapshot.",
-      "",
-      "Please take a look when you have a chance and let me know if any questions come up.",
-      "",
-      getCleanEmailSignature(),
-    ].join("\n");
-  }
+    setFollowUpEmailSendingId(review.id);
+    try {
+      const analysisRes = await fetch("/api/generate-analysis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client: normalizedClient,
+          holdings: reviewHoldings,
+          allocation: { current: ctx.currentAllocation, target: ctx.target },
+          totalValue: ctx.totalValue,
+        }),
+      });
 
-  function sendFollowUpFromDatabase(review: SavedReview) {
-    openSavedReview(review);
-    setFollowUpEmail(createFollowUpEmailForReview(review));
-    setEmailCopied(false);
-    markCurrentClientContacted();
-    setStep("report");
+      if (!analysisRes.ok) {
+        const errData = await analysisRes.json().catch(() => null);
+        throw new Error(errData?.error || "Could not refresh analysis for this follow-up.");
+      }
+
+      const genData = await analysisRes.json();
+      const freshAnalysis: AIAnalysis = {
+        synopsis: genData.synopsis || "",
+        portfolioHighlights: Array.isArray(genData.portfolioHighlights) ? genData.portfolioHighlights : [],
+        strategies: Array.isArray(genData.strategies) ? genData.strategies : [],
+        redFlags: Array.isArray(genData.redFlags) ? genData.redFlags : [],
+        overlapInsights: Array.isArray(genData.overlapInsights) ? genData.overlapInsights : [],
+        displayWhatThisMeans: Array.isArray(genData.displayWhatThisMeans) ? genData.displayWhatThisMeans : [],
+        recommendations: Array.isArray(genData.recommendations) ? genData.recommendations : [],
+        talkingPoints: Array.isArray(genData.talkingPoints) ? genData.talkingPoints : [],
+        advisorOpeningScript: genData.advisorOpeningScript || "",
+        objectionHandling: Array.isArray(genData.objectionHandling) ? genData.objectionHandling : [],
+      };
+
+      const analysisPayload = {
+        synopsis: freshAnalysis.synopsis,
+        portfolioHighlights: freshAnalysis.portfolioHighlights || [],
+        strategies: freshAnalysis.strategies,
+        redFlags: freshAnalysis.redFlags || [],
+        overlapInsights: freshAnalysis.overlapInsights || [],
+        displayWhatThisMeans: freshAnalysis.displayWhatThisMeans || [],
+        recommendations: freshAnalysis.recommendations,
+        talkingPoints: freshAnalysis.talkingPoints || [],
+        positioningImpact: [
+          `Equity: ${ctx.currentAllocation.equity}% current → ${ctx.target.equity}% proposed`,
+          `Fixed: ${ctx.currentAllocation.fixedIncome}% current → ${ctx.target.fixedIncome}% proposed`,
+          `Cash: ${ctx.currentAllocation.cash}% current → ${ctx.target.cash}% proposed`,
+        ],
+        advisorOpeningScript: freshAnalysis.advisorOpeningScript || "",
+        objectionHandling: freshAnalysis.objectionHandling || [],
+      };
+
+      const emailRes = await fetch("/api/email-client-snapshot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          emailVariant: "follow_up",
+          to,
+          emailSignature: getCleanEmailSignature(),
+          calendarLink: signatureCalendarLink,
+          client: normalizedClient,
+          analysis: analysisPayload,
+          allocation: {
+            current: ctx.currentAllocation,
+            target: ctx.target,
+          },
+          scores: ctx.scores,
+          retirementModel: {
+            currentSuccessRate: ctx.currentSuccessRate,
+            proposedSuccessRate: ctx.proposedSuccessRate,
+            successImprovement: ctx.successImprovement,
+            insights: ctx.retirementModelInsights,
+          },
+          totalValue: ctx.totalValue,
+          holdings: reviewHoldings,
+        }),
+      });
+
+      const emailText = await emailRes.text();
+      let emailJson: Record<string, unknown> = {};
+      try {
+        emailJson = emailText ? JSON.parse(emailText) : {};
+      } catch {
+        emailJson = {};
+      }
+
+      if (!emailRes.ok) {
+        throw new Error(String(emailJson.error || emailText || "Failed to send follow-up email."));
+      }
+
+      openSavedReview({ ...review, analysis: freshAnalysis });
+      setAnalysis(freshAnalysis);
+      setStep("report");
+      setFollowUpEmail(typeof emailJson.plainTextBody === "string" ? emailJson.plainTextBody : "");
+      setEmailCopied(false);
+
+      const ownerEmail = getCurrentOwnerEmail();
+      if (ownerEmail) {
+        await fetch("/api/client-database", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: review.id,
+            ownerEmail,
+            client: normalizedClient,
+            holdings: reviewHoldings,
+            meetingNotes: review.meetingNotes || "",
+            demoMode: Boolean(review.demoMode),
+            analysis: freshAnalysis,
+            totalValue: ctx.totalValue,
+            status: "Report Sent",
+            lastContactedAt: new Date().toISOString(),
+          }),
+        });
+        await loadSavedReviews();
+      }
+
+      alert(String(emailJson.message || "Follow-up email with an updated Client Snapshot was sent."));
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : "Could not send follow-up email.");
+    } finally {
+      setFollowUpEmailSendingId(null);
+    }
   }
 
   function updateAnalysisFromDatabase(review: SavedReview) {
     setActiveReviewId(review.id);
-    setClient({ ...review.client, advisorEmail: review.client?.advisorEmail || "" });
+    setClient(normalizeIntakeClient(review.client));
     setHoldings(review.holdings);
     setMeetingNotes(review.meetingNotes || "");
     setDemoMode(Boolean(review.demoMode));
@@ -1054,6 +1499,38 @@ export default function AdvisorPilotPage() {
     return String(session?.user?.email || emailAuthUser?.email || "").trim().toLowerCase();
   }
 
+  async function createClientUploadLink() {
+    setMagicLinkErr("");
+    setMagicLinkCopied(false);
+    if (!getCurrentOwnerEmail()) {
+      setMagicLinkErr("Sign in to create a client upload link.");
+      return;
+    }
+    setMagicLinkBusy(true);
+    try {
+      const minted = await mintClientUploadLink();
+      if (!minted.ok) {
+        setMagicLinkErr(minted.error);
+        return;
+      }
+      setMagicLinkUrl(minted.uploadUrl);
+      setMagicLinkExpiresAt(minted.expiresAt);
+    } finally {
+      setMagicLinkBusy(false);
+    }
+  }
+
+  async function copyMagicLink() {
+    if (!magicLinkUrl) return;
+    try {
+      await navigator.clipboard.writeText(magicLinkUrl);
+      setMagicLinkCopied(true);
+      window.setTimeout(() => setMagicLinkCopied(false), 2000);
+    } catch {
+      setMagicLinkErr("Could not copy — select the link in the field and copy manually.");
+    }
+  }
+
   function composeEmailSignature() {
     return [
       signatureName,
@@ -1082,6 +1559,11 @@ export default function AdvisorPilotPage() {
 
       const profile = data?.profile || {};
       const savedSignature = profile.emailSignature || "";
+      const savedCalendarLink = String(profile.calendarLink || "").trim();
+      const inferredLinkFromSignature =
+        !savedCalendarLink && typeof savedSignature === "string"
+          ? (savedSignature.match(/https?:\/\/[^\s]+/i)?.[0] || "").trim()
+          : "";
 
       setEmailSignature(savedSignature);
       setSignatureDraft(savedSignature);
@@ -1089,7 +1571,7 @@ export default function AdvisorPilotPage() {
       setSignatureName(profile.advisorName || "");
       setSignatureTitle(profile.advisorTitle || "");
       setSignatureLicense(profile.advisorLicense || "");
-      setSignatureCalendarLink(profile.calendarLink || "");
+      setSignatureCalendarLink(savedCalendarLink || inferredLinkFromSignature);
       setSignatureAddress(profile.officeAddress || "");
       setSignatureOfficePhone(profile.officePhone || "");
       setSignatureCellPhone(profile.cellPhone || "");
@@ -1245,7 +1727,9 @@ async function handleEmailLogin() {
       return;
     }
 
-    setEmailAuthUser(data.user);
+    setEmailAuthUser(
+      data.user && typeof data.user === "object" ? (data.user as EmailAuthUser) : null
+    );
     setAuthMessage("Logged in successfully.");
     await loadAdvisorProfile(data.user?.email);
   } catch {
@@ -1257,17 +1741,18 @@ function handleEmailPasswordLogout() {
   setEmailAuthUser(null);
   setAuthEmail("");
   setAuthPassword("");
+  if (typeof window !== "undefined") sessionStorage.removeItem("ap_supabase_at");
   setAuthMessage("Signed out.");
 }
 
 function handleEmailReport() {
   const to = client.advisorEmail || "";
-  const subject = `AdvisorPilot Portfolio Review - ${client.name || "Client"}`;
+  const subject = `AdvisorPilot Portfolio Review - ${clientDisplayName(client) || "Client"}`;
 
   const emailLines = [
     "Portfolio Review Snapshot",
     "",
-    `Client: ${client.name || "Client"}`,
+    `Client: ${clientDisplayName(client) || "Client"}`,
     `Age: ${derivedAge || "N/A"}`,
     `Risk Profile: ${client.riskProfile.replace("-", " ")}`,
     "",
@@ -1313,40 +1798,40 @@ async function sendClientSnapshotEmail() {
     }
 
     if (!client.advisorEmail) {
-      alert("Enter a client email first.");
+      alert("Add the client's email (snapshot recipient) before sending.");
       return;
     }
 
-    const firstName = (client.name || "there").trim().split(" ")[0] || "there";
+    const firstName = clientFirstNameSalutation(client);
 
     const shortSynopsis =
-  displaySynopsis
-    ?.split(/(?<=[.!?])\\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .join(" ") || "";
+      displaySynopsis
+        ?.split(/(?<=[.!?])\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .join(" ") || "";
 
-const clientStrategy =
-  displayStrategies?.[0] ||
-  "review your portfolio together and confirm it aligns with your goals.";
+    const clientStrategy =
+      displayStrategies?.[0] ||
+      "review your portfolio together and confirm it aligns with your goals.";
 
-const generatedEmailBody = [
-  `Hi ${firstName},`,
-  "",
-  "Thank you again for taking the time to review your portfolio with me.",
-  "",
-  "I wanted to send over your Client Snapshot and briefly highlight a couple key takeaways.",
-  "",
-  shortSynopsis,
-  "",
-  `Next step: ${clientStrategy.charAt(0).toLowerCase() + clientStrategy.slice(1)}`,
-  "",
-  "The full breakdown is included in the attached Client Snapshot.",
-  "",
-  "Please take a look when you have a chance and let me know if any questions come up.",
-  "",
-  getCleanEmailSignature(),
-].join("\\n");
+    const generatedEmailBody = [
+      `Hi ${firstName},`,
+      "",
+      "Thank you again for taking the time to review your portfolio with me.",
+      "",
+      "I wanted to send over your Client Snapshot and briefly highlight a couple key takeaways.",
+      "",
+      shortSynopsis,
+      "",
+      `Next step: ${clientStrategy.charAt(0).toLowerCase() + clientStrategy.slice(1)}`,
+      "",
+      "The full breakdown is included in the attached Client Snapshot.",
+      "",
+      "Please take a look when you have a chance and let me know if any questions come up.",
+      "",
+      getCleanEmailSignature(),
+    ].join("\n");
 
     const res = await fetch("/api/email-client-snapshot", {
       method: "POST",
@@ -1355,8 +1840,10 @@ const generatedEmailBody = [
       },
       body: JSON.stringify({
         to: client.advisorEmail,
-        subject: `Next Steps from Our Portfolio Review - ${client.name || "Client"}`,
+        subject: `Next Steps from Our Portfolio Review - ${clientDisplayName(client) || "Client"}`,
         emailBody: generatedEmailBody,
+        emailSignature: getCleanEmailSignature(),
+        calendarLink: signatureCalendarLink,
         client,
         analysis: {
           synopsis: displaySynopsis,
@@ -1388,10 +1875,14 @@ const generatedEmailBody = [
     });
 
     const text = await res.text();
-    let data: any = {};
+    let data: { error?: string } = {};
 
     try {
-      data = text ? JSON.parse(text) : {};
+      const parsed: unknown = text ? JSON.parse(text) : {};
+      data =
+        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+          ? (parsed as { error?: string })
+          : {};
     } catch {
       data = {};
     }
@@ -1495,7 +1986,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
   }
 
   function buildFollowUpEmail() {
-    const firstName = (client.name || "there").trim().split(" ")[0] || "there";
+    const firstName = clientFirstNameSalutation(client);
 
     const shortSynopsis =
       displaySynopsis
@@ -1560,7 +2051,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
     const query = clientSearch.trim().toLowerCase();
     if (!query) return true;
 
-    const name = String(review.client?.name || "").toLowerCase();
+    const name = clientDisplayName(review.client || {}).toLowerCase();
     const email = String(review.client?.advisorEmail || "").toLowerCase();
 
     return name.includes(query) || email.includes(query);
@@ -1570,9 +2061,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
 
   if (!authLoaded) {
     return (
-      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#dbeafe,transparent_34%),linear-gradient(135deg,#f8fafc,#eff6ff_45%,#f8fafc)] p-4 text-slate-950 md:p-8">
+      <div className="ap-app-bg min-h-screen p-4 text-slate-950 md:p-8">
+        <div aria-hidden className="ap-orb ap-orb-1" />
+        <div aria-hidden className="ap-orb ap-orb-2" />
         <div className="mx-auto flex min-h-[80vh] max-w-3xl items-center justify-center">
-          <Card className="w-full rounded-[2rem] border-slate-200 bg-white/95 shadow-xl shadow-blue-950/10">
+          <Card className="ap-glass ap-step-enter w-full rounded-[2rem] border-0">
             <CardContent className="p-8 text-center">
               <LogoBlock />
               <p className="mt-6 text-slate-600">Loading AdvisorPilot...</p>
@@ -1585,9 +2078,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
 
   if (!isLoggedIn) {
     return (
-      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#dbeafe,transparent_34%),linear-gradient(135deg,#f8fafc,#eff6ff_45%,#f8fafc)] p-4 text-slate-950 md:p-8">
+      <div className="ap-app-bg min-h-screen p-4 text-slate-950 md:p-8">
+        <div aria-hidden className="ap-orb ap-orb-1" />
+        <div aria-hidden className="ap-orb ap-orb-2" />
         <div className="mx-auto flex min-h-[88vh] max-w-5xl items-center justify-center">
-          <Card className="w-full rounded-[2rem] border-slate-200 bg-white/95 shadow-xl shadow-blue-950/10">
+          <Card className="ap-glass ap-step-enter w-full rounded-[2rem] border-0">
             <CardContent className="grid gap-8 p-6 md:grid-cols-[1fr_1.1fr] md:p-10">
               <div className="flex flex-col justify-center">
                 <LogoBlock />
@@ -1604,7 +2099,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
 
               <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
                 <Button
-                  className="h-12 w-full rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800"
+                  className="h-12 w-full rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500"
                   onClick={() => signIn("google", { callbackUrl: "/" })}
                 >
                   Continue with Google
@@ -1638,7 +2133,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       Login
                     </Button>
 
-                    <Button className="h-12 rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={handleEmailSignup}>
+                    <Button className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500" onClick={handleEmailSignup}>
                       Create Account
                     </Button>
                   </div>
@@ -1658,7 +2153,9 @@ async function downloadPDFReport(mode: "client" | "advisor") {
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,#dbeafe,transparent_34%),linear-gradient(135deg,#f8fafc,#eff6ff_45%,#f8fafc)] p-4 text-slate-950 md:p-8 print:bg-white print:p-0">
+    <div className="ap-app-bg min-h-screen p-4 text-slate-950 md:p-8 print:bg-white print:p-0">
+      <div aria-hidden className="ap-orb ap-orb-1 print:hidden" />
+      <div aria-hidden className="ap-orb ap-orb-2 print:hidden" />
       <style jsx global>{`
         @media print {
           body { background: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -1670,7 +2167,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
       `}</style>
 
       <div className="mx-auto max-w-7xl space-y-6 print:max-w-none print:space-y-0">
-        <header className="flex items-center justify-between rounded-[2rem] border border-white/70 bg-white/90 px-5 py-4 shadow-xl shadow-blue-950/10 backdrop-blur md:px-7">
+        <header className="ap-glass-strong flex items-center justify-between rounded-[2rem] border-0 px-5 py-4 md:px-7">
           <LogoBlock />
           <div className="flex flex-wrap items-center justify-end gap-2">
             {demoMode && <Badge variant="outline" className="hidden rounded-full border-amber-200 bg-amber-50 text-amber-800 sm:inline-flex">Demo data</Badge>}
@@ -1715,7 +2212,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         )}
 
         {showSignatureSetup && (
-          <Card className="rounded-[2rem] border-blue-100 bg-white/95 shadow-xl shadow-blue-950/10">
+          <Card className="rounded-[2rem] ap-glass border-0">
             <CardContent className="space-y-5 p-6 md:p-8">
               <div>
                 <h2 className="font-serif text-2xl font-bold text-slate-950">Set up your email signature</h2>
@@ -1773,7 +2270,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={saveAdvisorProfile}>
+                <Button className="rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500" onClick={saveAdvisorProfile}>
                   Save Signature
                 </Button>
 
@@ -1785,18 +2282,36 @@ async function downloadPDFReport(mode: "client" | "advisor") {
           </Card>
         )}
 
-        {step === "intake" && intakeStep === 0 && <IntakeShell progress={progress} eyebrow="Question 1" title="Who is this review for?" helper="Start with the client name. This can later appear on the report." onBack={backIntake} backDisabled onNext={nextIntake}><div className="space-y-4">
-  <div>
-    <label className="text-sm font-semibold text-slate-700">Client name</label>
-    <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-teal-600" defaultValue={client.name} onBlur={(e) => setClient({ ...client, name: e.target.value })} placeholder="Jane Smith" autoFocus />
+        {step === "intake" && liveIntakeOpen && (
+          <LiveIntakeOverlay
+            intakeStep={intakeStep}
+            client={client}
+            setClient={setClient}
+            advisorDisplayName={advisorVoiceName}
+            onAdvanceStep={nextIntake}
+            onCompleteToUpload={completeLiveIntakeToUpload}
+            onClose={() => setLiveIntakeOpen(false)}
+          />
+        )}
+        <div key={`${step}-${step === "intake" ? intakeStep : "main"}`} className="ap-step-enter">
+        {step === "intake" && intakeStep === 0 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[0].eyebrow} title={INTAKE_STEPS[0].title} helper={INTAKE_STEPS[0].helper} onBack={backIntake} backDisabled onNext={nextIntake} footerCenter={liveIntakeFooter}><div className="space-y-4">
+  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+    <div>
+      <label className="text-sm font-semibold text-slate-700">First name</label>
+      <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.firstName} onChange={(e) => setClient({ ...client, firstName: e.target.value })} placeholder="Jane" autoFocus />
+    </div>
+    <div>
+      <label className="text-sm font-semibold text-slate-700">Last name</label>
+      <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.lastName} onChange={(e) => setClient({ ...client, lastName: e.target.value })} placeholder="Smith" />
+    </div>
   </div>
   <div>
-    <label className="text-sm font-semibold text-slate-700">Client email</label>
-    <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-teal-600" type="email" value={client.advisorEmail} onChange={(e) => setClient({ ...client, advisorEmail: e.target.value })} placeholder="client@email.com" />
-    <p className="mt-2 text-sm text-slate-500">This will be used for sending the Client Snapshot and saved with the client profile.</p>
+    <label className="text-sm font-semibold text-slate-700">Client email (Client Snapshot recipient)</label>
+    <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="email" value={client.advisorEmail} onChange={(e) => setClient({ ...client, advisorEmail: e.target.value })} placeholder="client@email.com" />
+    <p className="mt-2 text-sm text-slate-500">This is the client&apos;s inbox for the snapshot PDF / Gmail send — not your advisor login. Your identity comes from the account you&apos;re signed into and your email signature.</p>
   </div>
 </div></IntakeShell>}
-        {step === "intake" && intakeStep === 1 && <IntakeShell progress={progress} eyebrow="Question 2" title="How old is the client?" helper="Use date of birth or age. Age helps calibrate the default allocation review." onBack={backIntake} onNext={nextIntake}><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Date of birth</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-teal-600" type="date" defaultValue={client.dob} onBlur={(e) => {
+        {step === "intake" && intakeStep === 1 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[1].eyebrow} title={INTAKE_STEPS[1].title} helper={INTAKE_STEPS[1].helper} onBack={backIntake} onNext={nextIntake} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Date of birth</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="date" value={client.dob} onChange={(e) => {
   const dob = e.target.value;
   const calculatedAge = getAgeFromDob(dob);
   setClient({
@@ -1804,30 +2319,123 @@ async function downloadPDFReport(mode: "client" | "advisor") {
     dob,
     age: calculatedAge !== null ? String(calculatedAge) : client.age,
   });
-}} /></div><div><label className="text-sm font-semibold text-slate-700">Or age</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-teal-600" type="number" value={client.age} onChange={(e) => setClient({ ...client, age: e.target.value })} placeholder="62" /></div></div></IntakeShell>}
-        {step === "intake" && intakeStep === 2 && <IntakeShell progress={progress} eyebrow="Question 3" title="When do they expect to retire?" helper="This helps determine whether the portfolio should emphasize growth, protection, income, or a blend." onBack={backIntake} onNext={nextIntake}><label className="text-sm font-semibold text-slate-700">Expected retirement age</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-teal-600" type="number" defaultValue={client.retirementAge} onBlur={(e) => setClient({ ...client, retirementAge: e.target.value })} placeholder="67" /></IntakeShell>}
-        {step === "intake" && intakeStep === 3 && <IntakeShell progress={progress} eyebrow="Question 4" title="What is their risk profile?" helper="The app will use this as the preferred calibration instead of relying on age alone." onBack={backIntake} onNext={nextIntake}><div className="grid grid-cols-1 gap-3 md:grid-cols-2">{["conservative", "moderate-conservative", "moderate", "moderate-growth", "aggressive"].map((risk) => <button key={risk} onClick={() => setClient({ ...client, riskProfile: risk })} className={`rounded-2xl border p-4 text-left capitalize transition ${client.riskProfile === risk ? "border-teal-700 bg-gradient-to-br from-teal-700 to-blue-800 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-teal-50"}`}>{risk.replace("-", " ")}</button>)}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 4 && <IntakeShell progress={progress} eyebrow="Question 5" title="How should AdvisorPilot calibrate the review?" helper="You can use the client risk profile, run an age-based default, or focus on retirement income." onBack={backIntake} onNext={nextIntake}><div className="grid grid-cols-1 gap-3">{[["risk-profile", "Use stated risk profile", "Best default for advisor-reviewed recommendations."], ["age-default", "Run default based on age", "Good if no risk questionnaire has been completed yet."], ["income-goal", "Retirement income goal", "Best for near-retirees who need income and lower volatility."], ["custom", "Custom advisor model", "Use your own allocation model later."]].map(([value, title, desc]) => <button key={value} onClick={() => setClient({ ...client, calibration: value })} className={`rounded-2xl border p-4 text-left transition ${client.calibration === value ? "border-teal-700 bg-gradient-to-br from-teal-700 to-blue-800 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-teal-50"}`}><div className="font-semibold">{title}</div><div className={`mt-1 text-sm ${client.calibration === value ? "text-blue-100" : "text-slate-500"}`}>{desc}</div></button>)}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 5 && <IntakeShell progress={progress} eyebrow="Question 6" title="What is the main client goal?" helper="This helps the script and report sound specific to the client conversation." onBack={backIntake} onNext={nextIntake}><Textarea className="min-h-40 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-teal-600" defaultValue={client.goal} onBlur={(e) => setClient({ ...client, goal: e.target.value })} placeholder="Example: Wants retirement income, less market risk, and tax-efficient withdrawals." /></IntakeShell>}
+}} /></div><div><label className="text-sm font-semibold text-slate-700">Or age</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.age} onChange={(e) => setClient({ ...client, age: e.target.value })} placeholder="62" /></div></div></IntakeShell>}
+        {step === "intake" && intakeStep === 2 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[2].eyebrow} title={INTAKE_STEPS[2].title} helper={INTAKE_STEPS[2].helper} onBack={backIntake} onNext={nextIntake} footerCenter={liveIntakeFooter}><label className="text-sm font-semibold text-slate-700">Expected retirement age</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.retirementAge} onChange={(e) => setClient({ ...client, retirementAge: e.target.value })} placeholder="67" /></IntakeShell>}
+        {step === "intake" && intakeStep === 3 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[3].eyebrow} title={INTAKE_STEPS[3].title} helper={INTAKE_STEPS[3].helper} onBack={backIntake} onNext={nextIntake} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3 md:grid-cols-2">{["conservative", "moderate-conservative", "moderate", "moderate-growth", "aggressive"].map((risk) => <button key={risk} onClick={() => setClient({ ...client, riskProfile: risk })} className={`rounded-2xl border p-4 text-left capitalize transition ${client.riskProfile === risk ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}>{risk.replace("-", " ")}</button>)}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 4 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[4].eyebrow} title={INTAKE_STEPS[4].title} helper={INTAKE_STEPS[4].helper} onBack={backIntake} onNext={nextIntake} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3">{[["risk-profile", "Use stated risk profile", "Best default for advisor-reviewed recommendations."], ["age-default", "Run default based on age", "Good if no risk questionnaire has been completed yet."], ["income-goal", "Retirement income goal", "Best for near-retirees who need income and lower volatility."], ["custom", "Custom advisor model", "Use your own allocation model later."]].map(([value, title, desc]) => <button key={value} onClick={() => setClient({ ...client, calibration: value })} className={`rounded-2xl border p-4 text-left transition ${client.calibration === value ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}><div className="font-semibold">{title}</div><div className={`mt-1 text-sm ${client.calibration === value ? "text-blue-100" : "text-slate-500"}`}>{desc}</div></button>)}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 5 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[5].eyebrow} title={INTAKE_STEPS[5].title} helper={INTAKE_STEPS[5].helper} onBack={backIntake} onNext={nextIntake} footerCenter={liveIntakeFooter}><Textarea className="min-h-40 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.goal} onChange={(e) => setClient({ ...client, goal: e.target.value })} placeholder="Example: Wants retirement income, less market risk, and tax-efficient withdrawals." /></IntakeShell>}
 
         {step === "upload" && (
-          <Card className="rounded-[2rem] border-slate-200 bg-white/95 shadow-xl shadow-blue-950/10">
-            <CardContent className="space-y-6 p-6 md:p-8">
-              <div className="flex items-center gap-3"><div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-white"><Upload className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Statement Capture</h2><p className="text-sm text-slate-500">Upload a statement or take a picture from your phone.</p></div></div>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3"><MetricCard icon={<User className="h-5 w-5" />} label="Client" value={client.name || "Unnamed"} helper={derivedAge ? `Age ${derivedAge}` : "Age not set"} /><MetricCard icon={<Target className="h-5 w-5" />} label="Risk profile" value={client.riskProfile.replace("-", " ")} helper="Used for calibration" /><MetricCard icon={<BriefcaseBusiness className="h-5 w-5" />} label="Retirement age" value={client.retirementAge || "N/A"} helper="Timeline input" /></div>
-              <div className="grid grid-cols-1 gap-5 md:grid-cols-2"><label className="cursor-pointer rounded-3xl border border-slate-200 bg-white p-7 transition hover:-translate-y-1 hover:shadow-xl"><FileText className="mb-4 h-9 w-9 text-teal-700" /><h3 className="text-lg font-semibold">Upload emailed or texted statement</h3><p className="mb-5 text-sm text-slate-500">PDF, JPG, PNG, or screenshot.</p><Input type="file" accept=".pdf,image/*" onChange={(e) => setUploadedFile(e.target.files?.[0] || null)} /></label><label className="cursor-pointer rounded-3xl border border-slate-200 bg-white p-7 transition hover:-translate-y-1 hover:shadow-xl"><Camera className="mb-4 h-9 w-9 text-blue-800" /><h3 className="text-lg font-semibold">Take a picture on phone</h3><p className="mb-5 text-sm text-slate-500">Uses your mobile camera when opened from a phone.</p><Input type="file" accept="image/*" capture="environment" onChange={(e) => setUploadedFile(e.target.files?.[0] || null)} /></label></div>
-              {uploadedFile && <Badge variant="secondary" className="rounded-full">Selected: {uploadedFile.name}</Badge>}
-              <div className="rounded-3xl border border-blue-100 bg-blue-50 p-5 text-sm text-blue-950"><Wand2 className="mb-2 h-5 w-5" />Real extraction mode: this button sends the uploaded statement to AI and returns structured holdings for advisor confirmation.</div>
+          <Card className="rounded-[2rem] ap-glass border-0">
+            <CardContent className="space-y-6 p-6 pb-28 md:p-8 md:pb-8">
+              <div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><Upload className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Statement Capture</h2><p className="text-sm text-slate-500">Upload a statement or take a picture from your phone.</p></div></div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3"><MetricCard icon={<User className="h-5 w-5" />} label="Client" value={clientDisplayName(client) || "Unnamed"} helper={derivedAge ? `Age ${derivedAge}` : "Age not set"} /><MetricCard icon={<Target className="h-5 w-5" />} label="Risk profile" value={client.riskProfile.replace("-", " ")} helper="Used for calibration" /><MetricCard icon={<BriefcaseBusiness className="h-5 w-5" />} label="Retirement age" value={client.retirementAge || "N/A"} helper="Timeline input" /></div>
+              <div
+                id="upload-section-client-link"
+                className="ap-callout rounded-3xl p-5 md:p-6 scroll-mt-24"
+              >
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div className="space-y-2">
+                    <p className="ap-eyebrow">Option A — Have the client upload</p>
+                    <p className="font-serif text-xl font-semibold text-blue-950">Client upload link</p>
+                    <p className="text-sm text-slate-600">
+                      Your client opens this on their phone and uploads their statement. The file is extracted and saved as a <strong>Draft</strong> on <strong>your</strong> Client Database only — not another advisor&apos;s.
+                    </p>
+                    {magicLinkExpiresAt ? (
+                      <p className="text-xs text-slate-500">
+                        Link expires: {new Date(magicLinkExpiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                      </p>
+                    ) : null}
+                    {magicLinkErr ? <p className="text-sm text-red-700">{magicLinkErr}</p> : null}
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="outline" className="h-11 rounded-2xl touch-manipulation" onClick={createClientUploadLink} disabled={magicLinkBusy}>
+                        <Link2 className="mr-2 h-4 w-4" />
+                        {magicLinkBusy ? "Creating…" : magicLinkUrl ? "New link" : "Create link"}
+                      </Button>
+                      {magicLinkUrl ? (
+                        <Button type="button" className="h-11 rounded-2xl bg-blue-800 touch-manipulation hover:bg-blue-900" onClick={copyMagicLink}>
+                          {magicLinkCopied ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+                          {magicLinkCopied ? "Copied" : "Copy link"}
+                        </Button>
+                      ) : null}
+                    </div>
+                    {magicLinkUrl ? (
+                      <Input readOnly className="mt-2 h-11 rounded-2xl bg-white font-mono text-xs" value={magicLinkUrl} onFocus={(e) => e.target.select()} />
+                    ) : null}
+                  </div>
+                  {magicLinkUrl ? (
+                    <div className="flex shrink-0 flex-col items-center gap-2 rounded-2xl border border-slate-200 bg-white p-3">
+                      <p className="text-xs font-medium text-slate-600">Optional QR (same link)</p>
+                      {/* quickchart.io generates the QR image; link stays on your origin once opened */}
+                      <img
+                        alt=""
+                        width={200}
+                        height={200}
+                        className="rounded-lg"
+                        src={`https://quickchart.io/qr?text=${encodeURIComponent(magicLinkUrl)}&size=220&margin=2`}
+                      />
+                      <p className="max-w-[220px] text-center text-[10px] text-slate-400">Texting the link is usually easiest; QR is for clients who prefer to scan.</p>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+              <div
+                id="upload-section-advisor-upload"
+                className="space-y-3 scroll-mt-24"
+              >
+                <p className="ap-eyebrow">Option B — Upload directly</p>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <label className="cursor-pointer rounded-3xl border border-sky-200/60 bg-white/80 p-6 transition hover:-translate-y-1 hover:border-sky-400 hover:shadow-[0_18px_40px_-22px_rgba(14,165,233,0.45)] md:p-7"><div className="ap-icon-tile mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl"><FileText className="h-6 w-6" /></div><h3 className="text-lg font-semibold">Upload emailed or texted statement</h3><p className="mb-4 text-sm text-slate-500">PDF, JPG, PNG, or screenshot.</p><Input className="min-h-11" type="file" accept=".pdf,image/*" onChange={(e) => setUploadedFile(e.target.files?.[0] || null)} /></label>
+                  <label className="cursor-pointer rounded-3xl border border-sky-200/60 bg-white/80 p-6 transition hover:-translate-y-1 hover:border-sky-400 hover:shadow-[0_18px_40px_-22px_rgba(14,165,233,0.45)] md:p-7"><div className="ap-icon-tile mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl"><Camera className="h-6 w-6" /></div><h3 className="text-lg font-semibold">Take a picture on phone</h3><p className="mb-4 text-sm text-slate-500">Uses your mobile camera when opened from a phone.</p><Input className="min-h-11" type="file" accept="image/*" capture="environment" onChange={(e) => setUploadedFile(e.target.files?.[0] || null)} /></label>
+                </div>
+              </div>
+              {uploadedFile && (
+                <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-sky-200 bg-sky-50/70 px-4 py-3 text-sm">
+                  <CheckCircle className="h-4 w-4 text-sky-600" />
+                  <span className="font-medium text-blue-950">Selected file:</span>
+                  <span className="truncate text-slate-700">{uploadedFile.name}</span>
+                </div>
+              )}
+              <div className="rounded-3xl border border-blue-100 bg-blue-50/80 p-5 text-sm text-blue-950"><Wand2 className="mb-2 h-5 w-5" />Extraction sends your file to AI and builds a holdings table for you to confirm. Expect roughly <strong>20–60 seconds</strong> on a typical connection; large PDFs or slow Wi‑Fi can take longer.</div>
               {extractError && <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">{extractError}</div>}
-              <div className="flex gap-3"><Button variant="outline" className="rounded-2xl" onClick={() => setStep("intake")}>Back</Button><Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={handleExtractHoldings} disabled={isExtracting}>{isExtracting ? "Analyzing statement..." : "Extract holdings"}</Button></div>
+              {isExtracting && (
+                <p className="text-sm font-medium text-slate-700" aria-live="polite">
+                  {EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length]}
+                </p>
+              )}
+              <div className="hidden items-center gap-3 border-t border-sky-100/60 pt-5 md:flex">
+                <Button variant="outline" className="h-12 rounded-2xl px-5" onClick={() => setStep("intake")}><ArrowLeft className="mr-2 h-4 w-4" />Back</Button>
+                <Button className="ml-auto h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 px-6 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400" onClick={handleExtractHoldings} disabled={isExtracting}>{isExtracting ? EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length] : "Extract holdings"}<ArrowRight className="ml-2 h-4 w-4" /></Button>
+              </div>
+              <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-sky-200/50 bg-white/85 p-4 shadow-[0_-8px_32px_rgba(15,58,122,0.12)] backdrop-blur-xl md:hidden">
+                <div className="mx-auto flex max-w-3xl gap-3">
+                  <Button variant="outline" className="h-14 flex-1 rounded-2xl touch-manipulation" onClick={() => setStep("intake")}>Back</Button>
+                  <Button className="h-14 flex-[2] rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 touch-manipulation" onClick={handleExtractHoldings} disabled={isExtracting}>{isExtracting ? EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length] : "Extract holdings"}</Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
         )}
 
         {step === "confirm" && (
-          <Card className="rounded-[2rem] border-slate-200 bg-white/95 shadow-xl shadow-blue-950/10">
-            <CardContent className="space-y-6 p-6 md:p-8">
-              <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-white"><ShieldCheck className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Confirm Holdings</h2><p className="text-sm text-slate-500">Review matches, choose alternate matches, enter manual tickers, and select asset classes.</p></div></div><Badge className={`rounded-full ${reviewCount ? "bg-red-600" : "bg-emerald-600"}`}>{reviewCount} need review</Badge></div>
+          <Card className="rounded-[2rem] ap-glass border-0">
+            <CardContent className="space-y-6 p-6 pb-28 md:p-8 md:pb-8">
+              <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><ShieldCheck className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Confirm Holdings</h2><p className="text-sm text-slate-500">Review matches, choose alternate matches, enter manual tickers, and select asset classes.</p></div></div><Badge className={`rounded-full ${reviewCount ? "bg-red-600" : "bg-emerald-600"}`}>{reviewCount} need review</Badge></div>
+              {!demoMode && !String(session?.user?.email || emailAuthUser?.email || "").trim() && (
+                <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">Sign in to auto-save this confirmation as a <strong>Draft</strong> in your Client Database (helps if the tab closes mid-meeting).</p>
+              )}
+              {!demoMode && String(session?.user?.email || emailAuthUser?.email || "").trim() && draftAutosaveStatus !== "idle" && (
+                <p className="text-xs text-slate-500" aria-live="polite">
+                  {draftAutosaveStatus === "saving" && "Saving draft…"}
+                  {draftAutosaveStatus === "saved" && "Draft saved."}
+                  {draftAutosaveStatus === "error" && "Could not save draft — check your connection and try editing again."}
+                </p>
+              )}
+              {!canRunDeepAnalysis && !demoMode && (
+                <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+                  Clear every row that still needs review before running the deep analysis ({reviewCount} remaining). This keeps AI output aligned with what you&apos;ve verified in the room.
+                </div>
+              )}
               <div className="space-y-4">
                 {holdings.map((h, index) => {
                   const opts = normalizeOptions(h);
@@ -1844,25 +2452,72 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   );
                 })}
               </div>
-              <div className="flex gap-3"><Button variant="outline" className="rounded-2xl" onClick={() => setStep("upload")}>Back</Button><Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={runAIAnalysis} disabled={isAnalyzing}>{isAnalyzing ? "Generating AdvisorPilot Analysis..." : "Run AdvisorPilot Analysis"}</Button></div>
+              <div className="hidden items-center gap-3 border-t border-sky-100/60 pt-5 md:flex">
+                <Button variant="outline" className="h-12 rounded-2xl px-5" onClick={() => setStep("upload")}>
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  Back
+                </Button>
+                <Button
+                  className="ml-auto h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 px-6 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400"
+                  onClick={runAIAnalysis}
+                  disabled={isAnalyzing || !canRunDeepAnalysis}
+                >
+                  {isAnalyzing ? ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length] : "Run AdvisorPilot Analysis"}
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
+              {isAnalyzing && (
+                <p className="hidden text-sm text-slate-600 md:block" aria-live="polite">
+                  {ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]} Deep analysis often takes <strong>30–90 seconds</strong>.
+                </p>
+              )}
+              <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-sky-200/50 bg-white/85 p-4 shadow-[0_-8px_32px_rgba(15,58,122,0.12)] backdrop-blur-xl md:hidden">
+                <div className="mx-auto flex max-w-3xl flex-col gap-2">
+                  {isAnalyzing && (
+                    <p className="text-center text-xs text-slate-600" aria-live="polite">
+                      {ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]} Usually 30–90s.
+                    </p>
+                  )}
+                  <div className="flex gap-3">
+                    <Button variant="outline" className="h-14 flex-1 rounded-2xl touch-manipulation" onClick={() => setStep("upload")} disabled={isAnalyzing}>Back</Button>
+                    <Button
+                      className="h-14 flex-[2] rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 touch-manipulation"
+                      onClick={runAIAnalysis}
+                      disabled={isAnalyzing || !canRunDeepAnalysis}
+                    >
+                      {isAnalyzing ? ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length] : "Run analysis"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
             </CardContent>
           </Card>
         )}
 
         {step === "analysis" && (
-          <div className="space-y-5">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3"><MetricCard icon={<TrendingUp className="h-5 w-5" />} label="Total value" value={currency(totalValue)} /><MetricCard icon={<User className="h-5 w-5" />} label="Client age" value={derivedAge ? String(derivedAge) : "Not set"} /><MetricCard icon={<ShieldCheck className="h-5 w-5" />} label="Risk profile" value={client.riskProfile.replace("-", " ")} /></div>
-            <Card className="rounded-[2rem] border-slate-200 bg-white/95 shadow-xl shadow-blue-950/10"><CardContent className="space-y-6 p-6 md:p-8"><div className="flex items-center gap-3"><div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-white"><BarChart3 className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Portfolio Review</h2><p className="text-sm text-slate-500">Advisor-facing analysis based on confirmed holdings and selected calibration.</p></div></div>{analysisError && <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">{analysisError}</div>}<div className="grid grid-cols-1 gap-5 md:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Based on confirmed holdings" data={currentPie} /><ProfessionalDonutChart title="Potential baseline" subtitle="Age and risk-profile calibration" data={targetPie} /></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Scores</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-3"><ScoreCard label="Risk Alignment" value={scores.riskAlignment} helper="How closely risk matches the baseline" /><ScoreCard label="Diversification" value={scores.diversification} helper="Balance across major asset groups" /><ScoreCard label="Income Readiness" value={scores.incomeReadiness} helper="Support for retirement income stability" /></div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Current vs Proposed Positioning</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><div className="mt-4 space-y-3 text-sm"><div className="flex justify-between"><span>Equity</span><strong>{currentAllocation.equity}%</strong></div><div className="flex justify-between"><span>Fixed Income</span><strong>{currentAllocation.fixedIncome}%</strong></div><div className="flex justify-between"><span>Cash</span><strong>{currentAllocation.cash}%</strong></div></div></div><div className="rounded-3xl border border-teal-200 bg-gradient-to-br from-white to-teal-50 p-5"><p className="text-sm font-semibold text-teal-800">Proposed Discussion Baseline</p><div className="mt-4 space-y-3 text-sm"><div className="flex justify-between"><span>Equity</span><strong>{target.equity}%</strong></div><div className="flex justify-between"><span>Fixed Income</span><strong>{target.fixedIncome}%</strong></div><div className="flex justify-between"><span>Cash</span><strong>{target.cash}%</strong></div></div></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{positioningImpact.map((item) => <li key={item} className="rounded-2xl border border-blue-100 bg-gradient-to-br from-white to-blue-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Retirement Success Model</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{currentSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(currentSuccessRate)} estimated success</p><Progress value={currentSuccessRate} className="mt-4" /></div><div className="rounded-3xl border border-teal-200 bg-gradient-to-br from-white to-teal-50 p-5"><p className="text-sm font-semibold text-teal-800">Proposed Baseline</p><p className="mt-2 text-4xl font-bold text-slate-950">{proposedSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p><Progress value={proposedSuccessRate} className="mt-4" /></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-white to-emerald-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Synopsis</h3><div className="rounded-2xl border bg-white p-5 text-sm leading-7 text-slate-700">{displaySynopsis}</div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Highlights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-3">{displayPortfolioHighlights.slice(0, 3).map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-2xl border border-red-200 bg-gradient-to-br from-white to-red-50 p-4 text-sm leading-6 text-slate-700">{flag}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-white to-indigo-50 p-4 text-sm leading-6 text-slate-700">{insight}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-emerald-900">What This Means for You</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-white to-emerald-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Strategic Considerations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-2xl border border-blue-100 bg-gradient-to-br from-white to-blue-50 p-4 text-sm leading-6 text-slate-700">{idea}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Advisor Example Recommendations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-2xl border border-amber-100 bg-gradient-to-br from-white to-amber-50 p-4 text-sm leading-6 text-slate-700">{rec}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Key findings</h3><ul className="space-y-2 text-sm">{findings.map((f) => <li key={f} className="rounded-2xl border bg-white p-4">{f}</li>)}</ul></div><div className="flex gap-3"><Button variant="outline" className="rounded-2xl" onClick={() => setStep("confirm")}>Back</Button><Button variant="outline" className="rounded-2xl" onClick={runAIAnalysis} disabled={isAnalyzing}><BrainCircuit className="mr-2 h-4 w-4" />{isAnalyzing ? "Regenerating..." : "Regenerate Analysis"}</Button><Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={() => setStep("meeting")}>Start meeting mode</Button></div></CardContent></Card>
+          <div className="space-y-4 pb-24 md:space-y-5 md:pb-5">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3"><MetricCard icon={<TrendingUp className="h-5 w-5" />} label="Total value" value={currency(totalValue)} /><MetricCard icon={<User className="h-5 w-5" />} label="Client age" value={derivedAge ? String(derivedAge) : "Not set"} /><MetricCard icon={<ShieldCheck className="h-5 w-5" />} label="Risk profile" value={client.riskProfile.replace("-", " ")} /></div>
+            <Card className="rounded-[2rem] ap-glass border-0"><CardContent className="space-y-6 p-6 pb-8 md:p-8"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><BarChart3 className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Portfolio Review</h2><p className="text-sm text-slate-500">Advisor-facing analysis based on confirmed holdings and selected calibration.</p></div></div>{analysisError && <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">{analysisError}</div>}<div className="ap-callout rounded-3xl p-5 md:flex md:items-center md:justify-between md:gap-4"><div><p className="ap-eyebrow">Next up</p><p className="mt-1 font-serif text-xl font-semibold text-blue-950">Sit with the client</p><p className="mt-1 text-sm text-slate-600">Meeting Mode is the default path from here. PDFs and email are easiest as a wrap-up after the conversation.</p></div><Button className="mt-4 h-12 w-full rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 md:mt-0 md:w-auto md:shrink-0 md:px-8" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Start Meeting Mode<ArrowRight className="ml-2 h-4 w-4" /></Button></div><div className="grid grid-cols-1 gap-5 md:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Based on confirmed holdings" data={currentPie} /><ProfessionalDonutChart title="Potential baseline" subtitle="Age and risk-profile calibration" data={targetPie} /></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Scores</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-3"><ScoreCard label="Risk Alignment" value={scores.riskAlignment} helper="How closely risk matches the baseline" /><ScoreCard label="Diversification" value={scores.diversification} helper="Balance across major asset groups" /><ScoreCard label="Income Readiness" value={scores.incomeReadiness} helper="Support for retirement income stability" /></div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Current vs Proposed Positioning</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><div className="mt-4 space-y-3 text-sm"><div className="flex justify-between"><span>Equity</span><strong>{currentAllocation.equity}%</strong></div><div className="flex justify-between"><span>Fixed Income</span><strong>{currentAllocation.fixedIncome}%</strong></div><div className="flex justify-between"><span>Cash</span><strong>{currentAllocation.cash}%</strong></div></div></div><div className="rounded-3xl border border-sky-200 bg-gradient-to-br from-white to-sky-50 p-5"><p className="text-sm font-semibold text-blue-700">Proposed Discussion Baseline</p><div className="mt-4 space-y-3 text-sm"><div className="flex justify-between"><span>Equity</span><strong>{target.equity}%</strong></div><div className="flex justify-between"><span>Fixed Income</span><strong>{target.fixedIncome}%</strong></div><div className="flex justify-between"><span>Cash</span><strong>{target.cash}%</strong></div></div></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{positioningImpact.map((item) => <li key={item} className="rounded-2xl border border-blue-100 bg-gradient-to-br from-white to-blue-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Retirement Success Model</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{currentSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(currentSuccessRate)} estimated success</p><Progress value={currentSuccessRate} className="mt-4" /></div><div className="rounded-3xl border border-sky-200 bg-gradient-to-br from-white to-sky-50 p-5"><p className="text-sm font-semibold text-blue-700">Proposed Baseline</p><p className="mt-2 text-4xl font-bold text-slate-950">{proposedSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p><Progress value={proposedSuccessRate} className="mt-4" /></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-white to-emerald-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Synopsis</h3><div className="rounded-2xl border bg-white p-5 text-sm leading-7 text-slate-700">{displaySynopsis}</div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Highlights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-3">{displayPortfolioHighlights.slice(0, 3).map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-2xl border border-red-200 bg-gradient-to-br from-white to-red-50 p-4 text-sm leading-6 text-slate-700">{flag}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-white to-indigo-50 p-4 text-sm leading-6 text-slate-700">{insight}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-emerald-900">What This Means for You</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-white to-emerald-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Strategic Considerations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-2xl border border-blue-100 bg-gradient-to-br from-white to-blue-50 p-4 text-sm leading-6 text-slate-700">{idea}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Advisor Example Recommendations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-2xl border border-amber-100 bg-gradient-to-br from-white to-amber-50 p-4 text-sm leading-6 text-slate-700">{rec}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Key findings</h3><ul className="space-y-2 text-sm">{findings.map((f) => <li key={f} className="rounded-2xl border bg-white p-4">{f}</li>)}</ul></div><div className="hidden border-t border-sky-100/60 pt-5 md:flex md:flex-wrap md:items-center md:gap-3"><Button variant="outline" className="h-12 rounded-2xl" onClick={() => setStep("confirm")}><ArrowLeft className="mr-2 h-4 w-4" />Back</Button><Button variant="outline" className="h-12 rounded-2xl" onClick={runAIAnalysis} disabled={isAnalyzing || !canRunDeepAnalysis}><BrainCircuit className="mr-2 h-4 w-4" />{isAnalyzing ? ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length] : "Regenerate analysis"}</Button><Button className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 px-5 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 md:ml-auto" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Meeting Mode<ArrowRight className="ml-2 h-4 w-4" /></Button></div>{isAnalyzing && <p className="hidden text-sm text-slate-600 md:block" aria-live="polite">{ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]} Often 30–90 seconds.</p>}</CardContent></Card>
+          <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-sky-200/50 bg-white/85 p-4 shadow-[0_-8px_32px_rgba(15,58,122,0.12)] backdrop-blur-xl md:hidden">
+            <div className="mx-auto flex max-w-3xl flex-col gap-2">
+              {isAnalyzing && <p className="text-center text-xs text-slate-600" aria-live="polite">{ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]}</p>}
+              <Button className="h-14 w-full rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 touch-manipulation" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Meeting Mode</Button>
+              <div className="flex gap-2">
+                <Button variant="outline" className="h-12 flex-1 rounded-2xl text-sm touch-manipulation" onClick={() => setStep("confirm")}>Back</Button>
+                <Button variant="outline" className="h-12 flex-1 rounded-2xl text-sm touch-manipulation" onClick={runAIAnalysis} disabled={isAnalyzing || !canRunDeepAnalysis}>Regenerate</Button>
+              </div>
+            </div>
+          </div>
           </div>
         )}
 
 
         {step === "meeting" && (
-          <Card className="rounded-[2rem] border-slate-200 bg-white/95 shadow-xl shadow-blue-950/10">
+          <Card className="rounded-[2rem] ap-glass border-0">
             <CardContent className="space-y-6 p-6 md:p-8">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-white"><MessageSquareText className="h-6 w-6" /></div>
+                  <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><MessageSquareText className="h-6 w-6" /></div>
                   <div>
                     <h2 className="font-serif text-3xl font-bold">Meeting Mode</h2>
                     <p className="text-sm text-slate-500">A live advisor guide for walking through the analysis with the client.</p>
@@ -1871,7 +2526,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <Badge variant="outline" className="rounded-full border-blue-200 bg-blue-50 text-blue-800">Advisor-facing guide</Badge>
               </div>
 
-              <div className="rounded-3xl border border-teal-100 bg-gradient-to-br from-white to-teal-50 p-5 leading-7 text-slate-700">
+              <div className="rounded-3xl border border-sky-100 bg-gradient-to-br from-white to-sky-50 p-5 leading-7 text-slate-700">
                 <h3 className="mb-2 font-serif text-2xl font-bold text-slate-950">Opening Script</h3>
                 <p>{analysis?.advisorOpeningScript || `Thanks for taking the time today. What I want to do is walk through how the portfolio is currently positioned, what risks or opportunities are showing up, and whether the current allocation still fits the retirement timeline, income goals, and comfort with market volatility.`}</p>
               </div>
@@ -1926,22 +2581,32 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <p>{closingScript}</p>
               </div>
 
-              <div className="flex flex-wrap gap-3">
-                <Button variant="outline" className="rounded-2xl" onClick={() => setStep("analysis")}>Back to analysis</Button>
-                <Button variant="outline" className="rounded-2xl" onClick={() => setStep("report")}>Meeting script</Button>
-                <Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={() => setStep("report")}>Build report</Button>
+              <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:items-center sm:justify-between">
+                <Button variant="outline" className="h-12 rounded-2xl touch-manipulation" onClick={() => setStep("analysis")}>
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  Back to analysis
+                </Button>
+                <p className="hidden text-center text-xs text-slate-500 sm:block">After the conversation, open Wrap-up for the Client Snapshot PDF, Gmail send, and follow-up copy.</p>
+                <Button
+                  className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 px-5 touch-manipulation hover:from-blue-950 hover:via-blue-800 hover:to-sky-400"
+                  onClick={() => setStep("report")}
+                >
+                  Wrap-up: PDFs and email
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
               </div>
+              <p className="text-xs text-slate-500 sm:hidden">After the conversation, open Wrap-up for the Client Snapshot PDF, Gmail send, and follow-up copy.</p>
             </CardContent>
           </Card>
         )}
 
 
         {step === "saved" && (
-          <Card className="rounded-[2rem] border-slate-200 bg-white/95 shadow-xl shadow-blue-950/10">
+          <Card className="rounded-[2rem] ap-glass border-0">
             <CardContent className="space-y-6 p-6 md:p-8">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-white">
+                  <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl">
                     <FolderOpen className="h-6 w-6" />
                   </div>
                   <div>
@@ -1949,15 +2614,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <p className="text-sm text-slate-500">Search and manage client profiles saved to your AdvisorPilot account.</p>
                   </div>
                 </div>
-                <Button variant="outline" className="rounded-2xl" onClick={loadSavedReviews}>
+                <Button variant="outline" className="h-11 rounded-2xl" onClick={loadSavedReviews}>
                   Refresh List
                 </Button>
               </div>
 
-              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                <label className="text-sm font-semibold text-slate-700">Search Client</label>
+              <div className="ap-callout rounded-3xl p-4">
+                <label className="ap-eyebrow">Search</label>
                 <Input
-                  className="mt-2 h-12 rounded-2xl bg-white"
+                  className="mt-2 h-12 rounded-2xl border-sky-200 bg-white/90"
                   placeholder="Search by client name or email"
                   value={clientSearch}
                   onChange={(e) => setClientSearch(e.target.value)}
@@ -1981,44 +2646,70 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     const reviewAge = review.client.age || (review.client.dob ? String(getAgeFromDob(review.client.dob) || "N/A") : "N/A");
 
                     return (
-                      <div key={review.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
-                          <div>
+                      <div key={review.id} className="ap-glass rounded-3xl p-5 transition-shadow hover:shadow-[0_28px_60px_-22px_rgba(15,58,122,0.32),0_0_0_1px_rgba(125,184,245,0.45)]">
+                        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between md:gap-6">
+                          <div className="min-w-0 space-y-1.5">
                             <h3 className="font-serif text-2xl font-bold text-slate-950">
-                              {review.client.name || "Unnamed Client"}
+                              {clientDisplayName(review.client) || "Unnamed Client"}
+                              {normalizeIntakeClient(review.client).magicLinkUpload ? (
+                                <Badge variant="outline" className="ml-2 align-middle border-sky-200 bg-sky-50 text-xs font-normal text-blue-700">
+                                  Client link upload
+                                </Badge>
+                              ) : null}
                             </h3>
-                            <p className="mt-1 text-sm text-slate-500">
-                              Saved {formatSavedDate(review.savedAt)} | Age {reviewAge} | Risk: {(review.client.riskProfile || "N/A").replace("-", " ")}
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-500">
+                              <span>Saved {formatSavedDate(review.savedAt)}</span>
+                              <span aria-hidden>·</span>
+                              <span>Age {reviewAge}</span>
+                              <span aria-hidden>·</span>
+                              <span className="capitalize">Risk: {(review.client.riskProfile || "N/A").replace("-", " ")}</span>
+                            </div>
+                            <p className="text-sm text-slate-500">
+                              <span className="font-medium text-slate-600">Status:</span> {review.status || "Analyzed"}
+                              <span className="mx-2 text-slate-300" aria-hidden>·</span>
+                              <span className="font-medium text-slate-600">Last contacted:</span> {review.lastContactedAt ? formatSavedDate(review.lastContactedAt) : "Not contacted yet"}
                             </p>
-                            <p className="mt-1 text-sm text-slate-500">
-                              Status: {review.status || "Analyzed"} | Last Contacted: {review.lastContactedAt ? formatSavedDate(review.lastContactedAt) : "Not contacted yet"}
-                            </p>
-                            <p className="mt-1 text-sm text-slate-500">
-                              Holdings: {review.holdings.length} | Approx. value: {currency(reviewTotal)}
+                            <p className="text-sm text-slate-500">
+                              <span className="font-medium text-slate-600">Holdings:</span> {review.holdings.length}
+                              <span className="mx-2 text-slate-300" aria-hidden>·</span>
+                              <span className="font-medium text-slate-600">Approx. value:</span> {currency(reviewTotal)}
                             </p>
                             {review.client.advisorEmail && (
-                              <p className="mt-1 text-sm text-slate-500">
-                                Email: {review.client.advisorEmail}
+                              <p className="truncate text-sm text-slate-500">
+                                <span className="font-medium text-slate-600">Snapshot email:</span> {review.client.advisorEmail}
                               </p>
                             )}
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            <Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={() => openSavedReview(review)}>
-                              Open Profile
-                            </Button>
-                            <Button variant="outline" className="rounded-2xl" onClick={() => sendFollowUpFromDatabase(review)}>
-                              <Mail className="mr-2 h-4 w-4" />
-                              Send Follow-Up Email
-                            </Button>
-                            <Button variant="outline" className="rounded-2xl" onClick={() => updateAnalysisFromDatabase(review)}>
-                              <Upload className="mr-2 h-4 w-4" />
-                              Update Analysis
-                            </Button>
-                            <Button variant="outline" className="rounded-2xl border-red-200 text-red-700 hover:bg-red-50" onClick={() => deleteSavedReview(review.id)}>
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete
-                            </Button>
-                          </div>
+                          <Button
+                            className="h-11 shrink-0 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 px-5 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400"
+                            onClick={() => openSavedReview(review)}
+                          >
+                            Open Profile
+                            <ArrowRight className="ml-2 h-4 w-4" />
+                          </Button>
+                        </div>
+                        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-sky-100/60 pt-4">
+                          <Button
+                            variant="outline"
+                            className="h-10 rounded-2xl bg-white/80"
+                            disabled={followUpEmailSendingId === review.id}
+                            onClick={() => void sendFollowUpFromDatabase(review)}
+                          >
+                            <Mail className="mr-2 h-4 w-4" />
+                            {followUpEmailSendingId === review.id ? "Sending…" : "Send Follow-Up Email"}
+                          </Button>
+                          <Button variant="outline" className="h-10 rounded-2xl bg-white/80" onClick={() => updateAnalysisFromDatabase(review)}>
+                            <Upload className="mr-2 h-4 w-4" />
+                            Update Analysis
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="ml-auto h-10 rounded-2xl border-red-200 bg-white/80 text-red-700 hover:bg-red-50"
+                            onClick={() => deleteSavedReview(review.id)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete
+                          </Button>
                         </div>
                       </div>
                     );
@@ -2030,42 +2721,45 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         )}
 
         {step === "report" && (
-          <Card className="print-card rounded-[2rem] border-slate-200 bg-white/95 shadow-xl shadow-blue-950/10">
+          <Card className="print-card rounded-[2rem] ap-glass border-0">
             <CardContent className="space-y-6 p-6 md:p-8 print:p-0">
-              <div className="no-print space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="no-print space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-white">
+                    <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl">
                       <Download className="h-6 w-6" />
                     </div>
                     <div>
                       <h2 className="font-serif text-3xl font-bold">Client Review Report</h2>
-                      <p className="text-sm text-slate-500">Clean report preview for PDF or print.</p>
+                      <p className="text-sm text-slate-500">Clean report preview for PDF, email, or print.</p>
                     </div>
                   </div>
+                  <Button
+                    className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 px-5 touch-manipulation hover:from-blue-950 hover:via-blue-800 hover:to-sky-400"
+                    onClick={() => setStep("meeting")}
+                  >
+                    <MessageSquareText className="mr-2 h-4 w-4" />
+                    Back to Meeting Mode
+                  </Button>
+                </div>
 
-                  <div className="flex flex-wrap gap-2">
-                    <Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={() => downloadPDFReport("client")}>
+                <div className="ap-callout rounded-3xl p-5">
+                  <p className="ap-eyebrow">Wrap-up actions</p>
+                  <p className="mt-1 text-xs text-slate-500">Download, copy, or save once the conversation is done.</p>
+                  <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <Button variant="outline" className="h-12 justify-start rounded-2xl bg-white/85 touch-manipulation" onClick={() => downloadPDFReport("client")}>
                       <Download className="mr-2 h-4 w-4" />
-                      Client Snapshot
+                      Client Snapshot PDF
                     </Button>
-
-                    <Button variant="outline" className="rounded-2xl" onClick={() => downloadPDFReport("advisor")}>
+                    <Button variant="outline" className="h-12 justify-start rounded-2xl bg-white/85 touch-manipulation" onClick={() => downloadPDFReport("advisor")}>
                       <Download className="mr-2 h-4 w-4" />
-                      Advisor Deep Dive
+                      Advisor Deep Dive PDF
                     </Button>
-
-                    <Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={() => setStep("meeting")}>
-                      <MessageSquareText className="mr-2 h-4 w-4" />
-                      Start Meeting Mode
-                    </Button>
-
-                    <Button variant="outline" className="rounded-2xl" onClick={buildFollowUpEmail}>
+                    <Button variant="outline" className="h-12 justify-start rounded-2xl bg-white/85 touch-manipulation" onClick={buildFollowUpEmail}>
                       <Mail className="mr-2 h-4 w-4" />
-                      Generate Follow-Up Email
+                      Follow-up email (copy)
                     </Button>
-
-                    <Button variant="outline" className="rounded-2xl" onClick={saveCurrentReview}>
+                    <Button variant="outline" className="h-12 justify-start rounded-2xl bg-white/85 touch-manipulation" onClick={saveCurrentReview}>
                       <Save className="mr-2 h-4 w-4" />
                       Save Client Profile
                     </Button>
@@ -2073,36 +2767,42 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
 
                 <div className="rounded-3xl border border-blue-100 bg-blue-50 p-4">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center">
-                    <Input
-                      placeholder="Client email"
-                      className="max-w-md rounded-2xl bg-white"
-                      value={client.advisorEmail}
-                      onChange={(e) => setClient({ ...client, advisorEmail: e.target.value })}
-                    />
+                  <p className="text-sm font-semibold text-slate-800">Send Client Snapshot (Gmail)</p>
+                  <p className="mt-1 text-xs text-slate-600">The address below is the <strong>client&apos;s inbox</strong> (To:). You send from your connected Google account — not from this field.</p>
+                  <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-end">
+                    <div className="w-full md:max-w-md">
+                      <label className="text-xs font-medium text-slate-600">Client email — snapshot recipient</label>
+                      <Input
+                        placeholder="client@email.com"
+                        className="mt-1 h-12 rounded-2xl bg-white"
+                        type="email"
+                        value={client.advisorEmail}
+                        onChange={(e) => setClient({ ...client, advisorEmail: e.target.value })}
+                      />
+                    </div>
 
                     {session ? (
                       <Button
-                        className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800"
+                        className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 touch-manipulation md:shrink-0"
                         onClick={sendClientSnapshotEmail}
                       >
                         <Mail className="mr-2 h-4 w-4" />
-                        Send Client Snapshot
+                        Send via Gmail
                       </Button>
                     ) : (
                       <Button
                         variant="outline"
-                        className="rounded-2xl bg-white"
+                        className="h-12 rounded-2xl bg-white touch-manipulation md:shrink-0"
                         onClick={() => signIn("google", { callbackUrl: "/" })}
                       >
-                        Connect Google to Send
+                        Connect Google to send
                       </Button>
                     )}
                   </div>
 
                   {!session && (
                     <p className="mt-2 text-sm text-blue-900">
-                      Email/password users can download the Client Snapshot and use Generate Follow-Up Email to copy/paste manually.
+                      On email/password login, download the PDF above and paste follow-up copy — same recipient field applies when you send from your own mail app.
                     </p>
                   )}
                 </div>
@@ -2114,7 +2814,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       <h3 className="font-serif text-2xl font-bold text-slate-950">Generated Follow-Up Email</h3>
                       <p className="text-sm text-slate-600">Copy this into Gmail, then manually attach the Client Snapshot PDF.</p>
                     </div>
-                    <Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={copyFollowUpEmail}>
+                    <Button className="rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500" onClick={copyFollowUpEmail}>
                       <Mail className="mr-2 h-4 w-4" />
                       {emailCopied ? "Copied" : "Copy Email"}
                     </Button>
@@ -2130,10 +2830,10 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               )}
               <div className="report-paper space-y-6 rounded-3xl border bg-white p-8 text-black shadow-sm print:rounded-none">
-                <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-5"><div><h1 className="font-serif text-4xl font-bold text-slate-950">Portfolio Review Snapshot</h1><p className="mt-2 text-sm text-slate-600">Prepared for {client.name || "Client"} | Age {derivedAge || "N/A"} | Risk Profile: {client.riskProfile.replace("-", " ")}</p></div><LogoBlock compact /></div>
+                <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-5"><div><h1 className="font-serif text-4xl font-bold text-slate-950">Portfolio Review Snapshot</h1><p className="mt-2 text-sm text-slate-600">Prepared for {clientDisplayName(client) || "Client"} | Age {derivedAge || "N/A"} | Risk Profile: {client.riskProfile.replace("-", " ")}</p></div><LogoBlock compact /></div>
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2 print:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Current statement" data={currentPie} /><ProfessionalDonutChart title="Potential baseline" subtitle="Proposed discussion target" data={targetPie} /></div>
                 <div><h2 className="font-serif text-2xl font-bold text-slate-950">Portfolio Scores</h2><div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3 print:grid-cols-3"><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Risk Alignment</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.riskAlignment}/100</p><p className="mt-1 text-xs text-slate-500">Risk vs baseline</p></div><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Diversification</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.diversification}/100</p><p className="mt-1 text-xs text-slate-500">Asset balance</p></div><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Income Readiness</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.incomeReadiness}/100</p><p className="mt-1 text-xs text-slate-500">Income stability</p></div></div></div>
-                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Retirement Success Model</h2><div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 print:grid-cols-2"><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-sm font-semibold text-slate-700">Current Allocation</p><p className="mt-1 text-3xl font-bold text-slate-950">{currentSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(currentSuccessRate)} estimated success</p></div><div className="rounded-2xl border border-teal-200 bg-teal-50 p-4 print:bg-white"><p className="text-sm font-semibold text-teal-800">Proposed Baseline</p><p className="mt-1 text-3xl font-bold text-slate-950">{proposedSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p></div></div><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div><div><h2 className="font-serif text-2xl font-bold text-slate-950">Current vs Proposed Positioning</h2><p className="mt-1 text-sm text-slate-500">Allocation change only.</p><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3 print:grid-cols-3">{positioningImpact.map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div><div><h2 className="font-serif text-2xl font-bold text-slate-950">Synopsis</h2><p className="mt-2 text-sm leading-7 text-slate-700">{displaySynopsis}</p></div>
+                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Retirement Success Model</h2><div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 print:grid-cols-2"><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-sm font-semibold text-slate-700">Current Allocation</p><p className="mt-1 text-3xl font-bold text-slate-950">{currentSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(currentSuccessRate)} estimated success</p></div><div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 print:bg-white"><p className="text-sm font-semibold text-blue-700">Proposed Baseline</p><p className="mt-1 text-3xl font-bold text-slate-950">{proposedSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p></div></div><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div><div><h2 className="font-serif text-2xl font-bold text-slate-950">Current vs Proposed Positioning</h2><p className="mt-1 text-sm text-slate-500">Allocation change only.</p><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3 print:grid-cols-3">{positioningImpact.map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div><div><h2 className="font-serif text-2xl font-bold text-slate-950">Synopsis</h2><p className="mt-2 text-sm leading-7 text-slate-700">{displaySynopsis}</p></div>
                 <div><h2 className="font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{flag}</li>)}</ul></div>
                 <div><h2 className="font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-2xl border border-indigo-200 bg-indigo-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{insight}</li>)}</ul></div>
                 <div><h2 className="font-serif text-2xl font-bold text-emerald-900">What This Means for You</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div>
@@ -2143,10 +2843,23 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 {meetingNotes && <div><h2 className="font-serif text-2xl font-bold text-slate-950">Meeting Notes</h2><p className="mt-2 text-sm leading-7 text-slate-700">{meetingNotes}</p></div>}
                 <p className="border-t border-slate-200 pt-3 text-xs text-gray-600">For discussion purposes only. This report is not a trade instruction and must be reviewed by a licensed financial professional before implementation. Investment recommendations should consider the client’s full financial situation, risk tolerance, time horizon, tax status, and objectives.</p>
               </div>
-              <div className="no-print flex flex-wrap gap-3"><Button variant="outline" className="rounded-2xl" onClick={() => setStep("meeting")}>Back</Button><Button className="rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Start Meeting Mode</Button><Button variant="outline" className="rounded-2xl" onClick={buildFollowUpEmail}><Mail className="mr-2 h-4 w-4" />Generate Follow-Up Email</Button><Button variant="outline" className="rounded-2xl" onClick={() => { setIntakeStep(0); setStep("intake"); }}>Start new review</Button></div>
+              <div className="no-print flex flex-wrap items-center justify-between gap-3 border-t border-sky-100/60 pt-5">
+                <Button variant="outline" className="h-12 rounded-2xl touch-manipulation" onClick={() => setStep("meeting")}>
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  Back to Meeting Mode
+                </Button>
+                <Button
+                  className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 px-5 touch-manipulation hover:from-blue-950 hover:via-blue-800 hover:to-sky-400"
+                  onClick={() => { setIntakeStep(0); setActiveReviewId(null); setStep("intake"); }}
+                >
+                  Start new review
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
+              </div>
             </CardContent>
           </Card>
         )}
+        </div>
       </div>
     </div>
   );
