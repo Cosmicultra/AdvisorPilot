@@ -351,7 +351,7 @@ export async function POST(req: Request) {
         ? modelInput.insights
         : [
             `Current allocation estimate: ${currentSuccessRate}/100 (${successLabel(currentSuccessRate)}).`,
-            `Proposed baseline estimate: ${proposedSuccessRate}/100 (${successLabel(proposedSuccessRate)}).`,
+            `Proposed allocation estimate: ${proposedSuccessRate}/100 (${successLabel(proposedSuccessRate)}).`,
             successImprovement >= 0
               ? `Illustrative improvement: +${successImprovement} points.`
               : `Illustrative change: ${successImprovement} points.`,
@@ -613,7 +613,7 @@ export async function POST(req: Request) {
 
       const sectionHeight = 150;
       ensureBlock(sectionHeight);
-      sectionTitle("Current vs Proposed Positioning", "Allocation change only.", teal);
+      sectionTitle("Current vs Proposed Allocation", "Allocation change only.", teal);
 
       const tableX = 32;
       const tableW = 548;
@@ -642,7 +642,7 @@ export async function POST(req: Request) {
 
       page.drawText("Asset Class", { x: tableX + 18, y: tableTop - 18, size: 8.4, font: bold, color: white });
       page.drawText("Current", { x: tableX + 250, y: tableTop - 18, size: 8.4, font: bold, color: white });
-      page.drawText("Proposed", { x: tableX + 398, y: tableTop - 18, size: 8.4, font: bold, color: white });
+      page.drawText("Proposed Allocation", { x: tableX + 318, y: tableTop - 18, size: 6.7, font: bold, color: white });
 
       let rowY = tableTop - headerH;
 
@@ -811,7 +811,7 @@ export async function POST(req: Request) {
       }
 
       drawSuccessBar("Current Allocation", currentSuccessRate, "Based on current positioning", 52, boxY - 36);
-      drawSuccessBar("Proposed Baseline", proposedSuccessRate, "Based on discussion target", 52, boxY - 108);
+      drawSuccessBar("Proposed Allocation", proposedSuccessRate, "Based on proposed allocation", 52, boxY - 108);
 
       const delta = proposedSuccessRate - currentSuccessRate;
       const deltaText = delta >= 0 ? `+${delta} point improvement` : `${delta} point decrease`;
@@ -916,13 +916,13 @@ export async function POST(req: Request) {
 
     function drawOverview() {
       ensureBlock(265);
-      sectionTitle("Allocation Overview", "Current positioning compared with discussion baseline.");
+      sectionTitle("Allocation Overview", "Current positioning compared with proposed allocation.");
       allocationCard("Current Allocation", "Based on current statement", 32, y + 4, allocation?.current || {}, teal);
-      allocationCard("Potential Baseline", "Discussion target", 324, y + 4, allocation?.target || {}, blue);
+      allocationCard("Proposed Allocation", "Calibration mix for discussion", 324, y + 4, allocation?.target || {}, blue);
       y -= 152;
 
       sectionTitle("Portfolio Scores", "Quick diagnostic view of alignment, diversification, and income readiness.");
-      drawScoreCard("Risk Alignment", scores.riskAlignment, "Risk versus baseline", 32, y + 6, teal);
+      drawScoreCard("Risk Alignment", scores.riskAlignment, "Risk versus proposed allocation", 32, y + 6, teal);
       drawScoreCard("Diversification", scores.diversification, "Asset balance", 222, y + 6, indigo);
       drawScoreCard("Income Readiness", scores.incomeReadiness, "Income stability", 412, y + 6, blue);
       y -= 98;
