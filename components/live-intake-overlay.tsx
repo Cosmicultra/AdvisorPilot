@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -160,7 +161,7 @@ export function LiveIntakeOverlay({
   onCompleteToUpload,
   onClose,
 }: Props) {
-  const [mounted, setMounted] = useState(false);
+  const [mounted] = useState(true);
   const [phase, setPhase] = useState<Phase>("starting");
   const [hint, setHint] = useState<string | null>(null);
   const [logoOk, setLogoOk] = useState(true);
@@ -208,19 +209,17 @@ export function LiveIntakeOverlay({
    */
   const livePhaseRef = useRef<"goal" | "confirm" | "handoff">("goal");
   const onCompleteToUploadRef = useRef(onCompleteToUpload);
-  onCompleteToUploadRef.current = onCompleteToUpload;
   const onAdvanceStepRef = useRef(onAdvanceStep);
-  onAdvanceStepRef.current = onAdvanceStep;
   const advisorDisplayNameRef = useRef(advisorDisplayName);
-  advisorDisplayNameRef.current = advisorDisplayName;
   const flushTranscriptRef = useRef<(() => Promise<void>) | null>(null);
 
-  clientRef.current = client;
-  intakeStepRef.current = intakeStep;
-
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    onCompleteToUploadRef.current = onCompleteToUpload;
+    onAdvanceStepRef.current = onAdvanceStep;
+    advisorDisplayNameRef.current = advisorDisplayName;
+    clientRef.current = client;
+    intakeStepRef.current = intakeStep;
+  }, [advisorDisplayName, client, intakeStep, onAdvanceStep, onCompleteToUpload]);
 
   useEffect(() => {
     document.body.style.overflow = "hidden";
@@ -266,7 +265,9 @@ export function LiveIntakeOverlay({
   }, []);
 
   const stopRecognitionRef = useRef(stopRecognition);
-  stopRecognitionRef.current = stopRecognition;
+  useEffect(() => {
+    stopRecognitionRef.current = stopRecognition;
+  }, [stopRecognition]);
 
   const playTts = useCallback(
     async (text: string) => {
@@ -323,7 +324,9 @@ export function LiveIntakeOverlay({
   );
 
   const playTtsRef = useRef(playTts);
-  playTtsRef.current = playTts;
+  useEffect(() => {
+    playTtsRef.current = playTts;
+  }, [playTts]);
 
   const startRecognitionRef = useRef<(() => void) | null>(null);
 
@@ -606,9 +609,11 @@ export function LiveIntakeOverlay({
         startRecognitionRef.current?.();
       }
     }
-  }, [setClient]);
+  }, [finishRecordingForTranscript, setClient, transcribeBlob]);
 
-  flushTranscriptRef.current = flushTranscript;
+  useEffect(() => {
+    flushTranscriptRef.current = flushTranscript;
+  }, [flushTranscript]);
 
   const startRecognition = useCallback(() => {
     if (!overlayActiveRef.current) return;
@@ -714,11 +719,11 @@ export function LiveIntakeOverlay({
       };
       levelLoopRef.current = requestAnimationFrame(tick);
     }
-    // mediaStreamRef + flushTranscriptRef are intentional non-deps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  startRecognitionRef.current = startRecognition;
+  useEffect(() => {
+    startRecognitionRef.current = startRecognition;
+  }, [startRecognition]);
 
   const runOpeningForStep = useCallback(async (stepIndex: number) => {
     const sessionAtStart = sessionCounterRef.current;
@@ -913,9 +918,11 @@ export function LiveIntakeOverlay({
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             <div className="relative h-[58%] w-[58%] overflow-hidden rounded-full bg-white shadow-2xl shadow-sky-500/30 ring-2 ring-sky-300/40">
               {logoOk ? (
-                <img
+                <Image
                   src="/logo.png"
                   alt=""
+                  width={320}
+                  height={320}
                   className="h-full w-full object-contain p-6"
                   onError={() => setLogoOk(false)}
                 />

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import { writeAuditEvent } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,11 +18,47 @@ function missingSupabaseEnv() {
   );
 }
 
-function normalizeEmail(value: unknown) {
-  return String(value || "").trim().toLowerCase();
+type ClientRecord = {
+  id: string;
+  updated_at?: string | null;
+  created_at?: string | null;
+  client?: unknown;
+  holdings?: unknown;
+  meeting_notes?: string | null;
+  demo_mode?: boolean | null;
+  analysis?: unknown;
+  total_value?: number | string | null;
+  status?: string | null;
+  last_contacted_at?: string | null;
+  roth_worksheet?: unknown | null;
+};
+
+type ClientPayload = {
+  owner_email: string;
+  owner_user_id?: string | null;
+  client: unknown;
+  holdings: unknown[];
+  meeting_notes: string;
+  demo_mode: boolean;
+  analysis: unknown;
+  total_value: number;
+  status?: string;
+  last_contacted_at?: string;
+  roth_worksheet?: unknown | null;
+};
+
+function errorMessage(err: unknown, fallback: string) {
+  return err instanceof Error ? err.message : fallback;
 }
 
-function mapRecord(record: any) {
+function isMissingUpdatedRow(error: { code?: string; message?: string } | null) {
+  if (!error) return false;
+  if (error.code === "PGRST116") return true;
+  const m = String(error.message || "").toLowerCase();
+  return m.includes("0 rows") || m.includes("json object requested");
+}
+
+function mapRecord(record: ClientRecord) {
   return {
     id: record.id,
     savedAt: record.updated_at || record.created_at,
@@ -32,6 +70,7 @@ function mapRecord(record: any) {
     totalValue: Number(record.total_value || 0),
     status: record.status || "Analyzed",
     lastContactedAt: record.last_contacted_at || null,
+    rothWorksheet: record.roth_worksheet ?? null,
   };
 }
 
@@ -44,20 +83,18 @@ export const GET = async (req: Request) => {
       );
     }
 
-    const { searchParams } = new URL(req.url);
-    const ownerEmail = normalizeEmail(searchParams.get("ownerEmail"));
-
-    if (!ownerEmail) {
+    const identity = await resolveAdvisorIdentity(req);
+    if (!identity) {
       return NextResponse.json(
-        { error: "Missing ownerEmail." },
-        { status: 400 }
+        { error: "Sign in before opening the Client Database." },
+        { status: 401 }
       );
     }
 
     const { data, error } = await supabaseAdmin
       .from("advisorpilot_clients")
       .select("*")
-      .eq("owner_email", ownerEmail)
+      .eq("owner_email", identity.email)
       .order("updated_at", { ascending: false })
       .limit(100);
 
@@ -66,13 +103,13 @@ export const GET = async (req: Request) => {
     }
 
     return NextResponse.json({
-      clients: (data || []).map(mapRecord),
+      clients: ((data || []) as ClientRecord[]).map(mapRecord),
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("CLIENT DATABASE GET ERROR:", err);
 
     return NextResponse.json(
-      { error: err?.message || "Failed to load client database." },
+      { error: errorMessage(err, "Failed to load client database.") },
       { status: 500 }
     );
   }
@@ -87,20 +124,20 @@ export const POST = async (req: Request) => {
       );
     }
 
-    const body = await req.json();
-    const ownerEmail = normalizeEmail(body?.ownerEmail);
-
-    if (!ownerEmail) {
+    const identity = await resolveAdvisorIdentity(req);
+    if (!identity) {
       return NextResponse.json(
-        { error: "Missing ownerEmail." },
-        { status: 400 }
+        { error: "Sign in before saving a client profile." },
+        { status: 401 }
       );
     }
 
+    const body = await req.json();
     const existingId = body?.id || null;
 
-    const payload: any = {
-      owner_email: ownerEmail,
+    const payload: ClientPayload = {
+      owner_email: identity.email,
+      owner_user_id: identity.userId,
       client: body?.client || {},
       holdings: Array.isArray(body?.holdings) ? body.holdings : [],
       meeting_notes: body?.meetingNotes || "",
@@ -108,6 +145,10 @@ export const POST = async (req: Request) => {
       analysis: body?.analysis || null,
       total_value: Number(body?.totalValue || 0),
     };
+
+    if (Object.prototype.hasOwnProperty.call(body || {}, "rothWorksheet")) {
+      payload.roth_worksheet = body?.rothWorksheet ?? null;
+    }
 
     if (typeof body?.status === "string" && body.status.trim()) {
       payload.status = body.status.trim();
@@ -124,7 +165,7 @@ export const POST = async (req: Request) => {
           .from("advisorpilot_clients")
           .update(payload)
           .eq("id", existingId)
-          .eq("owner_email", ownerEmail)
+          .eq("owner_email", identity.email)
           .select("*")
           .single()
       : await supabaseAdmin
@@ -134,21 +175,37 @@ export const POST = async (req: Request) => {
           .single();
 
     if (result.error) {
+      if (existingId && isMissingUpdatedRow(result.error)) {
+        return NextResponse.json(
+          { error: "Saved client not found or access denied." },
+          { status: 404 }
+        );
+      }
       return NextResponse.json(
         { error: result.error.message },
         { status: 400 }
       );
     }
 
+    const saved = mapRecord(result.data as ClientRecord);
+    await writeAuditEvent({
+      ownerEmail: identity.email,
+      ownerUserId: identity.userId,
+      action: existingId ? "client.updated" : "client.created",
+      entityType: "client",
+      entityId: saved.id,
+      metadata: { status: payload.status || null, holdingsCount: payload.holdings.length },
+    });
+
     return NextResponse.json({
-      client: mapRecord(result.data),
+      client: saved,
       message: "Client profile saved.",
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("CLIENT DATABASE POST ERROR:", err);
 
     return NextResponse.json(
-      { error: err?.message || "Failed to save client profile." },
+      { error: errorMessage(err, "Failed to save client profile.") },
       { status: 500 }
     );
   }
@@ -164,12 +221,19 @@ export const DELETE = async (req: Request) => {
     }
 
     const body = await req.json();
-    const ownerEmail = normalizeEmail(body?.ownerEmail);
     const id = body?.id;
+    const identity = await resolveAdvisorIdentity(req);
 
-    if (!ownerEmail || !id) {
+    if (!identity) {
       return NextResponse.json(
-        { error: "Missing ownerEmail or id." },
+        { error: "Sign in before deleting a client profile." },
+        { status: 401 }
+      );
+    }
+
+    if (!id) {
+      return NextResponse.json(
+        { error: "Missing id." },
         { status: 400 }
       );
     }
@@ -178,21 +242,29 @@ export const DELETE = async (req: Request) => {
       .from("advisorpilot_clients")
       .delete()
       .eq("id", id)
-      .eq("owner_email", ownerEmail);
+      .eq("owner_email", identity.email);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
+    await writeAuditEvent({
+      ownerEmail: identity.email,
+      ownerUserId: identity.userId,
+      action: "client.deleted",
+      entityType: "client",
+      entityId: String(id),
+    });
+
     return NextResponse.json({
       ok: true,
       message: "Client profile deleted.",
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("CLIENT DATABASE DELETE ERROR:", err);
 
     return NextResponse.json(
-      { error: err?.message || "Failed to delete client profile." },
+      { error: errorMessage(err, "Failed to delete client profile.") },
       { status: 500 }
     );
   }

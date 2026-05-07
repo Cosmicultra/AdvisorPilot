@@ -13,7 +13,7 @@ export default function ClientMagicUploadPage() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -23,8 +23,8 @@ export default function ClientMagicUploadPage() {
     setError("");
     setMessage("");
 
-    if (!file) {
-      setError("Please choose your statement file (PDF or a photo).");
+    if (files.length === 0) {
+      setError("Please choose at least one statement file (PDF or photo).");
       return;
     }
 
@@ -32,7 +32,7 @@ export default function ClientMagicUploadPage() {
     try {
       const fd = new FormData();
       fd.set("token", token);
-      fd.set("file", file);
+      files.forEach((file) => fd.append("files", file));
       if (firstName.trim()) fd.set("firstName", firstName.trim());
       if (lastName.trim()) fd.set("lastName", lastName.trim());
       if (email.trim()) fd.set("advisorEmail", email.trim());
@@ -50,7 +50,7 @@ export default function ClientMagicUploadPage() {
       }
 
       setMessage(data.message || "Upload received. You can close this page.");
-      setFile(null);
+      setFiles([]);
     } catch {
       setError("Network error. Check your connection and try again.");
     } finally {
@@ -79,7 +79,7 @@ export default function ClientMagicUploadPage() {
             <div>
               <h1 className="font-serif text-xl font-bold text-slate-900">Upload your statement</h1>
               <p className="mt-2 text-sm leading-relaxed text-slate-600">
-                Your advisor sent you this private link. Upload a PDF or a clear photo of your statement. Only your
+                Your advisor sent you this private link. Upload a PDF or clear photos of your statement. Only your
                 advisor can open what you send.
               </p>
             </div>
@@ -119,15 +119,21 @@ export default function ClientMagicUploadPage() {
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-slate-700">Statement file</label>
+                <label className="text-xs font-semibold text-slate-700">Statement file(s)</label>
                 <Input
                   className="mt-1 min-h-12 rounded-2xl file:mr-3 file:rounded-lg file:border-0 file:bg-teal-700 file:px-3 file:py-2 file:text-sm file:text-white"
                   type="file"
                   accept=".pdf,image/*"
                   capture="environment"
-                  onChange={(e) => setFile(e.target.files?.[0] || null)}
+                  multiple
+                  onChange={(e) => setFiles(Array.from(e.target.files || []))}
                 />
-                <p className="mt-1 text-xs text-slate-500">PDF or photo (JPG/PNG). Max 25 MB.</p>
+                <p className="mt-1 text-xs text-slate-500">PDF or photos (JPG/PNG). Max 25 MB per file.</p>
+                {files.length > 0 ? (
+                  <p className="mt-2 text-xs text-slate-600">
+                    Selected: {files.map((file) => file.name).join(", ")}
+                  </p>
+                ) : null}
               </div>
 
               {error && (

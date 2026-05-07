@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { Buffer } from "buffer";
 import { createClient } from "@supabase/supabase-js";
 import { extractHoldingsFromFileBuffer } from "@/lib/extract-statement-holdings";
+import { writeAuditEvent } from "@/lib/audit-log";
+import { flagLikelyDuplicateHoldings } from "@/lib/holding-merge";
+import { validateHoldingLocally } from "@/lib/holding-validation";
+import { normalizeRegistrationType } from "@/lib/holding-registration";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,18 +23,37 @@ function missingEnv() {
 }
 
 function normalizeHoldings(raw: unknown[]) {
-  return raw.map((h: any) => ({
-    rawName: h.rawName || "Unknown holding",
-    suggested: h.suggested || "Needs advisor confirmation",
-    confidence: Number(h.confidence || 0),
-    assetClass: h.assetClass || "Unknown",
-    value: Number(h.value || 0),
-    status: Number(h.confidence || 0) >= 75 ? "matched" : "review",
-    options:
-      Array.isArray(h.options) && h.options.length > 0
-        ? h.options
-        : [h.suggested || "Needs advisor confirmation", "Manual ticker / CUSIP entry"],
-  }));
+  return raw.map((holding) => {
+    const h = holding && typeof holding === "object" ? (holding as Record<string, unknown>) : {};
+    const confidence = Number(h.confidence || 0);
+    const normalized = {
+      rawName: h.rawName || "Unknown holding",
+      suggested: h.suggested || "Needs advisor confirmation",
+      confidence,
+      assetClass: h.assetClass || "Unknown",
+      value: Number(h.value || 0),
+      status: confidence >= 75 ? "matched" : "review",
+      options:
+        Array.isArray(h.options) && h.options.length > 0
+          ? h.options
+          : [h.suggested || "Needs advisor confirmation", "Manual ticker / CUSIP entry"],
+      registrationType: normalizeRegistrationType(h.registrationType),
+    };
+    const acct = typeof h.accountNumber === "string" ? h.accountNumber.trim() : "";
+    const cbRaw = Number(h.costBasis);
+    const costBasis =
+      Number.isFinite(cbRaw) && cbRaw > 0 ? cbRaw : undefined;
+    return {
+      ...normalized,
+      ...validateHoldingLocally(normalized),
+      ...(acct ? { accountNumber: acct } : {}),
+      ...(costBasis !== undefined ? { costBasis } : {}),
+      ...(typeof h.sourceFileName === "string" ? { sourceFileName: h.sourceFileName } : {}),
+      ...(typeof h.sourceFileIndex === "number" && Number.isFinite(h.sourceFileIndex)
+        ? { sourceFileIndex: h.sourceFileIndex }
+        : {}),
+    };
+  });
 }
 
 /**
@@ -45,7 +68,11 @@ export async function POST(request: Request) {
 
     const formData = await request.formData();
     const token = String(formData.get("token") || "").trim();
-    const file = formData.get("file") as File | null;
+    const files = formData
+      .getAll("files")
+      .filter((value): value is File => value instanceof File);
+    const legacyFile = formData.get("file");
+    if (files.length === 0 && legacyFile instanceof File) files.push(legacyFile);
     const firstName = String(formData.get("firstName") || "").trim();
     const lastName = String(formData.get("lastName") || "").trim();
     const advisorEmail = String(formData.get("advisorEmail") || "").trim();
@@ -53,18 +80,20 @@ export async function POST(request: Request) {
     if (!token) {
       return NextResponse.json({ error: "Missing upload link." }, { status: 400 });
     }
-    if (!file || !(file instanceof File)) {
-      return NextResponse.json({ error: "Please choose a file to upload." }, { status: 400 });
+    if (files.length === 0) {
+      return NextResponse.json({ error: "Please choose at least one file to upload." }, { status: 400 });
     }
 
-    const size = file.size ?? 0;
-    if (size > MAX_FILE_BYTES) {
-      return NextResponse.json({ error: "File is too large (max 25 MB)." }, { status: 400 });
+    for (const file of files) {
+      const size = file.size ?? 0;
+      if (size > MAX_FILE_BYTES) {
+        return NextResponse.json({ error: `${file.name || "File"} is too large (max 25 MB).` }, { status: 400 });
+      }
     }
 
     const { data: tokenRow, error: tokenErr } = await supabaseAdmin
       .from("advisorpilot_upload_tokens")
-      .select("id, advisor_owner_email, expires_at, upload_count")
+      .select("id, advisor_user_id, advisor_owner_email, expires_at, upload_count, max_upload_count, revoked_at")
       .eq("token", token)
       .maybeSingle();
 
@@ -76,7 +105,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "This upload link has expired. Ask your advisor for a new one." }, { status: 410 });
     }
 
-    if (Number(tokenRow.upload_count) >= MAX_UPLOADS_PER_TOKEN) {
+    if (tokenRow.revoked_at) {
+      return NextResponse.json({ error: "This upload link has been revoked. Ask your advisor for a new one." }, { status: 410 });
+    }
+
+    const maxUploadCount = Number(tokenRow.max_upload_count || MAX_UPLOADS_PER_TOKEN);
+    if (Number(tokenRow.upload_count) >= maxUploadCount) {
       return NextResponse.json(
         { error: "This link has reached its upload limit. Ask your advisor for a new link." },
         { status: 429 }
@@ -94,17 +128,26 @@ export async function POST(request: Request) {
       lastName: lastName || undefined,
     };
 
-    const bytes = Buffer.from(await file.arrayBuffer());
-    const mimeType = file.type || "application/pdf";
+    const extractedHoldings: unknown[] = [];
+    for (const [index, file] of files.entries()) {
+      const bytes = Buffer.from(await file.arrayBuffer());
+      const mimeType = file.type || "application/pdf";
+      const extracted = await extractHoldingsFromFileBuffer({
+        fileName: file.name || `statement-${index + 1}.pdf`,
+        mimeType,
+        bytes,
+        clientContext: { ...clientContext, sourceFileName: file.name, sourceFileIndex: index + 1 },
+      });
+      const holdingsForFile = Array.isArray(extracted.holdings) ? extracted.holdings : [];
+      extractedHoldings.push(
+        ...holdingsForFile.map((holding) => ({
+          ...holding,
+          sourceFileName: file.name || `statement-${index + 1}.pdf`,
+          sourceFileIndex: index + 1,
+        }))
+      );
+    }
 
-    const extracted = await extractHoldingsFromFileBuffer({
-      fileName: file.name || "statement.pdf",
-      mimeType,
-      bytes,
-      clientContext,
-    });
-
-    const extractedHoldings = Array.isArray(extracted.holdings) ? extracted.holdings : [];
     if (extractedHoldings.length === 0) {
       return NextResponse.json(
         { error: "No holdings could be read from this file. Try a clearer PDF or photo." },
@@ -112,7 +155,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const holdings = normalizeHoldings(extractedHoldings);
+    const holdings = flagLikelyDuplicateHoldings(normalizeHoldings(extractedHoldings));
     const totalValue = holdings.reduce((sum, h) => sum + Number(h.value || 0), 0);
 
     const client = {
@@ -128,12 +171,13 @@ export async function POST(request: Request) {
       magicLinkUpload: true,
     };
 
-    const meetingNotes = `Uploaded by client via advisor magic link (${new Date().toISOString()}). File: ${file.name || "statement"}.`;
+    const meetingNotes = `Uploaded by client via advisor magic link (${new Date().toISOString()}). Files: ${files.map((file) => file.name || "statement").join(", ")}.`;
 
     const { data: inserted, error: insertErr } = await supabaseAdmin
       .from("advisorpilot_clients")
       .insert({
         owner_email: ownerEmail,
+        owner_user_id: tokenRow.advisor_user_id || null,
         client,
         holdings,
         meeting_notes: meetingNotes,
@@ -150,24 +194,50 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: insertErr.message || "Could not save upload." }, { status: 400 });
     }
 
+    await supabaseAdmin.from("advisorpilot_documents").insert(
+      files.map((file, index) => ({
+        owner_email: ownerEmail,
+        owner_user_id: tokenRow.advisor_user_id || null,
+        client_id: inserted.id,
+        storage_bucket: "advisorpilot-statements",
+        storage_path: `client-link/${inserted.id}/${index + 1}-${file.name || "statement"}`,
+        original_file_name: file.name || `statement-${index + 1}`,
+        mime_type: file.type || "application/octet-stream",
+        file_size_bytes: file.size || 0,
+        source: "client_magic_link",
+        status: "processed_in_memory",
+        metadata: { tokenId: tokenRow.id, storedBytes: false },
+      }))
+    );
+
     const { error: bumpErr } = await supabaseAdmin
       .from("advisorpilot_upload_tokens")
-      .update({ upload_count: Number(tokenRow.upload_count) + 1 })
+      .update({ upload_count: Number(tokenRow.upload_count) + 1, last_used_at: new Date().toISOString() })
       .eq("id", tokenRow.id);
 
     if (bumpErr) {
       console.error("MAGIC LINK TOKEN BUMP:", bumpErr);
     }
 
+    await writeAuditEvent({
+      ownerEmail,
+      ownerUserId: tokenRow.advisor_user_id || null,
+      actorEmail: advisorEmail || null,
+      action: "client_upload.ingested",
+      entityType: "client",
+      entityId: inserted.id,
+      metadata: { fileCount: files.length, holdingsCount: holdings.length, tokenId: tokenRow.id },
+    });
+
     return NextResponse.json({
       ok: true,
       message: "Thank you — your advisor will review this shortly.",
       reviewId: inserted?.id,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("CLIENT UPLOAD INGEST:", err);
     return NextResponse.json(
-      { error: err?.message || "Upload failed. Try again or use a different file." },
+      { error: err instanceof Error ? err.message : "Upload failed. Try again or use a different file." },
       { status: 500 }
     );
   }

@@ -18,6 +18,17 @@ export type ExtractedHolding = {
   value: number;
   status: string;
   options: string[];
+  /** Account identifier as printed (often last 4); empty if only one pooled account */
+  accountNumber?: string;
+  /**
+   * qualified = traditional tax-deferred (IRA, 401(k), etc.) — Roth conversion sourcing;
+   * non_qualified = taxable brokerage or bank non-retirement;
+   * roth = Roth IRA/b Roth 401(k) balance (not a traditional conversion source);
+   * unknown = not clear from statement.
+   */
+  registrationType?: "qualified" | "non_qualified" | "roth" | "unknown";
+  /** For non-qualified positions only: cost basis when shown on statement (0 omit). */
+  costBasis?: number;
 };
 
 /**
@@ -68,6 +79,9 @@ Use this exact format:
       "assetClass": "U.S. Large Cap Equity / Bond Fund / ETF / Mutual Fund / Individual Stock / Treasury / Corporate Bond / Cash / Annuity / Unknown",
       "value": number,
       "status": "matched or review",
+      "accountNumber": "masked or last-4 digits as printed, or empty string if unclear",
+      "registrationType": "qualified | non_qualified | roth | unknown",
+      "costBasis": 0,
       "options": [
         "Likely ticker or fund option 1",
         "Likely ticker or fund option 2",
@@ -77,6 +91,15 @@ Use this exact format:
     }
   ]
 }
+
+Registration rules (per holding, from statement headings / account tiles / tax labels):
+- qualified: Traditional IRA, rollover IRA, SEP/SIMPLE, 401(k)/403(b) pre-tax, pension rollover to traditional — tax-deferred money that could be illustrated as Roth conversion *source*.
+- roth: Roth IRA or designated Roth/deferred Roth accounts — NOT counted as traditional conversion source.
+- non_qualified: Individual/joint taxable brokerage, TOD/TITLED taxable, trusts (taxable), regular bank/broker cash not in IRA.
+- unknown: wrappers not visible or ambiguous across pages.
+
+Cost basis rules:
+- Populate costBasis only when the statement shows explicit cost/unrealized gain for a taxable (non_qualified) lot; otherwise 0.
 
 Rules:
 - If ticker is clearly visible, use it.

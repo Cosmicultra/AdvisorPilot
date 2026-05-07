@@ -7,30 +7,45 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
-    const file = formData.get("file") as File | null;
+    const files = formData
+      .getAll("files")
+      .filter((value): value is File => value instanceof File);
+    const legacyFile = formData.get("file");
+    if (files.length === 0 && legacyFile instanceof File) files.push(legacyFile);
     const clientRaw = formData.get("client") as string | null;
 
-    if (!file) {
+    if (files.length === 0) {
       return NextResponse.json({ error: "No file uploaded." }, { status: 400 });
     }
 
     const client = clientRaw ? JSON.parse(clientRaw) : {};
-    const bytes = Buffer.from(await file.arrayBuffer());
-    const mimeType = file.type || "application/pdf";
+    const allHoldings: unknown[] = [];
 
-    const data = await extractHoldingsFromFileBuffer({
-      fileName: file.name || "statement.pdf",
-      mimeType,
-      bytes,
-      clientContext: client,
-    });
+    for (const [index, file] of files.entries()) {
+      const bytes = Buffer.from(await file.arrayBuffer());
+      const mimeType = file.type || "application/pdf";
+      const data = await extractHoldingsFromFileBuffer({
+        fileName: file.name || `statement-${index + 1}.pdf`,
+        mimeType,
+        bytes,
+        clientContext: { ...client, sourceFileName: file.name, sourceFileIndex: index + 1 },
+      });
+      const holdings = Array.isArray(data.holdings) ? data.holdings : [];
+      allHoldings.push(
+        ...holdings.map((holding) => ({
+          ...holding,
+          sourceFileName: file.name || `statement-${index + 1}.pdf`,
+          sourceFileIndex: index + 1,
+        }))
+      );
+    }
 
-    return NextResponse.json(data);
-  } catch (error: any) {
+    return NextResponse.json({ holdings: allHoldings });
+  } catch (error: unknown) {
     console.error("ANALYZE ERROR:", error);
 
     return NextResponse.json(
-      { error: error?.message || "Could not analyze statement." },
+      { error: error instanceof Error ? error.message : "Could not analyze statement." },
       { status: 500 }
     );
   }

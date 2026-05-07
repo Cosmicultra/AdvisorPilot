@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { buildRegistrationSummaryForAnalysis } from "@/lib/holding-registration";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -22,6 +23,10 @@ export async function POST(req: Request) {
       day: "numeric",
     });
 
+    const registrationSummary = buildRegistrationSummaryForAnalysis(
+      Array.isArray(holdings) ? holdings : []
+    );
+
     const researchPrompt = `
 Research current market conditions for an advisor-facing portfolio review.
 
@@ -41,6 +46,9 @@ ${JSON.stringify(client, null, 2)}
 
 Holdings:
 ${JSON.stringify(holdings, null, 2)}
+
+Registration / account summary (from holdings; advisor may have edited):
+${JSON.stringify(registrationSummary, null, 2)}
 
 Allocation:
 ${JSON.stringify(allocation, null, 2)}
@@ -71,6 +79,9 @@ ${JSON.stringify(client, null, 2)}
 
 Holdings:
 ${JSON.stringify(holdings, null, 2)}
+
+Registration / account summary:
+${JSON.stringify(registrationSummary, null, 2)}
 
 Allocation:
 ${JSON.stringify(allocation, null, 2)}
@@ -225,6 +236,8 @@ STYLE RULES:
 - Use "Fixed" instead of "Fixed Income" in short labels.
 - Do not call dividend equity exposure fixed income or guaranteed income.
 - Distinguish bond funds, Treasuries, cash, dividend equity, annuities, and guaranteed income as different tools.
+- When registration summary shows both traditional tax-deferred balances and non-qualified (taxable) balances, discuss them separately: qualified-style assets vs brokerage/taxable buckets, and tie Roth conversion framing to traditional tax-deferred sources only (do not treat taxable or Roth IRA balances as Roth conversion sources).
+- If nonQualifiedWithCostBasis is non-empty, include at least one advisor-facing note (in redFlags and/or recommendations and/or talkingPoints) that selling or rotating taxable positions may realize capital gains versus stated cost basis — qualitative only, not tax advice, no dollar tax estimates unless the stated basis and market value plainly imply a taxable gain magnitude you describe in general terms.
 - Keep client-facing language clear, calm, and non-alarming.
 - Avoid generic filler such as "optimize the portfolio," "ensure alignment," "monitor closely," or "maintain diversification" unless paired with specific context.
 - Avoid saying the same thing in different words across sections.
@@ -271,12 +284,12 @@ STYLE RULES:
         ? parsed.objectionHandling
         : [],
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("ANALYSIS ERROR:", err);
-    console.error("MESSAGE:", err?.message);
+    console.error("MESSAGE:", err instanceof Error ? err.message : String(err));
 
     return NextResponse.json(
-      { error: err?.message || "Failed to generate analysis" },
+      { error: err instanceof Error ? err.message : "Failed to generate analysis" },
       { status: 500 }
     );
   }

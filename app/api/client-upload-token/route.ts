@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { createClient } from "@supabase/supabase-js";
-import { resolveAdvisorOwnerEmail } from "@/lib/advisor-auth";
+import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import { writeAuditEvent } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,8 +35,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing Supabase environment variables." }, { status: 500 });
     }
 
-    const ownerEmail = await resolveAdvisorOwnerEmail(request);
-    if (!ownerEmail) {
+    const identity = await resolveAdvisorIdentity(request);
+    if (!identity) {
       return NextResponse.json(
         { error: "Sign in to create a client upload link." },
         { status: 401 }
@@ -53,7 +54,8 @@ export async function POST(request: Request) {
       .from("advisorpilot_upload_tokens")
       .insert({
         token,
-        advisor_owner_email: ownerEmail,
+        advisor_owner_email: identity.email,
+        advisor_user_id: identity.userId,
         expires_at: expiresAt.toISOString(),
         upload_count: 0,
       })
@@ -74,6 +76,14 @@ export async function POST(request: Request) {
 
     const base = publicBaseUrl(request);
     const uploadUrl = `${base}/client-upload/${token}`;
+    await writeAuditEvent({
+      ownerEmail: identity.email,
+      ownerUserId: identity.userId,
+      action: "upload_token.created",
+      entityType: "upload_token",
+      entityId: data.id,
+      metadata: { expiresAt: data.expires_at },
+    });
 
     return NextResponse.json({
       token,
@@ -81,10 +91,10 @@ export async function POST(request: Request) {
       expiresAt: data.expires_at,
       createdAt: data.created_at,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("CLIENT UPLOAD TOKEN ERROR:", err);
     return NextResponse.json(
-      { error: err?.message || "Failed to create upload link." },
+      { error: err instanceof Error ? err.message : "Failed to create upload link." },
       { status: 500 }
     );
   }

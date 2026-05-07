@@ -27,6 +27,9 @@ add column if not exists status text not null default 'Analyzed';
 alter table public.advisorpilot_clients
 add column if not exists last_contacted_at timestamptz;
 
+alter table public.advisorpilot_clients
+add column if not exists roth_worksheet jsonb;
+
 create or replace function public.set_advisorpilot_advisor_profiles_updated_at()
 returns trigger as $$
 begin

@@ -8,12 +8,29 @@ export type IntakeClient = {
   lastName: string;
   dob: string;
   age: string;
+  /** Current marginal federal tax bracket id: "10" | "12" | "22" | ... */
+  federalTaxBracket: string;
+  /** AGI from the most recent federal tax return (annual dollars, string for forms). */
+  adjustedGrossIncomeAnnual: string;
   retirementAge: string;
+  /** Annual after-tax spendable income needed in retirement (dollars, as string for forms). */
+  retirementSpendableIncomeAnnual: string;
+  /** Household / primary client receiving Social Security (monthly dollars, string for forms). */
+  socialSecurityMonthlyClient: string;
+  /** Spouse monthly Social Security when married and collecting. */
+  socialSecurityMonthlySpouse: string;
   riskProfile: string;
   calibration: string;
   goal: string;
   /** Client's email — used as the *To:* address for Client Snapshot / follow-up (not the advisor's login). */
   advisorEmail: string;
+  married: boolean;
+  spouseFirstName: string;
+  spouseLastName: string;
+  spouseDob: string;
+  spouseAge: string;
+  spouseRetirementAge: string;
+  takingSocialSecurity: boolean;
   /** True when this profile was started from a client-side magic-link upload. */
   magicLinkUpload?: boolean;
 };
@@ -21,6 +38,11 @@ export type IntakeClient = {
 export const RISK_PROFILES = ["conservative", "moderate-conservative", "moderate", "moderate-growth", "aggressive"] as const;
 
 export const CALIBRATION_OPTIONS = ["risk-profile", "age-default", "income-goal", "custom"] as const;
+
+/** Simplified federal marginal brackets for intake + Roth illustration (single filer wording; still user-entered). */
+export const FEDERAL_TAX_BRACKET_IDS = ["10", "12", "22", "24", "32", "35", "37"] as const;
+
+export type FederalTaxBracketId = (typeof FEDERAL_TAX_BRACKET_IDS)[number];
 
 export type IntakeStepMeta = {
   id: string;
@@ -37,40 +59,69 @@ export const INTAKE_STEPS: IntakeStepMeta[] = [
     eyebrow: "Question 1",
     title: "Who is this review for?",
     helper:
-      "Collect the client's first name, last name, and the email where you'll send the Client Snapshot (not your advisor login).",
-    fields: ["firstName", "lastName", "advisorEmail"],
+      "Collect the client's first name, last name, and the email where you'll send the Client Snapshot.",
+    fields: ["firstName", "lastName", "advisorEmail", "married", "spouseFirstName", "spouseLastName"],
   },
   {
     id: "age",
     eyebrow: "Question 2",
     title: "How old is the client?",
-    helper: "Use date of birth or age. Age helps calibrate the default allocation review.",
-    fields: ["dob", "age"],
+    helper: "Use date of birth or age. Age helps calibrate the default allocation review. If married, capture the spouse's age or date of birth the same way.",
+    fields: ["dob", "age", "spouseDob", "spouseAge"],
+  },
+  {
+    id: "adjustedGrossIncome",
+    eyebrow: "Question 3",
+    title: "What was your Adjusted Gross Income (AGI) on your most recent tax return?",
+    helper:
+      "Use the AGI from the client's federal return (Form 1040, line 11 on recent-year returns). For illustrative planning only—not tax advice.",
+    fields: ["adjustedGrossIncomeAnnual"],
+  },
+  {
+    id: "taxBracket",
+    eyebrow: "Question 4",
+    title: "What is your current federal tax bracket?",
+    helper: "Use the marginal bracket that best fits the client's ordinary income today (used for illustrative tax math in reports).",
+    fields: ["federalTaxBracket"],
   },
   {
     id: "retirement",
-    eyebrow: "Question 3",
+    eyebrow: "Question 5",
     title: "When do they expect to retire?",
-    helper: "This helps determine whether the portfolio should emphasize growth, protection, income, or a blend.",
-    fields: ["retirementAge"],
+    helper: "This helps determine whether the portfolio should emphasize growth, protection, income, or a blend. If married, ask for the spouse's expected retirement age too.",
+    fields: ["retirementAge", "spouseRetirementAge"],
+  },
+  {
+    id: "retirementIncome",
+    eyebrow: "Question 6",
+    title: "How much spendable income do you need in retirement annually?",
+    helper: "",
+    fields: ["retirementSpendableIncomeAnnual"],
+  },
+  {
+    id: "socialSecurity",
+    eyebrow: "Question 7",
+    title: "Are you taking Social Security?",
+    helper: "If the household is not receiving benefits yet, leave amounts blank and continue. If receiving benefits, capture approximate monthly amounts.",
+    fields: ["takingSocialSecurity", "socialSecurityMonthlyClient", "socialSecurityMonthlySpouse"],
   },
   {
     id: "risk",
-    eyebrow: "Question 4",
+    eyebrow: "Question 8",
     title: "What is their risk profile?",
     helper: "The app will use this as the preferred calibration instead of relying on age alone.",
     fields: ["riskProfile"],
   },
   {
     id: "calibration",
-    eyebrow: "Question 5",
+    eyebrow: "Question 9",
     title: "How should AdvisorPilot calibrate the review?",
     helper: "You can use the client risk profile, run an age-based default, or focus on retirement income.",
     fields: ["calibration"],
   },
   {
     id: "goal",
-    eyebrow: "Question 6",
+    eyebrow: "Question 10",
     title: "What is the main client goal?",
     helper: "This helps the script and report sound specific to the client conversation.",
     fields: ["goal"],
@@ -111,13 +162,25 @@ export function normalizeIntakeClient(raw: unknown): IntakeClient {
     lastName,
     dob: String(r.dob ?? ""),
     age: String(r.age ?? ""),
+    federalTaxBracket: String(r.federalTaxBracket ?? "22"),
+    adjustedGrossIncomeAnnual: String(r.adjustedGrossIncomeAnnual ?? ""),
     retirementAge: String(r.retirementAge ?? "67"),
+    retirementSpendableIncomeAnnual: String(r.retirementSpendableIncomeAnnual ?? ""),
+    socialSecurityMonthlyClient: String(r.socialSecurityMonthlyClient ?? ""),
+    socialSecurityMonthlySpouse: String(r.socialSecurityMonthlySpouse ?? ""),
     riskProfile: String(r.riskProfile ?? "moderate-conservative"),
     calibration: String(r.calibration ?? "risk-profile"),
     goal: String(
       r.goal ?? "Prepare for retirement income while reducing unnecessary downside risk."
     ),
     advisorEmail: String(r.advisorEmail ?? ""),
+    married: Boolean(r.married),
+    spouseFirstName: String(r.spouseFirstName ?? ""),
+    spouseLastName: String(r.spouseLastName ?? ""),
+    spouseDob: String(r.spouseDob ?? ""),
+    spouseAge: String(r.spouseAge ?? ""),
+    spouseRetirementAge: String(r.spouseRetirementAge ?? ""),
+    takingSocialSecurity: Boolean(r.takingSocialSecurity),
     magicLinkUpload: Boolean(r.magicLinkUpload),
   };
 }
@@ -191,6 +254,11 @@ export function applyIntakePatch(base: IntakeClient, patch: Partial<Record<keyof
       if (n) next.riskProfile = n;
       continue;
     }
+    if (key === "federalTaxBracket" && typeof raw === "string") {
+      const digits = raw.replace(/%/g, "").trim();
+      if (FEDERAL_TAX_BRACKET_IDS.includes(digits as FederalTaxBracketId)) next.federalTaxBracket = digits;
+      continue;
+    }
     if (key === "calibration" && typeof raw === "string") {
       const n = normCalibration(raw);
       if (n) next.calibration = n;
@@ -198,6 +266,14 @@ export function applyIntakePatch(base: IntakeClient, patch: Partial<Record<keyof
     }
     if (key === "magicLinkUpload" && typeof raw === "boolean") {
       next.magicLinkUpload = raw;
+      continue;
+    }
+    if (key === "married" && typeof raw === "boolean") {
+      next.married = raw;
+      continue;
+    }
+    if (key === "takingSocialSecurity" && typeof raw === "boolean") {
+      next.takingSocialSecurity = raw;
       continue;
     }
     if (typeof raw === "string") {
@@ -209,19 +285,54 @@ export function applyIntakePatch(base: IntakeClient, patch: Partial<Record<keyof
 }
 
 /** Minimum info before leaving a step (typed form uses Continue; voice uses this too). */
+function positiveMoneyString(s: string): boolean {
+  const n = Number(String(s ?? "").replace(/[$,]/g, "").trim());
+  return Number.isFinite(n) && n > 0;
+}
+
 export function canAdvanceIntakeStep(stepIndex: number, c: IntakeClient): boolean {
   switch (stepIndex) {
-    case 0:
-      return Boolean(c.firstName.trim() && c.lastName.trim());
-    case 1:
-      return Boolean((c.dob && c.dob.length > 0) || (c.age && String(c.age).trim().length > 0));
-    case 2:
-      return String(c.retirementAge ?? "").trim().length > 0;
+    case 0: {
+      if (!c.firstName.trim() || !c.lastName.trim()) return false;
+      if (c.married && (!c.spouseFirstName.trim() || !c.spouseLastName.trim())) return false;
+      return true;
+    }
+    case 1: {
+      const clientAgeOk = Boolean((c.dob && c.dob.length > 0) || (c.age && String(c.age).trim().length > 0));
+      if (!clientAgeOk) return false;
+      if (c.married) {
+        const spouseAgeOk = Boolean(
+          (c.spouseDob && c.spouseDob.length > 0) || (c.spouseAge && String(c.spouseAge).trim().length > 0)
+        );
+        if (!spouseAgeOk) return false;
+      }
+      return true;
+    }
+    case 2: {
+      const n = Number(String(c.adjustedGrossIncomeAnnual ?? "").replace(/[$,]/g, "").trim());
+      return Number.isFinite(n) && n > 0;
+    }
     case 3:
+      return FEDERAL_TAX_BRACKET_IDS.includes(c.federalTaxBracket as FederalTaxBracketId);
+    case 4: {
+      if (!String(c.retirementAge ?? "").trim().length) return false;
+      if (c.married && !String(c.spouseRetirementAge ?? "").trim().length) return false;
+      return true;
+    }
+    case 5: {
+      const n = Number(String(c.retirementSpendableIncomeAnnual ?? "").replace(/[$,]/g, "").trim());
+      return Number.isFinite(n) && n > 0;
+    }
+    case 6:
+      if (!c.takingSocialSecurity) return true;
+      if (!positiveMoneyString(c.socialSecurityMonthlyClient)) return false;
+      if (c.married && !positiveMoneyString(c.socialSecurityMonthlySpouse)) return false;
+      return true;
+    case 7:
       return RISK_PROFILES.includes(c.riskProfile as (typeof RISK_PROFILES)[number]);
-    case 4:
+    case 8:
       return CALIBRATION_OPTIONS.includes(c.calibration as (typeof CALIBRATION_OPTIONS)[number]);
-    case 5:
+    case 9:
       return c.goal.trim().length > 0;
     default:
       return false;

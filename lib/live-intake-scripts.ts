@@ -43,6 +43,11 @@ export function buildStepConfirmationScript(stepIndex: number, client: IntakeCli
   const age = client.age.trim();
   const dob = client.dob.trim();
   const retire = client.retirementAge.trim();
+  const agi = client.adjustedGrossIncomeAnnual.trim();
+  const bracket = client.federalTaxBracket.trim();
+  const spend = client.retirementSpendableIncomeAnnual.trim();
+  const ssClient = client.socialSecurityMonthlyClient.trim();
+  const ssSpouse = client.socialSecurityMonthlySpouse.trim();
   const risk = client.riskProfile.replace(/-/g, " ").trim();
   const calibration = client.calibration.replace(/-/g, " ").trim();
   const goal = client.goal.trim();
@@ -51,20 +56,66 @@ export function buildStepConfirmationScript(stepIndex: number, client: IntakeCli
     case 0: {
       const namePart = `${fn} ${ln}`.trim() || "no name yet";
       const emailPart = email ? `at ${email}` : "and no email yet";
+      if (client.married) {
+        const sf = client.spouseFirstName.trim();
+        const sl = client.spouseLastName.trim();
+        const spousePart = sf || sl ? `Spouse: ${`${sf} ${sl}`.trim()}` : "spouse name not filled in yet";
+        return `Quick confirm: I have ${namePart} ${emailPart}. ${spousePart}. Is that right?`;
+      }
       return `Quick confirm: I have ${namePart} ${emailPart}. Is that right?`;
     }
     case 1: {
+      const spouseAge = client.spouseAge.trim();
+      const spouseDob = client.spouseDob.trim();
+      const clientBit = age
+        ? `age ${age}`
+        : dob
+          ? `date of birth ${dob}`
+          : "the client's age";
+      if (client.married) {
+        const spouseBit = spouseAge
+          ? `spouse age ${spouseAge}`
+          : spouseDob
+            ? `spouse date of birth ${spouseDob}`
+            : "spouse age";
+        return `So that's ${clientBit}, and ${spouseBit}. Did I get that right?`;
+      }
       if (age) return `So that's age ${age}. Did I get that right?`;
       if (dob) return `So that's a date of birth of ${dob}. Did I get that right?`;
       return `Did I get the age right?`;
     }
     case 2:
-      return `Planning to retire at age ${retire || "—"}. Is that right?`;
+      return agi
+        ? `For Adjusted Gross Income on the most recent return, I'm using about ${agi} dollars. Does that sound right?`
+        : `Did I get the AGI right?`;
     case 3:
-      return `So that's a ${risk} risk profile. Sound right?`;
-    case 4:
-      return `We'll calibrate using ${calibration}. Sound good?`;
+      return bracket
+        ? `So we're using about a ${bracket}% federal marginal bracket for planning. Sound right?`
+        : `Did I get the tax bracket right?`;
+    case 4: {
+      const sr = client.spouseRetirementAge.trim();
+      if (client.married && sr) {
+        return `Retiring at age ${retire || "—"} for the client and ${sr} for the spouse. Is that right?`;
+      }
+      return `Planning to retire at age ${retire || "—"}. Is that right?`;
+    }
     case 5:
+      return spend
+        ? `For spendable income in retirement, I'm using about ${spend} dollars per year. Does that match?`
+        : `Did I capture the retirement income need correctly?`;
+    case 6:
+      if (!client.takingSocialSecurity) return `Got it — not taking Social Security yet. We'll move on. Sound right?`;
+      if (client.married && ssClient && ssSpouse) {
+        return `Social Security about ${ssClient} a month for the client and ${ssSpouse} for the spouse. Does that match?`;
+      }
+      return ssClient
+        ? `Social Security about ${ssClient} dollars a month. Does that match?`
+        : `Did I capture Social Security correctly?`;
+    case 7:
+      return `So that's a ${risk} risk profile. Sound right?`;
+    case 8:
+      return `We'll calibrate using ${calibration}. Sound good?`;
+    case 9:
       return goal
         ? `Let me read back the goal: "${goal}". Does that capture it?`
         : `Did I get the goal right?`;

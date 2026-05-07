@@ -71,10 +71,10 @@ export async function POST(req: Request) {
       { error: "Invalid request type." },
       { status: 400 }
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("SUPABASE EMAIL AUTH ERROR:", err);
     return NextResponse.json(
-      { error: err?.message || "Email authentication failed." },
+      { error: err instanceof Error ? err.message : "Email authentication failed." },
       { status: 500 }
     );
   }

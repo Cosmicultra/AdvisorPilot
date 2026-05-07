@@ -4,6 +4,7 @@ import { google } from "googleapis";
 import { createClient } from "@supabase/supabase-js";
 import { authOptions } from "../auth/[...nextauth]/route";
 import { clientDisplayName, clientFirstNameSalutation } from "@/lib/intake-config";
+import { writeAuditEvent } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,7 +74,23 @@ function paragraphsToHtml(lines: string[]) {
     .join("");
 }
 
-function buildPlainSignature(profile: any, fallbackSignature = "", calendarLinkFallback = "") {
+type AdvisorProfileRecord = {
+  email_signature?: string | null;
+  calendar_link?: string | null;
+  advisor_name?: string | null;
+  advisor_title?: string | null;
+  advisor_license?: string | null;
+  office_address?: string | null;
+  office_phone?: string | null;
+  cell_phone?: string | null;
+  website?: string | null;
+};
+
+type SessionWithAccessToken = Awaited<ReturnType<typeof getServerSession>> & {
+  accessToken?: string;
+};
+
+function buildPlainSignature(profile: AdvisorProfileRecord | null, fallbackSignature = "", calendarLinkFallback = "") {
   const calendarRaw = clean(profile?.calendar_link) || clean(calendarLinkFallback);
   const calendarUrl = calendarRaw ? ensureUrl(calendarRaw) : "";
 
@@ -113,7 +130,7 @@ function buildPlainSignature(profile: any, fallbackSignature = "", calendarLinkF
   return clean(fallbackSignature);
 }
 
-function buildHtmlSignature(profile: any, fallbackSignature = "", calendarLinkFallback = "") {
+function buildHtmlSignature(profile: AdvisorProfileRecord | null, fallbackSignature = "", calendarLinkFallback = "") {
   const savedBlock = clean(profile?.email_signature);
   if (savedBlock) {
     const calendarRaw = clean(profile?.calendar_link) || clean(calendarLinkFallback);
@@ -189,7 +206,7 @@ function buildHtmlSignature(profile: any, fallbackSignature = "", calendarLinkFa
   return parts.join("<br />");
 }
 
-async function getAdvisorProfile(ownerEmail: string) {
+async function getAdvisorProfile(ownerEmail: string): Promise<AdvisorProfileRecord | null> {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return null;
   }
@@ -205,7 +222,7 @@ async function getAdvisorProfile(ownerEmail: string) {
     return null;
   }
 
-  return data || null;
+  return (data as AdvisorProfileRecord | null) || null;
 }
 
 function buildClientEmailBodies(params: {
@@ -393,7 +410,7 @@ function buildEmailWithAttachment(params: {
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
-    const accessToken = (session as any)?.accessToken;
+    const accessToken = (session as SessionWithAccessToken | null)?.accessToken;
     const senderEmail = session?.user?.email || "";
 
     if (!session || !accessToken) {
@@ -508,6 +525,31 @@ export async function POST(req: Request) {
       },
     });
 
+    await writeAuditEvent({
+      ownerEmail: normalizeEmail(senderEmail),
+      actorEmail: normalizeEmail(senderEmail),
+      action: emailVariant === "follow_up" ? "email.follow_up_sent" : "email.client_snapshot_sent",
+      entityType: "email",
+      metadata: {
+        to: normalizeEmail(to),
+        subject,
+        clientName: clientDisplayName(body?.client || {}),
+        attachment: "Client_Snapshot.pdf",
+      },
+    });
+
+    const clientId = typeof body?.clientId === "string" ? body.clientId : "";
+    if (clientId) {
+      await supabaseAdmin
+        .from("advisorpilot_clients")
+        .update({
+          status: "Report Sent",
+          last_contacted_at: new Date().toISOString(),
+        })
+        .eq("id", clientId)
+        .eq("owner_email", normalizeEmail(senderEmail));
+    }
+
     return NextResponse.json({
       ok: true,
       message:
@@ -516,11 +558,11 @@ export async function POST(req: Request) {
           : "Client Snapshot email sent successfully.",
       plainTextBody: emailBodies.plainText,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error("EMAIL CLIENT SNAPSHOT ERROR:", err);
 
     return NextResponse.json(
-      { error: err?.message || "Failed to send Client Snapshot email." },
+      { error: err instanceof Error ? err.message : "Failed to send Client Snapshot email." },
       { status: 500 }
     );
   }

@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import type { Session } from "next-auth";
 import { signIn, signOut } from "next-auth/react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -10,7 +11,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -44,48 +44,44 @@ import {
   normalizeIntakeClient,
   clientDisplayName,
   clientFirstNameSalutation,
+  canAdvanceIntakeStep,
+  FEDERAL_TAX_BRACKET_IDS,
 } from "@/lib/intake-config";
+import { advisorFetch, AP_SUPABASE_AT, AP_SUPABASE_RT } from "@/lib/advisor-fetch";
+import {
+  normalizeAiAnalysis,
+  normalizeHoldingsForUi,
+  normalizeSavedReviewRow,
+  type NormalizedAiAnalysis as AIAnalysis,
+  type SavedReviewNormalized as SavedReview,
+  type UiHolding as Holding,
+} from "@/lib/saved-review-normalize";
+import {
+  emptyRothWorksheet,
+  normalizeRothWorksheet,
+  parseMoneyInput as parseRothMoneyInput,
+  rothIllustrationQualifiedBalance,
+  type RothWorksheet,
+} from "@/lib/roth-worksheet";
+import { formatMatchedHoldingOptionLabel } from "@/lib/holding-option-display";
+import { flagLikelyDuplicateHoldings } from "@/lib/holding-merge";
+import { validateHoldingLocally } from "@/lib/holding-validation";
+import {
+  accountGroupKey,
+  buildRegistrationSummaryForAnalysis,
+  normalizeRegistrationType,
+  registrationLabel,
+  REGISTRATION_BUCKET_VALUES,
+  rollupAccounts,
+  sumTraditionalQualifiedValue,
+  type RegistrationBucket,
+} from "@/lib/holding-registration";
 import type { LiveIntakeHandoffAction } from "@/lib/live-intake-scripts";
 import { LiveIntakeOverlay } from "../components/live-intake-overlay";
 
 type Client = IntakeClient;
 
 type EmailAuthUser = { email?: string | null };
-
-type Holding = {
-  rawName: string;
-  suggested: string;
-  confidence: number;
-  assetClass: string;
-  value: number;
-  status: string;
-  options: string[];
-};
-
-type AIAnalysis = {
-  synopsis: string;
-  portfolioHighlights?: string[];
-  strategies: string[];
-  redFlags?: string[];
-  overlapInsights?: string[];
-  displayWhatThisMeans?: string[];
-  recommendations: string[];
-  talkingPoints?: string[];
-  advisorOpeningScript?: string;
-  objectionHandling?: string[];
-};
-
-type SavedReview = {
-  id: string;
-  savedAt: string;
-  client: Client;
-  holdings: Holding[];
-  meetingNotes: string;
-  demoMode: boolean;
-  analysis: AIAnalysis | null;
-  status?: string;
-  lastContactedAt?: string;
-};
 
 const ASSET_CLASSES = [
   "U.S. Large Cap Equity",
@@ -116,6 +112,7 @@ const demoHoldings: Holding[] = [
     assetClass: "U.S. Large Cap Equity",
     value: 145000,
     status: "matched",
+    registrationType: "qualified",
     options: ["VFIAX - Vanguard 500 Index Fund Admiral Shares", "VOO - Vanguard S&P 500 ETF", "VFINX - Vanguard 500 Index Investor", "Manual ticker / CUSIP entry"],
   },
   {
@@ -125,6 +122,7 @@ const demoHoldings: Holding[] = [
     assetClass: "Bond Fund",
     value: 82000,
     status: "review",
+    registrationType: "qualified",
     options: ["PONAX - PIMCO Income Fund Class A", "PIMIX - PIMCO Income Fund Institutional", "PONCX - PIMCO Income Fund Class C", "Manual ticker / CUSIP entry"],
   },
   {
@@ -134,6 +132,7 @@ const demoHoldings: Holding[] = [
     assetClass: "Individual Stock",
     value: 42000,
     status: "matched",
+    registrationType: "qualified",
     options: ["AAPL - Apple Inc.", "Manual ticker / CUSIP entry"],
   },
   {
@@ -143,6 +142,7 @@ const demoHoldings: Holding[] = [
     assetClass: "Cash / Money Market",
     value: 21000,
     status: "matched",
+    registrationType: "qualified",
     options: ["Cash Equivalent", "Money Market Fund", "Manual ticker / CUSIP entry"],
   },
 ];
@@ -440,9 +440,11 @@ function LogoBlock({ compact = false }: { compact?: boolean }) {
 
   return (
     <div className="flex items-center gap-3">
-      <img
-        src="/logo.png?v=3"
+      <Image
+        src="/logo.png"
         alt="AdvisorPilot logo"
+        width={96}
+        height={96}
         className="h-16 w-auto rounded-xl object-contain drop-shadow-[0_8px_18px_rgba(14,116,235,0.18)] md:h-[4.5rem]"
         onError={() => setBroken(true)}
       />
@@ -552,6 +554,7 @@ function IntakeShell({
   onNext,
   nextLabel = "Continue",
   backDisabled = false,
+  nextDisabled = false,
   footerCenter,
 }: {
   progress: number;
@@ -563,6 +566,7 @@ function IntakeShell({
   onNext: () => void;
   nextLabel?: string;
   backDisabled?: boolean;
+  nextDisabled?: boolean;
   footerCenter?: React.ReactNode;
 }) {
   return (
@@ -576,7 +580,7 @@ function IntakeShell({
             </div>
             <Progress value={progress} />
             <h2 className="font-serif text-3xl font-bold tracking-tight text-slate-950 md:text-5xl">{title}</h2>
-            <p className="text-lg text-slate-600">{helper}</p>
+            {helper ? <p className="text-lg text-slate-600">{helper}</p> : null}
           </div>
           <div className="ap-soft-panel rounded-3xl p-5 md:p-7">{children}</div>
           {footerCenter ? (
@@ -588,7 +592,7 @@ function IntakeShell({
               </div>
               <div className="order-first flex justify-center px-1 sm:order-none">{footerCenter}</div>
               <div className="flex justify-end">
-                <Button className="h-14 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-6 md:h-12" onClick={onNext}>
+                <Button className="h-14 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-6 md:h-12" onClick={onNext} disabled={nextDisabled}>
                   {nextLabel} <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
               </div>
@@ -598,9 +602,9 @@ function IntakeShell({
               <Button variant="outline" className="h-14 rounded-2xl px-5 md:h-12" onClick={onBack} disabled={backDisabled}>
                 <ArrowLeft className="mr-2 h-4 w-4" /> Back
               </Button>
-              <Button className="h-14 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-6 md:h-12" onClick={onNext}>
-                {nextLabel} <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
+              <Button className="h-14 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-6 md:h-12" onClick={onNext} disabled={nextDisabled}>
+                  {nextLabel} <ArrowRight className="ml-2 h-4 w-4" />
+                </Button>
             </div>
           )}
         </div>
@@ -613,22 +617,6 @@ export default function AdvisorPilotPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
 
-  useEffect(() => {
-    async function loadSession() {
-      try {
-        const res = await fetch("/api/auth/session");
-        const data = await res.json();
-        setSession(data?.user ? data : null);
-        if (data?.user?.email) await loadAdvisorProfile(data.user.email);
-      } catch {
-        setSession(null);
-      } finally {
-        setAuthLoaded(true);
-      }
-    }
-
-    loadSession();
-  }, []);
   const [step, setStep] = useState("intake");
   const [intakeStep, setIntakeStep] = useState(0);
   const [liveIntakeOpen, setLiveIntakeOpen] = useState(false);
@@ -653,13 +641,25 @@ export default function AdvisorPilotPage() {
     lastName: "",
     dob: "",
     age: "",
+    federalTaxBracket: "22",
+    adjustedGrossIncomeAnnual: "",
     retirementAge: "67",
+    retirementSpendableIncomeAnnual: "",
+    socialSecurityMonthlyClient: "",
+    socialSecurityMonthlySpouse: "",
     riskProfile: "moderate-conservative",
     calibration: "risk-profile",
     goal: "Prepare for retirement income while reducing unnecessary downside risk.",
     advisorEmail: "",
+    married: false,
+    spouseFirstName: "",
+    spouseLastName: "",
+    spouseDob: "",
+    spouseAge: "",
+    spouseRetirementAge: "",
+    takingSocialSecurity: false,
   });
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>(demoHoldings);
   const [meetingNotes, setMeetingNotes] = useState("");
   const [demoMode, setDemoMode] = useState(true);
@@ -675,7 +675,6 @@ export default function AdvisorPilotPage() {
   const [clientSearch, setClientSearch] = useState("");
   const [activeReviewId, setActiveReviewId] = useState<string | null>(null);
   const [emailSignature, setEmailSignature] = useState("");
-  const [signatureDraft, setSignatureDraft] = useState("");
   const [showSignatureSetup, setShowSignatureSetup] = useState(false);
   const [signatureName, setSignatureName] = useState("");
   const [signatureTitle, setSignatureTitle] = useState("");
@@ -698,6 +697,16 @@ export default function AdvisorPilotPage() {
   const [magicLinkErr, setMagicLinkErr] = useState("");
   const [magicLinkCopied, setMagicLinkCopied] = useState(false);
   const [followUpEmailSendingId, setFollowUpEmailSendingId] = useState<string | null>(null);
+  const [rothWorksheet, setRothWorksheet] = useState<RothWorksheet>(() => emptyRothWorksheet());
+
+  const handleEmailSessionExpired = useCallback(() => {
+    setEmailAuthUser(null);
+    setAuthMessage("Session expired—sign in again.");
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem(AP_SUPABASE_AT);
+      sessionStorage.removeItem(AP_SUPABASE_RT);
+    }
+  }, []);
 
   const advisorVoiceName = useMemo(() => {
     const fromProfile = signatureName.trim();
@@ -712,8 +721,28 @@ export default function AdvisorPilotPage() {
   }, [signatureName, session?.user?.name, session?.user?.email, emailAuthUser?.email]);
 
   const derivedAge = useMemo(() => (client.age ? Number(client.age) : getAgeFromDob(client.dob)), [client.age, client.dob]);
+  const intakeContinueDisabled = !canAdvanceIntakeStep(intakeStep, client);
+  // Roth UI: always visible for testing. Restore age gate: derivedAge != null && Number.isFinite(derivedAge) && derivedAge >= 60
+  const showRothOptionReport = true;
+
+  const wizardSteps = useMemo(() => {
+    const core = ["intake", "upload", "confirm", "analysis", "meeting", "report"] as const;
+    return showRothOptionReport
+      ? ([...core, "roth", "saved"] as const)
+      : ([...core, "saved"] as const);
+  }, [showRothOptionReport]);
+
   const totalValue = useMemo(() => holdings.reduce((sum, h) => sum + Number(h.value || 0), 0), [holdings]);
+  const traditionalQualifiedTotal = useMemo(() => sumTraditionalQualifiedValue(holdings), [holdings]);
+  const rothPdfQualifiedTotal = useMemo(
+    () => rothIllustrationQualifiedBalance(rothWorksheet, totalValue || 0, traditionalQualifiedTotal),
+    [rothWorksheet, totalValue, traditionalQualifiedTotal]
+  );
+  const registrationTotals = useMemo(() => buildRegistrationSummaryForAnalysis(holdings), [holdings]);
+  const accountRollups = useMemo(() => rollupAccounts(holdings), [holdings]);
+
   const reviewCount = holdings.filter((h) => h.confidence < 75 || h.status === "review").length;
+  const duplicateCount = holdings.filter((h) => h.duplicateOfIndex !== undefined).length;
   /** Real statements: no deep analysis until the confirmation table is clean. Demo mode keeps the sample path usable. */
   const canRunDeepAnalysis = demoMode || reviewCount === 0;
 
@@ -793,7 +822,7 @@ export default function AdvisorPilotPage() {
     const handle = window.setTimeout(async () => {
       setDraftAutosaveStatus("saving");
       try {
-        const res = await fetch("/api/client-database", {
+        const res = await advisorFetch("/api/client-database", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -806,7 +835,9 @@ export default function AdvisorPilotPage() {
             analysis: null,
             totalValue,
             status: "Draft",
+            rothWorksheet,
           }),
+          onEmailSessionExpired: handleEmailSessionExpired,
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data?.error || "Draft save failed.");
@@ -821,7 +852,27 @@ export default function AdvisorPilotPage() {
     }, 2500);
 
     return () => window.clearTimeout(handle);
-  }, [step, demoMode, holdings, client, meetingNotes, activeReviewId, totalValue, session, emailAuthUser]);
+  }, [
+    step,
+    demoMode,
+    holdings,
+    client,
+    meetingNotes,
+    activeReviewId,
+    totalValue,
+    session,
+    emailAuthUser,
+    handleEmailSessionExpired,
+    rothWorksheet,
+  ]);
+
+  useEffect(() => {
+    if (!showRothOptionReport && step === "roth") {
+      const t = window.setTimeout(() => setStep("report"), 0);
+      return () => window.clearTimeout(t);
+    }
+    return undefined;
+  }, [showRothOptionReport, step]);
 
   const fallbackSynopsis = `Based on the client profile and confirmed holdings, the portfolio review focuses on whether the current allocation remains appropriate for the client’s age, retirement timeline, and risk profile. Current allocation appears to be approximately ${currentAllocation.equity}% equity, ${currentAllocation.fixedIncome}% fixed income, and ${currentAllocation.cash}% cash. The proposed allocation shown is ${target.equity}% equity, ${target.fixedIncome}% fixed income, and ${target.cash}% cash. Final recommendations should be reviewed by the advisor in the context of the client’s full financial plan, liquidity needs, tax situation, and income goals.`;
 
@@ -963,7 +1014,15 @@ export default function AdvisorPilotPage() {
     `Current portfolio appears to be approximately ${currentAllocation.equity}% equity, ${currentAllocation.fixedIncome}% fixed income, and ${currentAllocation.cash}% cash.`,
     `Based on the selected calibration, the proposed allocation is approximately ${target.equity}% equity, ${target.fixedIncome}% fixed income, and ${target.cash}% cash.`,
     reviewCount > 0 ? `${reviewCount} holding${reviewCount === 1 ? "" : "s"} require advisor confirmation before final analysis.` : "All holdings are currently matched above the confidence threshold.",
-    demoMode ? "Demo mode is on. The current holdings are sample data until OCR + AI extraction is connected." : "Analysis is based on uploaded statement data.",
+    duplicateCount > 0 ? `${duplicateCount} possible duplicate holding${duplicateCount === 1 ? "" : "s"} detected across uploaded files/pages.` : "No likely duplicate holdings detected across uploaded files/pages.",
+    demoMode
+      ? "Demo mode is on. The sample holdings include illustrative tax registrations only."
+      : "Analysis pulls both allocation and tax registration from your confirmed holdings (qualified vs taxable vs Roth).",
+    ...(demoMode
+      ? [`Illustrative tax-deferred aggregate in demo is ${currency(traditionalQualifiedTotal)} (entire demo balance marked traditional).`]
+      : [
+          `Registration mix — traditional tax-deferred ≈ ${currency(registrationTotals.traditionalQualifiedValue)}; non-qualified taxable ≈ ${currency(registrationTotals.nonQualifiedValue)}; Roth IRA ≈ ${currency(registrationTotals.rothValue)}${registrationTotals.unknownValue ? `; unknown wrappers ≈ ${currency(registrationTotals.unknownValue)}` : ""}.`,
+        ]),
   ];
 
   function normalizeOptions(h: Holding) {
@@ -973,13 +1032,33 @@ export default function AdvisorPilotPage() {
   }
 
   function updateHolding(index: number, updates: Partial<Holding>) {
-    setHoldings((prev) => prev.map((h, i) => (i === index ? { ...h, ...updates } : h)));
+    setHoldings((prev) =>
+      prev.map((h, i) => {
+        if (i !== index) return h;
+        let next = { ...h, ...updates };
+        if (updates.registrationType !== undefined) {
+          next = { ...next, registrationType: normalizeRegistrationType(updates.registrationType) };
+        }
+        return { ...next, ...validateHoldingLocally(next) };
+      })
+    );
+    setAnalysis(null);
+  }
+
+  function applyRegistrationForAccountKey(accountKey: string, registration: RegistrationBucket) {
+    setHoldings((prev) =>
+      prev.map((h) => {
+        if (accountGroupKey(h) !== accountKey) return h;
+        const next = { ...h, registrationType: registration };
+        return { ...next, ...validateHoldingLocally(next) };
+      })
+    );
     setAnalysis(null);
   }
 
   async function handleExtractHoldings() {
-    if (!uploadedFile) {
-      setExtractError("Please upload a PDF, screenshot, or photo first.");
+    if (uploadedFiles.length === 0) {
+      setExtractError("Please upload at least one PDF, screenshot, or photo first.");
       return;
     }
 
@@ -990,7 +1069,7 @@ export default function AdvisorPilotPage() {
       setAnalysis(null);
 
       const formData = new FormData();
-      formData.append("file", uploadedFile);
+      uploadedFiles.forEach((file) => formData.append("files", file));
       formData.append("client", JSON.stringify(client));
 
       const response = await fetch("/api/analyze-statement", { method: "POST", body: formData });
@@ -1007,15 +1086,14 @@ export default function AdvisorPilotPage() {
         throw new Error("No holdings were extracted from the statement. Try a clearer image or PDF.");
       }
 
-      const cleaned = extractedHoldings.map((h: Holding) => ({
-        rawName: h.rawName || "Unknown holding",
-        suggested: h.suggested || "Needs advisor confirmation",
-        confidence: Number(h.confidence || 0),
-        assetClass: h.assetClass || "Unknown",
-        value: Number(h.value || 0),
-        status: Number(h.confidence || 0) >= 75 ? "matched" : "review",
-        options: Array.isArray(h.options) && h.options.length > 0 ? h.options : [h.suggested || "Needs advisor confirmation", "Manual ticker / CUSIP entry"],
-      }));
+      const normalizedExtracted: Holding[] = normalizeHoldingsForUi(extractedHoldings).map((h) => {
+        const next = {
+          ...h,
+          status: Number(h.confidence || 0) >= 75 ? "matched" : "review",
+        };
+        return { ...next, ...validateHoldingLocally(next) };
+      });
+      const cleaned = flagLikelyDuplicateHoldings(normalizedExtracted);
 
       setHoldings(cleaned);
       setDemoMode(false);
@@ -1096,15 +1174,12 @@ export default function AdvisorPilotPage() {
     const owner = getCurrentOwnerEmail();
     if (!owner) return { ok: false, error: "Sign in to create a client upload link." };
 
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    const at = typeof window !== "undefined" ? sessionStorage.getItem("ap_supabase_at") : null;
-    if (at) headers.Authorization = `Bearer ${at}`;
-
     try {
-      const res = await fetch("/api/client-upload-token", {
+      const res = await advisorFetch("/api/client-upload-token", {
         method: "POST",
-        headers,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
+        onEmailSessionExpired: handleEmailSessionExpired,
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1197,10 +1272,12 @@ export default function AdvisorPilotPage() {
         onClick={() => setLiveIntakeOpen(true)}
         className="group inline-flex flex-col items-center gap-2 rounded-2xl bg-transparent px-2 py-1 text-center transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2"
       >
-        <img
-          src="/logo.png?v=3"
+        <Image
+          src="/logo.png"
           alt=""
           aria-hidden
+          width={96}
+          height={96}
           className="h-16 w-auto rounded-xl object-contain drop-shadow-[0_8px_18px_rgba(14,116,235,0.18)] transition group-hover:drop-shadow-[0_12px_24px_rgba(14,116,235,0.32)] md:h-[4.5rem]"
         />
         <span className="font-serif text-sm font-semibold leading-tight tracking-tight text-blue-900 transition group-hover:text-blue-950">
@@ -1221,7 +1298,10 @@ export default function AdvisorPilotPage() {
     }
 
     try {
-      const res = await fetch(`/api/client-database?ownerEmail=${encodeURIComponent(ownerEmail)}`);
+      const res = await advisorFetch("/api/client-database", {
+        headers: {},
+        onEmailSessionExpired: handleEmailSessionExpired,
+      });
       const data = await res.json();
 
       if (!res.ok) {
@@ -1230,7 +1310,11 @@ export default function AdvisorPilotPage() {
         return;
       }
 
-      setSavedReviews(Array.isArray(data.clients) ? data.clients : []);
+      setSavedReviews(
+        (Array.isArray(data.clients) ? data.clients : []).map((row: unknown) =>
+          normalizeSavedReviewRow(row)
+        )
+      );
     } catch {
       setSaveMessage("Could not load client database.");
       setSavedReviews([]);
@@ -1246,11 +1330,9 @@ export default function AdvisorPilotPage() {
     }
 
     try {
-      const res = await fetch("/api/client-database", {
+      const res = await advisorFetch("/api/client-database", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: activeReviewId,
           ownerEmail,
@@ -1261,7 +1343,9 @@ export default function AdvisorPilotPage() {
           analysis,
           totalValue,
           status: analysis ? "Analyzed" : activeReviewId ? undefined : "Analyzed",
+          rothWorksheet,
         }),
+        onEmailSessionExpired: handleEmailSessionExpired,
       });
 
       const data = await res.json();
@@ -1283,10 +1367,11 @@ export default function AdvisorPilotPage() {
   function openSavedReview(review: SavedReview) {
     setActiveReviewId(review.id);
     setClient(normalizeIntakeClient(review.client));
-    setHoldings(review.holdings);
+    setHoldings(normalizeHoldingsForUi(review.holdings));
     setMeetingNotes(review.meetingNotes || "");
     setDemoMode(Boolean(review.demoMode));
-    setAnalysis(review.analysis || null);
+    setAnalysis(normalizeAiAnalysis(review.analysis));
+    setRothWorksheet(normalizeRothWorksheet(review.rothWorksheet));
     setFollowUpEmail("");
     setEmailCopied(false);
     const resumeConfirm =
@@ -1418,7 +1503,7 @@ export default function AdvisorPilotPage() {
 
       const ownerEmail = getCurrentOwnerEmail();
       if (ownerEmail) {
-        await fetch("/api/client-database", {
+        await advisorFetch("/api/client-database", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1432,7 +1517,9 @@ export default function AdvisorPilotPage() {
             totalValue: ctx.totalValue,
             status: "Report Sent",
             lastContactedAt: new Date().toISOString(),
+            rothWorksheet: review.rothWorksheet ?? null,
           }),
+          onEmailSessionExpired: handleEmailSessionExpired,
         });
         await loadSavedReviews();
       }
@@ -1449,15 +1536,16 @@ export default function AdvisorPilotPage() {
   function updateAnalysisFromDatabase(review: SavedReview) {
     setActiveReviewId(review.id);
     setClient(normalizeIntakeClient(review.client));
-    setHoldings(review.holdings);
+    setHoldings(normalizeHoldingsForUi(review.holdings));
     setMeetingNotes(review.meetingNotes || "");
     setDemoMode(Boolean(review.demoMode));
     setAnalysis(null);
     setFollowUpEmail("");
     setEmailCopied(false);
-    setUploadedFile(null);
+    setUploadedFiles([]);
     setExtractError("");
     setStep("upload");
+    setRothWorksheet(normalizeRothWorksheet(review.rothWorksheet));
   }
 
   async function deleteSavedReview(id: string) {
@@ -1469,15 +1557,14 @@ export default function AdvisorPilotPage() {
     }
 
     try {
-      const res = await fetch("/api/client-database", {
+      const res = await advisorFetch("/api/client-database", {
         method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ownerEmail,
           id,
         }),
+        onEmailSessionExpired: handleEmailSessionExpired,
       });
 
       const data = await res.json();
@@ -1563,11 +1650,17 @@ export default function AdvisorPilotPage() {
     return emailSignature.trim() || composeEmailSignature().trim() || "[Email signature]";
   }
 
-  async function loadAdvisorProfile(ownerEmail = getCurrentOwnerEmail()) {
+  const loadAdvisorProfile = useCallback(async (ownerEmailOverride?: string) => {
+    const ownerEmail =
+      ownerEmailOverride ||
+      String(session?.user?.email || emailAuthUser?.email || "").trim().toLowerCase();
     if (!ownerEmail) return;
 
     try {
-      const res = await fetch(`/api/advisor-profile?ownerEmail=${encodeURIComponent(ownerEmail)}`);
+      const res = await advisorFetch("/api/advisor-profile", {
+        headers: {},
+        onEmailSessionExpired: handleEmailSessionExpired,
+      });
       const data = await res.json();
 
       if (!res.ok) return;
@@ -1581,7 +1674,6 @@ export default function AdvisorPilotPage() {
           : "";
 
       setEmailSignature(savedSignature);
-      setSignatureDraft(savedSignature);
 
       setSignatureName(profile.advisorName || "");
       setSignatureTitle(profile.advisorTitle || "");
@@ -1596,7 +1688,40 @@ export default function AdvisorPilotPage() {
     } catch {
       // Non-blocking. The app can still run without a saved advisor profile.
     }
-  }
+  }, [emailAuthUser?.email, handleEmailSessionExpired, session?.user?.email]);
+
+  useEffect(() => {
+    async function loadSession() {
+      try {
+        const res = await fetch("/api/auth/session");
+        const data = await res.json();
+        setSession(data?.user ? data : null);
+        if (data?.user?.email) await loadAdvisorProfile(data.user.email);
+        if (!data?.user && typeof window !== "undefined") {
+          const at = sessionStorage.getItem(AP_SUPABASE_AT);
+          if (at) {
+            const emailRes = await fetch("/api/auth/email-session", {
+              headers: { Authorization: `Bearer ${at}` },
+            });
+            const emailData = await emailRes.json().catch(() => ({}));
+            if (emailRes.ok && emailData?.user?.email) {
+              setEmailAuthUser(emailData.user as EmailAuthUser);
+              await loadAdvisorProfile(emailData.user.email);
+            } else {
+              sessionStorage.removeItem(AP_SUPABASE_AT);
+              sessionStorage.removeItem(AP_SUPABASE_RT);
+            }
+          }
+        }
+      } catch {
+        setSession(null);
+      } finally {
+        setAuthLoaded(true);
+      }
+    }
+
+    loadSession();
+  }, [loadAdvisorProfile]);
 
   async function saveAdvisorProfile() {
     const ownerEmail = getCurrentOwnerEmail();
@@ -1607,11 +1732,9 @@ export default function AdvisorPilotPage() {
     }
 
     try {
-      const res = await fetch("/api/advisor-profile", {
+      const res = await advisorFetch("/api/advisor-profile", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ownerEmail,
           advisorName: signatureName,
@@ -1624,6 +1747,7 @@ export default function AdvisorPilotPage() {
           website: signatureWebsite,
           emailSignature: composeEmailSignature(),
         }),
+        onEmailSessionExpired: handleEmailSessionExpired,
       });
 
       const data = await res.json();
@@ -1634,7 +1758,6 @@ export default function AdvisorPilotPage() {
       }
 
       setEmailSignature(data?.profile?.emailSignature || composeEmailSignature());
-      setSignatureDraft(data?.profile?.emailSignature || composeEmailSignature());
 
       setSignatureName(data?.profile?.advisorName || signatureName);
       setSignatureTitle(data?.profile?.advisorTitle || signatureTitle);
@@ -1657,11 +1780,9 @@ export default function AdvisorPilotPage() {
     if (!ownerEmail) return;
 
     try {
-      const res = await fetch("/api/client-database", {
+      const res = await advisorFetch("/api/client-database", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: activeReviewId,
           ownerEmail,
@@ -1673,7 +1794,9 @@ export default function AdvisorPilotPage() {
           totalValue,
           status: "Report Sent",
           lastContactedAt: new Date().toISOString(),
+          rothWorksheet,
         }),
+        onEmailSessionExpired: handleEmailSessionExpired,
       });
 
       const data = await res.json();
@@ -1745,6 +1868,12 @@ async function handleEmailLogin() {
     setEmailAuthUser(
       data.user && typeof data.user === "object" ? (data.user as EmailAuthUser) : null
     );
+    if (typeof window !== "undefined" && data.session?.access_token) {
+      sessionStorage.setItem(AP_SUPABASE_AT, data.session.access_token);
+    }
+    if (typeof window !== "undefined" && data.session?.refresh_token) {
+      sessionStorage.setItem(AP_SUPABASE_RT, data.session.refresh_token);
+    }
     setAuthMessage("Logged in successfully.");
     await loadAdvisorProfile(data.user?.email);
   } catch {
@@ -1756,54 +1885,12 @@ function handleEmailPasswordLogout() {
   setEmailAuthUser(null);
   setAuthEmail("");
   setAuthPassword("");
-  if (typeof window !== "undefined") sessionStorage.removeItem("ap_supabase_at");
+  if (typeof window !== "undefined") {
+    sessionStorage.removeItem(AP_SUPABASE_AT);
+    sessionStorage.removeItem(AP_SUPABASE_RT);
+  }
   setAuthMessage("Signed out.");
 }
-
-function handleEmailReport() {
-  const to = client.advisorEmail || "";
-  const subject = `AdvisorPilot Portfolio Review - ${clientDisplayName(client) || "Client"}`;
-
-  const emailLines = [
-    "Portfolio Review Snapshot",
-    "",
-    `Client: ${clientDisplayName(client) || "Client"}`,
-    `Age: ${derivedAge || "N/A"}`,
-    `Risk Profile: ${client.riskProfile.replace("-", " ")}`,
-    "",
-    "Current Allocation:",
-    `Equity: ${currentAllocation.equity}%`,
-    `Fixed Income: ${currentAllocation.fixedIncome}%`,
-    `Cash: ${currentAllocation.cash}%`,
-    "",
-    "Proposed Allocation:",
-    `Equity: ${target.equity}%`,
-    `Fixed Income: ${target.fixedIncome}%`,
-    `Cash: ${target.cash}%`,
-    "",
-    "Synopsis:",
-    displaySynopsis,
-    "",
-    "Strategic Considerations:",
-    ...displayStrategies.map((s) => `- ${s}`),
-    "",
-    "Advisor Example Recommendations:",
-    ...displayRecommendations.map((r) => `- ${r}`),
-    "",
-    "Note: Use Download PDF Report to create and attach the PDF version.",
-  ];
-
-  const body = emailLines.join("\n");
-
-  window.location.href =
-    "mailto:" +
-    to +
-    "?subject=" +
-    encodeURIComponent(subject) +
-    "&body=" +
-    encodeURIComponent(body);
-}
-
 
 async function sendClientSnapshotEmail() {
   try {
@@ -1859,6 +1946,7 @@ async function sendClientSnapshotEmail() {
         emailBody: generatedEmailBody,
         emailSignature: getCleanEmailSignature(),
         calendarLink: signatureCalendarLink,
+        clientId: activeReviewId,
         client,
         analysis: {
           synopsis: displaySynopsis,
@@ -1912,6 +2000,81 @@ async function sendClientSnapshotEmail() {
   } catch (err) {
     console.error(err);
     alert("Error sending email.");
+  }
+}
+
+async function runRothReportDownload(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch("/api/generate-roth-report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client,
+        totalValue: rothPdfQualifiedTotal || 0,
+        rothWorksheet,
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      let msg = errText;
+      try {
+        const j = JSON.parse(errText) as { error?: string };
+        if (j?.error) msg = j.error;
+      } catch {
+        /* use raw */
+      }
+      return { ok: false, error: msg || "Could not generate Roth Option PDF." };
+    }
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "Roth_Option.pdf";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    return { ok: true };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, error: "Failed to download Roth Option PDF." };
+  }
+}
+
+async function downloadRothOptionPdf() {
+  if (!showRothOptionReport) {
+    alert("Roth Option is available for clients age 60 and older.");
+    return;
+  }
+  const out = await runRothReportDownload();
+  if (!out.ok) alert(out.error || "Could not generate Roth Option PDF.");
+}
+
+async function runRothAnalysisWithTaxPrecheck() {
+  if (!showRothOptionReport) {
+    alert("Roth Option is available for clients age 60 and older.");
+    return;
+  }
+  try {
+    const pre = await fetch("/api/roth-analysis", { method: "POST" });
+    const j = (await pre.json().catch(() => ({}))) as {
+      ok?: boolean;
+      proceed?: boolean;
+      error?: string;
+      messages?: string[];
+    };
+    if (!pre.ok || !j.ok || j.proceed === false) {
+      alert(String(j.error || "Roth analysis tax-parameter check did not complete."));
+      return;
+    }
+    if (Array.isArray(j.messages) && j.messages.length > 0 && typeof window !== "undefined") {
+      window.console.info("[Roth analysis]", j.messages.join("\n"));
+    }
+    const out = await runRothReportDownload();
+    if (!out.ok) alert(out.error || "Could not generate Roth report after pre-check.");
+  } catch (e) {
+    console.error(e);
+    alert("Roth analysis failed.");
   }
 }
 
@@ -1981,24 +2144,6 @@ async function downloadPDFReport(mode: "client" | "advisor") {
     alert("Failed to generate PDF report.");
   }
 }
-
-  function openGmailWithFollowUp() {
-    const emailText = followUpEmail || "";
-    const subjectLine = "Next Steps from Our Portfolio Review";
-    const body = emailText.replace(/^Subject:.*\n\n/, "");
-    const url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(client.advisorEmail || "")}&su=${encodeURIComponent(subjectLine)}&body=${encodeURIComponent(body)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
-    markCurrentClientContacted();
-  }
-
-  function openOutlookWithFollowUp() {
-    const emailText = followUpEmail || "";
-    const subjectLine = "Next Steps from Our Portfolio Review";
-    const body = emailText.replace(/^Subject:.*\n\n/, "");
-    const url = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(client.advisorEmail || "")}&subject=${encodeURIComponent(subjectLine)}&body=${encodeURIComponent(body)}`;
-    window.open(url, "_blank", "noopener,noreferrer");
-    markCurrentClientContacted();
-  }
 
   function buildFollowUpEmail() {
     const firstName = clientFirstNameSalutation(client);
@@ -2216,8 +2361,27 @@ async function downloadPDFReport(mode: "client" | "advisor") {
           </div>
         </header>
 
-        <div className="app-nav grid grid-cols-2 gap-2 md:grid-cols-7">
-          {["intake", "upload", "confirm", "analysis", "meeting", "report", "saved"].map((item, i) => <StepButton key={item} label={item === "saved" ? "Client Database" : item} index={i + 1} active={step === item} onClick={() => { if (item === "saved") loadSavedReviews(); setStep(item); }} />)}
+        <div
+          className={`app-nav grid grid-cols-2 gap-2 ${showRothOptionReport ? "md:grid-cols-4 lg:grid-cols-8" : "md:grid-cols-4 lg:grid-cols-7"}`}
+        >
+          {wizardSteps.map((item, i) => (
+            <StepButton
+              key={item}
+              label={
+                item === "saved"
+                  ? "Client Database"
+                  : item === "intake"
+                    ? "Client Profile"
+                    : item
+              }
+              index={i + 1}
+              active={step === item}
+              onClick={() => {
+                if (item === "saved") loadSavedReviews();
+                setStep(item);
+              }}
+            />
+          ))}
         </div>
 
         {saveMessage && (
@@ -2309,7 +2473,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
           />
         )}
         <div key={`${step}-${step === "intake" ? intakeStep : "main"}`} className="ap-step-enter">
-        {step === "intake" && intakeStep === 0 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[0].eyebrow} title={INTAKE_STEPS[0].title} helper={INTAKE_STEPS[0].helper} onBack={backIntake} backDisabled onNext={nextIntake} footerCenter={liveIntakeFooter}><div className="space-y-4">
+        {step === "intake" && intakeStep === 0 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[0].eyebrow} title={INTAKE_STEPS[0].title} helper={INTAKE_STEPS[0].helper} onBack={backIntake} backDisabled onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4">
   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
     <div>
       <label className="text-sm font-semibold text-slate-700">First name</label>
@@ -2321,12 +2485,50 @@ async function downloadPDFReport(mode: "client" | "advisor") {
     </div>
   </div>
   <div>
-    <label className="text-sm font-semibold text-slate-700">Client email (Client Snapshot recipient)</label>
+    <label className="text-sm font-semibold text-slate-700">Client email</label>
     <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="email" value={client.advisorEmail} onChange={(e) => setClient({ ...client, advisorEmail: e.target.value })} placeholder="client@email.com" />
-    <p className="mt-2 text-sm text-slate-500">This is the client&apos;s inbox for the snapshot PDF / Gmail send — not your advisor login. Your identity comes from the account you&apos;re signed into and your email signature.</p>
   </div>
+  <div className="flex items-center justify-between gap-4 rounded-2xl border border-blue-100 bg-white px-4 py-3">
+    <span className="text-sm font-semibold text-slate-700">Married?</span>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={client.married}
+      onClick={() =>
+        setClient((c) =>
+          c.married
+            ? {
+                ...c,
+                married: false,
+                spouseFirstName: "",
+                spouseLastName: "",
+                spouseDob: "",
+                spouseAge: "",
+                spouseRetirementAge: "",
+                socialSecurityMonthlySpouse: "",
+              }
+            : { ...c, married: true }
+        )
+      }
+      className={`relative h-8 w-14 shrink-0 rounded-full transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${client.married ? "bg-sky-500" : "bg-slate-200"}`}
+    >
+      <span className={`absolute top-1 left-1 block h-6 w-6 rounded-full bg-white shadow transition-transform ${client.married ? "translate-x-6" : "translate-x-0"}`} />
+    </button>
+  </div>
+  {client.married ? (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div>
+        <label className="text-sm font-semibold text-slate-700">Spouse first name</label>
+        <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.spouseFirstName} onChange={(e) => setClient({ ...client, spouseFirstName: e.target.value })} placeholder="Alex" />
+      </div>
+      <div>
+        <label className="text-sm font-semibold text-slate-700">Spouse last name</label>
+        <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.spouseLastName} onChange={(e) => setClient({ ...client, spouseLastName: e.target.value })} placeholder="Smith" />
+      </div>
+    </div>
+  ) : null}
 </div></IntakeShell>}
-        {step === "intake" && intakeStep === 1 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[1].eyebrow} title={INTAKE_STEPS[1].title} helper={INTAKE_STEPS[1].helper} onBack={backIntake} onNext={nextIntake} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Date of birth</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="date" value={client.dob} onChange={(e) => {
+        {step === "intake" && intakeStep === 1 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[1].eyebrow} title={INTAKE_STEPS[1].title} helper={INTAKE_STEPS[1].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-6"><div><p className="text-sm font-semibold text-slate-800">Client</p><div className="mt-2 grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Date of birth</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="date" value={client.dob} onChange={(e) => {
   const dob = e.target.value;
   const calculatedAge = getAgeFromDob(dob);
   setClient({
@@ -2334,11 +2536,23 @@ async function downloadPDFReport(mode: "client" | "advisor") {
     dob,
     age: calculatedAge !== null ? String(calculatedAge) : client.age,
   });
-}} /></div><div><label className="text-sm font-semibold text-slate-700">Or age</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.age} onChange={(e) => setClient({ ...client, age: e.target.value })} placeholder="62" /></div></div></IntakeShell>}
-        {step === "intake" && intakeStep === 2 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[2].eyebrow} title={INTAKE_STEPS[2].title} helper={INTAKE_STEPS[2].helper} onBack={backIntake} onNext={nextIntake} footerCenter={liveIntakeFooter}><label className="text-sm font-semibold text-slate-700">Expected retirement age</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.retirementAge} onChange={(e) => setClient({ ...client, retirementAge: e.target.value })} placeholder="67" /></IntakeShell>}
-        {step === "intake" && intakeStep === 3 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[3].eyebrow} title={INTAKE_STEPS[3].title} helper={INTAKE_STEPS[3].helper} onBack={backIntake} onNext={nextIntake} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3 md:grid-cols-2">{["conservative", "moderate-conservative", "moderate", "moderate-growth", "aggressive"].map((risk) => <button key={risk} onClick={() => setClient({ ...client, riskProfile: risk })} className={`rounded-2xl border p-4 text-left capitalize transition ${client.riskProfile === risk ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}>{risk.replace("-", " ")}</button>)}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 4 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[4].eyebrow} title={INTAKE_STEPS[4].title} helper={INTAKE_STEPS[4].helper} onBack={backIntake} onNext={nextIntake} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3">{[["risk-profile", "Use stated risk profile", "Best default for advisor-reviewed recommendations."], ["age-default", "Run default based on age", "Good if no risk questionnaire has been completed yet."], ["income-goal", "Retirement income goal", "Best for near-retirees who need income and lower volatility."], ["custom", "Custom advisor model", "Use your own allocation model later."]].map(([value, title, desc]) => <button key={value} onClick={() => setClient({ ...client, calibration: value })} className={`rounded-2xl border p-4 text-left transition ${client.calibration === value ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}><div className="font-semibold">{title}</div><div className={`mt-1 text-sm ${client.calibration === value ? "text-blue-100" : "text-slate-500"}`}>{desc}</div></button>)}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 5 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[5].eyebrow} title={INTAKE_STEPS[5].title} helper={INTAKE_STEPS[5].helper} onBack={backIntake} onNext={nextIntake} footerCenter={liveIntakeFooter}><Textarea className="min-h-40 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.goal} onChange={(e) => setClient({ ...client, goal: e.target.value })} placeholder="Example: Wants retirement income, less market risk, and tax-efficient withdrawals." /></IntakeShell>}
+}} /></div><div><label className="text-sm font-semibold text-slate-700">Or age</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.age} onChange={(e) => setClient({ ...client, age: e.target.value })} placeholder="62" /></div></div></div>{client.married ? (<div><p className="text-sm font-semibold text-slate-800">Spouse</p><div className="mt-2 grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Date of birth</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="date" value={client.spouseDob} onChange={(e) => {
+  const spouseDob = e.target.value;
+  const calculatedAge = getAgeFromDob(spouseDob);
+  setClient({
+    ...client,
+    spouseDob,
+    spouseAge: calculatedAge !== null ? String(calculatedAge) : client.spouseAge,
+  });
+}} /></div><div><label className="text-sm font-semibold text-slate-700">Or age</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.spouseAge} onChange={(e) => setClient({ ...client, spouseAge: e.target.value })} placeholder="60" /></div></div></div>) : null}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 2 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[2].eyebrow} title={INTAKE_STEPS[2].title} helper={INTAKE_STEPS[2].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Adjusted Gross Income (AGI), most recent federal return</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.adjustedGrossIncomeAnnual} onChange={(e) => setClient({ ...client, adjustedGrossIncomeAnnual: e.target.value })} placeholder="165432" /></div><p className="mt-2 text-sm text-slate-500">Use Form 1040 AGI for the latest filed year—for illustration only, not a tax determination.</p></div></IntakeShell>}
+        {step === "intake" && intakeStep === 3 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[3].eyebrow} title={INTAKE_STEPS[3].title} helper={INTAKE_STEPS[3].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Marginal federal tax bracket</label><Select value={FEDERAL_TAX_BRACKET_IDS.includes(client.federalTaxBracket as (typeof FEDERAL_TAX_BRACKET_IDS)[number]) ? client.federalTaxBracket : "22"} onValueChange={(value) => setClient({ ...client, federalTaxBracket: value })}><SelectTrigger className="mt-2 h-14 rounded-2xl"><SelectValue /></SelectTrigger><SelectContent>{FEDERAL_TAX_BRACKET_IDS.map((id) => <SelectItem key={id} value={id}>{id}% bracket</SelectItem>)}</SelectContent></Select><p className="mt-2 text-sm text-slate-500">Used for illustrative tax math in reports (not a tax determination).</p></div></IntakeShell>}
+        {step === "intake" && intakeStep === 4 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[4].eyebrow} title={INTAKE_STEPS[4].title} helper={INTAKE_STEPS[4].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4"><div><label className="text-sm font-semibold text-slate-700">Expected retirement age (client)</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.retirementAge} onChange={(e) => setClient({ ...client, retirementAge: e.target.value })} placeholder="67" /></div>{client.married ? (<div><label className="text-sm font-semibold text-slate-700">Expected retirement age (spouse)</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.spouseRetirementAge} onChange={(e) => setClient({ ...client, spouseRetirementAge: e.target.value })} placeholder="67" /></div>) : null}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 5 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[5].eyebrow} title={INTAKE_STEPS[5].title} helper={INTAKE_STEPS[5].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Annual spendable income in retirement</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.retirementSpendableIncomeAnnual} onChange={(e) => setClient({ ...client, retirementSpendableIncomeAnnual: e.target.value })} placeholder="85000" /></div></div></IntakeShell>}
+        {step === "intake" && intakeStep === 6 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[6].eyebrow} title={INTAKE_STEPS[6].title} helper={INTAKE_STEPS[6].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4"><div className="flex items-center justify-between gap-4 rounded-2xl border border-blue-100 bg-white px-4 py-3"><span className="text-sm font-semibold text-slate-700">Taking Social Security?</span><button type="button" role="switch" aria-checked={client.takingSocialSecurity} onClick={() => setClient((c) => (c.takingSocialSecurity ? { ...c, takingSocialSecurity: false, socialSecurityMonthlyClient: "", socialSecurityMonthlySpouse: "" } : { ...c, takingSocialSecurity: true }))} className={`relative h-8 w-14 shrink-0 rounded-full transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${client.takingSocialSecurity ? "bg-sky-500" : "bg-slate-200"}`}><span className={`absolute top-1 left-1 block h-6 w-6 rounded-full bg-white shadow transition-transform ${client.takingSocialSecurity ? "translate-x-6" : "translate-x-0"}`} /></button></div>{client.takingSocialSecurity ? (<div className="space-y-4">{client.married ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Client monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div><div><label className="text-sm font-semibold text-slate-700">Spouse monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlySpouse} onChange={(e) => setClient({ ...client, socialSecurityMonthlySpouse: e.target.value })} placeholder="1800" /></div></div></div> : <div><label className="text-sm font-semibold text-slate-700">Monthly Social Security amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div>}</div>) : <p className="text-sm text-slate-500">Leave this off if the household is not receiving benefits yet. You can continue without entering amounts.</p>}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 7 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[7].eyebrow} title={INTAKE_STEPS[7].title} helper={INTAKE_STEPS[7].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3 md:grid-cols-2">{["conservative", "moderate-conservative", "moderate", "moderate-growth", "aggressive"].map((risk) => <button key={risk} onClick={() => setClient({ ...client, riskProfile: risk })} className={`rounded-2xl border p-4 text-left capitalize transition ${client.riskProfile === risk ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}>{risk.replace("-", " ")}</button>)}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 8 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[8].eyebrow} title={INTAKE_STEPS[8].title} helper={INTAKE_STEPS[8].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3">{[["risk-profile", "Use stated risk profile", "Best default for advisor-reviewed recommendations."], ["age-default", "Run default based on age", "Good if no risk questionnaire has been completed yet."], ["income-goal", "Retirement income goal", "Best for near-retirees who need income and lower volatility."], ["custom", "Custom advisor model", "Use your own allocation model later."]].map(([value, title, desc]) => <button key={value} onClick={() => setClient({ ...client, calibration: value })} className={`rounded-2xl border p-4 text-left transition ${client.calibration === value ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}><div className="font-semibold">{title}</div><div className={`mt-1 text-sm ${client.calibration === value ? "text-blue-100" : "text-slate-500"}`}>{desc}</div></button>)}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 9 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[9].eyebrow} title={INTAKE_STEPS[9].title} helper={INTAKE_STEPS[9].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><Textarea className="min-h-40 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.goal} onChange={(e) => setClient({ ...client, goal: e.target.value })} placeholder="Example: Wants retirement income, less market risk, and tax-efficient withdrawals." /></IntakeShell>}
 
         {step === "upload" && (
           <Card className="rounded-[2rem] ap-glass border-0">
@@ -2381,13 +2595,13 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   {magicLinkUrl ? (
                     <div className="flex shrink-0 flex-col items-center gap-2 rounded-2xl border border-slate-200 bg-white p-3">
                       <p className="text-xs font-medium text-slate-600">Optional QR (same link)</p>
-                      {/* quickchart.io generates the QR image; link stays on your origin once opened */}
-                      <img
+                      <Image
                         alt=""
                         width={200}
                         height={200}
                         className="rounded-lg"
-                        src={`https://quickchart.io/qr?text=${encodeURIComponent(magicLinkUrl)}&size=220&margin=2`}
+                        src={`/api/qr?text=${encodeURIComponent(magicLinkUrl)}`}
+                        unoptimized
                       />
                       <p className="max-w-[220px] text-center text-[10px] text-slate-400">Texting the link is usually easiest; QR is for clients who prefer to scan.</p>
                     </div>
@@ -2400,15 +2614,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               >
                 <p className="ap-eyebrow">Option B — Upload directly</p>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <label className="cursor-pointer rounded-3xl border border-sky-200/60 bg-white/80 p-6 transition hover:-translate-y-1 hover:border-sky-400 hover:shadow-[0_18px_40px_-22px_rgba(14,165,233,0.45)] md:p-7"><div className="ap-icon-tile mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl"><FileText className="h-6 w-6" /></div><h3 className="text-lg font-semibold">Upload emailed or texted statement</h3><p className="mb-4 text-sm text-slate-500">PDF, JPG, PNG, or screenshot.</p><Input className="min-h-11" type="file" accept=".pdf,image/*" onChange={(e) => setUploadedFile(e.target.files?.[0] || null)} /></label>
-                  <label className="cursor-pointer rounded-3xl border border-sky-200/60 bg-white/80 p-6 transition hover:-translate-y-1 hover:border-sky-400 hover:shadow-[0_18px_40px_-22px_rgba(14,165,233,0.45)] md:p-7"><div className="ap-icon-tile mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl"><Camera className="h-6 w-6" /></div><h3 className="text-lg font-semibold">Take a picture on phone</h3><p className="mb-4 text-sm text-slate-500">Uses your mobile camera when opened from a phone.</p><Input className="min-h-11" type="file" accept="image/*" capture="environment" onChange={(e) => setUploadedFile(e.target.files?.[0] || null)} /></label>
+                  <label className="cursor-pointer rounded-3xl border border-sky-200/60 bg-white/80 p-6 transition hover:-translate-y-1 hover:border-sky-400 hover:shadow-[0_18px_40px_-22px_rgba(14,165,233,0.45)] md:p-7"><div className="ap-icon-tile mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl"><FileText className="h-6 w-6" /></div><h3 className="text-lg font-semibold">Upload emailed or texted statement</h3><p className="mb-4 text-sm text-slate-500">PDF, JPG, PNG, screenshot, or multiple statement pages.</p><Input className="min-h-11" type="file" accept=".pdf,image/*" multiple onChange={(e) => setUploadedFiles(Array.from(e.target.files || []))} /></label>
+                  <label className="cursor-pointer rounded-3xl border border-sky-200/60 bg-white/80 p-6 transition hover:-translate-y-1 hover:border-sky-400 hover:shadow-[0_18px_40px_-22px_rgba(14,165,233,0.45)] md:p-7"><div className="ap-icon-tile mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl"><Camera className="h-6 w-6" /></div><h3 className="text-lg font-semibold">Take a picture on phone</h3><p className="mb-4 text-sm text-slate-500">Uses your mobile camera when opened from a phone. Add more pages if your browser supports multi-select.</p><Input className="min-h-11" type="file" accept="image/*" capture="environment" multiple onChange={(e) => setUploadedFiles(Array.from(e.target.files || []))} /></label>
                 </div>
               </div>
-              {uploadedFile && (
+              {uploadedFiles.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-sky-200 bg-sky-50/70 px-4 py-3 text-sm">
                   <CheckCircle className="h-4 w-4 text-sky-600" />
-                  <span className="font-medium text-blue-950">Selected file:</span>
-                  <span className="truncate text-slate-700">{uploadedFile.name}</span>
+                  <span className="font-medium text-blue-950">Selected files:</span>
+                  <span className="truncate text-slate-700">{uploadedFiles.map((file) => file.name).join(", ")}</span>
                 </div>
               )}
               <div className="rounded-3xl border border-blue-100 bg-blue-50/80 p-5 text-sm text-blue-950"><Wand2 className="mb-2 h-5 w-5" />Extraction sends your file to AI and builds a holdings table for you to confirm. Expect roughly <strong>20–60 seconds</strong> on a typical connection; large PDFs or slow Wi‑Fi can take longer.</div>
@@ -2451,6 +2665,87 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   Clear every row that still needs review before running the deep analysis ({reviewCount} remaining). This keeps AI output aligned with what you&apos;ve verified in the room.
                 </div>
               )}
+              {duplicateCount > 0 && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                  Advisor check: {duplicateCount} possible duplicate holding{duplicateCount === 1 ? "" : "s"} appeared across uploaded files/pages. Confirm whether these are repeated pages or separate accounts before relying on totals.
+                </div>
+              )}
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-5">
+                <p className="text-sm font-semibold text-slate-900">Accounts & tax registration</p>
+                <p className="mt-1 text-xs text-slate-600">
+                  AI tags traditional tax-deferred, Roth IRA, or taxable wrappers from statement headers. Tune each holding — Roth worksheets only sweep traditional deferred balances ({currency(registrationTotals.traditionalQualifiedValue)} detected so far).
+                </p>
+                <dl className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 px-3 py-2">
+                    <dt className="text-xs text-emerald-900/80">Traditional / tax-deferred</dt>
+                    <dd className="text-lg font-semibold tabular-nums text-emerald-950">{currency(registrationTotals.traditionalQualifiedValue)}</dd>
+                  </div>
+                  <div className="rounded-xl border border-blue-200 bg-blue-50/40 px-3 py-2">
+                    <dt className="text-xs text-blue-900/80">Non-qualified taxable</dt>
+                    <dd className="text-lg font-semibold tabular-nums text-blue-950">{currency(registrationTotals.nonQualifiedValue)}</dd>
+                  </div>
+                  <div className="rounded-xl border border-purple-200 bg-purple-50/40 px-3 py-2">
+                    <dt className="text-xs text-purple-900/80">Roth IRA</dt>
+                    <dd className="text-lg font-semibold tabular-nums text-purple-950">{currency(registrationTotals.rothValue)}</dd>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                    <dt className="text-xs text-slate-500">Unknown wrapper</dt>
+                    <dd className="text-lg font-semibold tabular-nums text-slate-900">{currency(registrationTotals.unknownValue)}</dd>
+                  </div>
+                </dl>
+                {accountRollups.length > 0 ? (
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="mt-2 w-full min-w-[520px] border-collapse text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
+                          <th className="pb-2 pr-3 font-medium">Detected account grouping</th>
+                          <th className="pb-2 pr-3 font-medium">Ending balance</th>
+                          <th className="pb-2 font-medium">Bulk registration</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {accountRollups.map((row) => {
+                          const label =
+                            row.accountNumber.trim() ||
+                            (row.sourceFileIndex != null ? `Statement upload #${row.sourceFileIndex}` : "Same statement (no explicit account)");
+                          const selectValue =
+                            row.dominantRegistration === "mixed" ? "unknown" : row.dominantRegistration;
+                          return (
+                            <tr key={row.key} className="border-b border-slate-100 align-middle last:border-none">
+                              <td className="py-3 pr-3">
+                                <p className="font-medium text-slate-900">{label}</p>
+                                {row.dominantRegistration === "mixed" && (
+                                  <p className="text-xs text-amber-700">Mixed classifications — align all rows inside this grouping.</p>
+                                )}
+                              </td>
+                              <td className="py-3 pr-3 tabular-nums font-semibold">{currency(row.totalValue)}</td>
+                              <td className="py-3">
+                                <Select
+                                  value={selectValue}
+                                  onValueChange={(value) =>
+                                    applyRegistrationForAccountKey(row.key, normalizeRegistrationType(value))
+                                  }
+                                >
+                                  <SelectTrigger className="w-full max-w-xs rounded-2xl">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {REGISTRATION_BUCKET_VALUES.map((r) => (
+                                      <SelectItem key={r} value={r}>
+                                        {registrationLabel(r)}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </div>
               <div className="space-y-4">
                 {holdings.map((h, index) => {
                   const opts = normalizeOptions(h);
@@ -2458,9 +2753,59 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <div key={`${h.rawName}-${index}`} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
                       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
                         <div className="lg:col-span-3"><p className="text-xs text-slate-500">Statement name</p><p className="font-semibold">{h.rawName}</p><p className="text-sm text-slate-500">{currency(h.value)}</p></div>
-                        <div className="lg:col-span-4"><p className="mb-1 text-xs text-slate-500">Matched holding / multiple choice</p><Select value={h.suggested} onValueChange={(value) => updateHolding(index, { suggested: value, status: value.includes("Manual") ? "review" : "confirmed", confidence: value.includes("Manual") ? Math.min(h.confidence, 74) : Math.max(h.confidence, 85) })}><SelectTrigger className="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent>{opts.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select></div>
+                        <div className="lg:col-span-4"><p className="mb-1 text-xs text-slate-500">Matched holding / multiple choice</p><Select value={h.suggested} onValueChange={(value) => updateHolding(index, { suggested: value, status: value.includes("Manual") ? "review" : "confirmed", confidence: value.includes("Manual") ? Math.min(h.confidence, 74) : Math.max(h.confidence, 85) })}><SelectTrigger className="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent>{opts.map((option) => <SelectItem key={option} value={option}>{formatMatchedHoldingOptionLabel(option)}</SelectItem>)}</SelectContent></Select></div>
                         <div className="lg:col-span-3"><p className="mb-1 text-xs text-slate-500">Asset class</p><Select value={ASSET_CLASSES.includes(h.assetClass) ? h.assetClass : "Unknown"} onValueChange={(value) => updateHolding(index, { assetClass: value })}><SelectTrigger className="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent>{ASSET_CLASSES.map((asset) => <SelectItem key={asset} value={asset}>{asset}</SelectItem>)}</SelectContent></Select></div>
                         <div className="lg:col-span-2"><p className="text-xs text-slate-500">Confidence</p><Progress value={h.confidence} className="my-2" /><div className="flex items-center gap-2">{h.confidence >= 75 ? <CheckCircle className="h-4 w-4 text-emerald-600" /> : <AlertTriangle className="h-4 w-4 text-red-600" />}<span className="text-sm font-medium">{h.confidence}%</span></div></div>
+                      </div>
+                      <div className="mt-4 grid grid-cols-1 gap-3 border-t border-slate-100 pt-4 md:grid-cols-3">
+                        <div>
+                          <p className="mb-1 text-xs text-slate-500">Account # (custodian hint)</p>
+                          <Input
+                            key={`acct-${index}-${h.accountNumber ?? ""}`}
+                            className="rounded-2xl"
+                            placeholder="Masked / last digits"
+                            defaultValue={h.accountNumber ?? ""}
+                            onBlur={(e) => updateHolding(index, { accountNumber: e.target.value.trim() || undefined })}
+                          />
+                        </div>
+                        <div>
+                          <p className="mb-1 text-xs text-slate-500">Registration</p>
+                          <Select
+                            value={normalizeRegistrationType(h.registrationType)}
+                            onValueChange={(value) =>
+                              updateHolding(index, { registrationType: value as RegistrationBucket })
+                            }
+                          >
+                            <SelectTrigger className="rounded-2xl">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {REGISTRATION_BUCKET_VALUES.map((r) => (
+                                <SelectItem key={r} value={r}>
+                                  {registrationLabel(r)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-xs text-slate-500">Cost basis (taxable-only if shown)</p>
+                          <Input
+                            key={`basis-${index}-${h.costBasis ?? ""}`}
+                            className="rounded-2xl"
+                            type="number"
+                            defaultValue={h.costBasis != null ? String(h.costBasis) : ""}
+                            onBlur={(e) => {
+                              if (e.target.value === "") {
+                                updateHolding(index, { costBasis: undefined });
+                                return;
+                              }
+                              const v = Number(e.target.value);
+                              if (!Number.isNaN(v))
+                                updateHolding(index, { costBasis: v > 0 ? v : undefined });
+                            }}
+                          />
+                        </div>
                       </div>
                       {(h.suggested.includes("Manual") || h.status === "review") && <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2"><div><p className="mb-1 text-xs text-slate-500">Manual ticker / CUSIP / corrected name</p><Input className="rounded-2xl" placeholder="Example: PIMIX or 912828XXXXX" onBlur={(e) => { if (e.target.value.trim()) updateHolding(index, { suggested: e.target.value.trim(), status: "confirmed", confidence: 85 }); }} /></div><div><p className="mb-1 text-xs text-slate-500">Value override</p><Input className="rounded-2xl" type="number" placeholder={String(h.value || 0)} onBlur={(e) => { const v = Number(e.target.value); if (!Number.isNaN(v) && e.target.value !== "") updateHolding(index, { value: v }); }} /></div></div>}
                     </div>
@@ -2616,6 +2961,426 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         )}
 
 
+        {step === "roth" && showRothOptionReport && (
+          <Card className="rounded-[2rem] ap-glass border-0">
+            <CardContent className="space-y-8 p-6 md:p-8">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="ap-icon-tile ap-icon-tile-amber flex h-12 w-12 items-center justify-center rounded-2xl">
+                    <Target className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h2 className="font-serif text-3xl font-bold">Roth conversion worksheet</h2>
+                    <p className="text-sm text-slate-500">
+                      Capture Roth inputs for this case. Entries here are saved with the client profile; the Roth PDF uses your qualified balance below.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-5 rounded-3xl border border-slate-200 bg-slate-50/80 p-5 md:p-6">
+                <p className="text-sm font-semibold text-slate-800">Household</p>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Client first name</label>
+                    <Input
+                      className="mt-2 h-12 rounded-2xl bg-white"
+                      value={client.firstName}
+                      onChange={(e) => setClient({ ...client, firstName: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Client last name</label>
+                    <Input
+                      className="mt-2 h-12 rounded-2xl bg-white"
+                      value={client.lastName}
+                      onChange={(e) => setClient({ ...client, lastName: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Client current age</label>
+                    <Input
+                      className="mt-2 h-12 rounded-2xl bg-white"
+                      type="number"
+                      value={client.age}
+                      onChange={(e) => setClient({ ...client, age: e.target.value })}
+                      placeholder="62"
+                    />
+                  </div>
+                  {client.married ? (
+                    <>
+                      <div>
+                        <label className="text-sm font-semibold text-slate-700">Spouse first name</label>
+                        <Input
+                          className="mt-2 h-12 rounded-2xl bg-white"
+                          value={client.spouseFirstName}
+                          onChange={(e) => setClient({ ...client, spouseFirstName: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-semibold text-slate-700">Spouse last name</label>
+                        <Input
+                          className="mt-2 h-12 rounded-2xl bg-white"
+                          value={client.spouseLastName}
+                          onChange={(e) => setClient({ ...client, spouseLastName: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-semibold text-slate-700">Spouse current age</label>
+                        <Input
+                          className="mt-2 h-12 rounded-2xl bg-white"
+                          type="number"
+                          value={client.spouseAge}
+                          onChange={(e) => setClient({ ...client, spouseAge: e.target.value })}
+                        />
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+                <p className="text-xs text-slate-500">Married status is set during intake (Question 1).</p>
+              </div>
+
+              <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+                <p className="text-sm font-semibold text-slate-800">Qualified balance for conversion</p>
+                <p className="text-sm text-slate-600">
+                  “Qualified” here means traditional tax-deferred balances (Confirm step). Roth IRAs and taxable accounts never flow into this cap automatically.
+                </p>
+                <p className="text-sm text-slate-600">Are we using the entire qualified account balance for this illustration?</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant={rothWorksheet.useEntireQualifiedBalance === true ? "default" : "outline"}
+                    className={`h-11 rounded-2xl ${rothWorksheet.useEntireQualifiedBalance === true ? "bg-blue-800 hover:bg-blue-900" : ""}`}
+                    onClick={() =>
+                      setRothWorksheet((w) => {
+                        const next = { ...w, useEntireQualifiedBalance: true as const };
+                        if (traditionalQualifiedTotal > 0 && parseRothMoneyInput(w.qualifiedAssetValue) <= 0) {
+                          next.qualifiedAssetValue =
+                            Math.round(traditionalQualifiedTotal).toLocaleString("en-US");
+                        }
+                        return next;
+                      })
+                    }
+                  >
+                    Yes
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={rothWorksheet.useEntireQualifiedBalance === false ? "default" : "outline"}
+                    className={`h-11 rounded-2xl ${rothWorksheet.useEntireQualifiedBalance === false ? "bg-blue-800 hover:bg-blue-900" : ""}`}
+                    onClick={() => setRothWorksheet((w) => ({ ...w, useEntireQualifiedBalance: false }))}
+                  >
+                    No
+                  </Button>
+                </div>
+                {rothWorksheet.useEntireQualifiedBalance === true ? (
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Qualified asset value</label>
+                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                      <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                      <Input
+                        className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                        type="text"
+                        inputMode="decimal"
+                        value={rothWorksheet.qualifiedAssetValue}
+                        onChange={(e) => setRothWorksheet((w) => ({ ...w, qualifiedAssetValue: e.target.value }))}
+                        placeholder="500000"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                {rothWorksheet.useEntireQualifiedBalance === false ? (
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Specific dollar amount</label>
+                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                      <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                      <Input
+                        className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                        type="text"
+                        inputMode="decimal"
+                        value={rothWorksheet.specificConversionAmount}
+                        onChange={(e) => setRothWorksheet((w) => ({ ...w, specificConversionAmount: e.target.value }))}
+                        placeholder="250000"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                <p className="text-xs text-slate-500">
+                  Statement total (all wrappers): {currency(totalValue)}. Traditional tax-deferred pool (Roth conversion sourcing):{" "}
+                  <span className="font-semibold text-slate-800">{currency(traditionalQualifiedTotal)}</span>.
+                  Roth illustration amount after caps:{" "}
+                  <span className="font-semibold text-slate-700">{currency(rothPdfQualifiedTotal || 0)}</span>
+                  {rothPdfQualifiedTotal <= 0
+                    ? " — choose Yes/No above and enter an amount so the PDF can run."
+                    : ". Taxable and Roth IRA balances stay out of the conversion cap."}
+                </p>
+                <div className="flex items-center justify-between gap-4 rounded-2xl border border-blue-100 bg-slate-50 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-700">Protect initial investment</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={rothWorksheet.fic.protectInitialInvestment}
+                    onClick={() =>
+                      setRothWorksheet((w) => ({
+                        ...w,
+                        fic: { ...w.fic, protectInitialInvestment: !w.fic.protectInitialInvestment },
+                      }))
+                    }
+                    className={`relative h-8 w-14 shrink-0 rounded-full transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                      rothWorksheet.fic.protectInitialInvestment ? "bg-sky-500" : "bg-slate-200"
+                    }`}
+                  >
+                    <span className="sr-only">Protect initial investment</span>
+                    <span
+                      className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow transition-[left] ${
+                        rothWorksheet.fic.protectInitialInvestment ? "left-7" : "left-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {client.takingSocialSecurity ? (
+                <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+                  <p className="text-sm font-semibold text-slate-800">Social Security (monthly)</p>
+                  <p className="text-xs text-slate-500">From intake (&quot;taking Social Security&quot;). Updates here sync to the client profile.</p>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="text-sm font-semibold text-slate-700">Client</label>
+                      <div className="mt-2 flex h-12 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                        <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                        <Input
+                          className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                          type="text"
+                          inputMode="decimal"
+                          value={client.socialSecurityMonthlyClient}
+                          onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                    {client.married ? (
+                      <div>
+                        <label className="text-sm font-semibold text-slate-700">Spouse</label>
+                        <div className="mt-2 flex h-12 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                          <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                          <Input
+                            className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                            type="text"
+                            inputMode="decimal"
+                            value={client.socialSecurityMonthlySpouse}
+                            onChange={(e) => setClient({ ...client, socialSecurityMonthlySpouse: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+                <p className="text-sm font-semibold text-slate-800">Adjusted taxable income</p>
+                <p className="text-xs text-slate-500">
+                  Pulled from intake as AGI (Form 1040, line 11 on recent-year returns).
+                </p>
+                <div className="flex h-12 max-w-md items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                  <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                  <Input
+                    className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                    type="text"
+                    inputMode="decimal"
+                    value={client.adjustedGrossIncomeAnnual}
+                    onChange={(e) => setClient({ ...client, adjustedGrossIncomeAnnual: e.target.value })}
+                    placeholder="165432"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+                <p className="text-sm font-semibold text-slate-800">Estimated retirement income</p>
+                <p className="text-xs text-slate-500">
+                  From intake: how much spendable income the client needs in retirement annually. Edits here update the client profile.
+                </p>
+                <div className="flex h-12 max-w-md items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                  <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                  <Input
+                    className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                    type="text"
+                    inputMode="decimal"
+                    value={client.retirementSpendableIncomeAnnual}
+                    onChange={(e) =>
+                      setClient({ ...client, retirementSpendableIncomeAnnual: e.target.value })
+                    }
+                    placeholder="85000"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+                <p className="text-sm font-semibold text-slate-800">Max tax rate %</p>
+                <p className="text-xs text-slate-500">Illustrative max tax rate percentage for this Roth worksheet.</p>
+                <Input
+                  className="h-12 max-w-md rounded-2xl border border-blue-100 bg-white focus-visible:ring-sky-500"
+                  type="text"
+                  inputMode="decimal"
+                  value={rothWorksheet.fic.maxTaxRatePct}
+                  onChange={(e) =>
+                    setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, maxTaxRatePct: e.target.value } }))
+                  }
+                  placeholder="e.g. 22"
+                />
+              </div>
+
+              <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+                <p className="text-sm font-semibold text-slate-800">Fixed indexed contract</p>
+                <p className="text-sm text-slate-600">Are you using a fixed index contract to perform the conversion?</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant={rothWorksheet.useFixedIndexContract === true ? "default" : "outline"}
+                    className={`h-11 rounded-2xl ${rothWorksheet.useFixedIndexContract === true ? "bg-blue-800 hover:bg-blue-900" : ""}`}
+                    onClick={() => setRothWorksheet((w) => ({ ...w, useFixedIndexContract: true }))}
+                  >
+                    Yes
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={rothWorksheet.useFixedIndexContract === false ? "default" : "outline"}
+                    className={`h-11 rounded-2xl ${rothWorksheet.useFixedIndexContract === false ? "bg-blue-800 hover:bg-blue-900" : ""}`}
+                    onClick={() => setRothWorksheet((w) => ({ ...w, useFixedIndexContract: false }))}
+                  >
+                    No
+                  </Button>
+                </div>
+                {rothWorksheet.useFixedIndexContract === true ? (
+                  <div className="grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 md:grid-cols-2">
+                    <div className="md:col-span-2">
+                      <label className="text-sm font-semibold text-slate-700">Carrier name</label>
+                      <Input
+                        className="mt-2 h-12 rounded-2xl bg-white"
+                        value={rothWorksheet.fic.carrierName}
+                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, carrierName: e.target.value } }))}
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="text-sm font-semibold text-slate-700">Product name</label>
+                      <Input
+                        className="mt-2 h-12 rounded-2xl bg-white"
+                        value={rothWorksheet.fic.productName}
+                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, productName: e.target.value } }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-semibold text-slate-700">Premium bonus %</label>
+                      <Input
+                        className="mt-2 h-12 rounded-2xl bg-white"
+                        type="text"
+                        inputMode="decimal"
+                        value={rothWorksheet.fic.premiumBonusPct}
+                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, premiumBonusPct: e.target.value } }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-semibold text-slate-700">Trailing bonus %</label>
+                      <Input
+                        className="mt-2 h-12 rounded-2xl bg-white"
+                        type="text"
+                        inputMode="decimal"
+                        value={rothWorksheet.fic.trailingBonusPct}
+                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, trailingBonusPct: e.target.value } }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-semibold text-slate-700">Trail bonus years</label>
+                      <Input
+                        className="mt-2 h-12 rounded-2xl bg-white"
+                        type="text"
+                        inputMode="numeric"
+                        value={rothWorksheet.fic.trailBonusYears}
+                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, trailBonusYears: e.target.value } }))}
+                        placeholder="e.g. 10"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-semibold text-slate-700">Contract estimated rate of return %</label>
+                      <Input
+                        className="mt-2 h-12 rounded-2xl bg-white"
+                        type="text"
+                        inputMode="decimal"
+                        value={rothWorksheet.fic.contractEstimatedRateOfReturnPct}
+                        onChange={(e) =>
+                          setRothWorksheet((w) => ({
+                            ...w,
+                            fic: { ...w.fic, contractEstimatedRateOfReturnPct: e.target.value },
+                          }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-semibold text-slate-700">Penalty-free withdrawal amount from contract %</label>
+                      <Input
+                        className="mt-2 h-12 rounded-2xl bg-white"
+                        type="text"
+                        inputMode="decimal"
+                        value={rothWorksheet.fic.penaltyFreeWithdrawalPct}
+                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, penaltyFreeWithdrawalPct: e.target.value } }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-semibold text-slate-700">Surrender years of contract</label>
+                      <Input
+                        className="mt-2 h-12 rounded-2xl bg-white"
+                        type="text"
+                        inputMode="decimal"
+                        value={rothWorksheet.fic.surrenderYears}
+                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, surrenderYears: e.target.value } }))}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                <Button variant="outline" className="h-12 rounded-2xl touch-manipulation" onClick={() => setStep("report")}>
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  Back to report
+                </Button>
+                <div className="flex flex-wrap gap-2 sm:justify-end">
+                  <Button variant="outline" className="h-12 rounded-2xl touch-manipulation" onClick={saveCurrentReview}>
+                    <Save className="mr-2 h-4 w-4" />
+                    Save client profile
+                  </Button>
+                  <Button
+                    className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 touch-manipulation"
+                    onClick={() => void downloadRothOptionPdf()}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Roth Report
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-12 rounded-2xl border-slate-300 touch-manipulation"
+                    onClick={() => {
+                      void loadSavedReviews();
+                      setStep("saved");
+                    }}
+                  >
+                    <FolderOpen className="mr-2 h-4 w-4" />
+                    Client Database
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-12 rounded-2xl border-amber-200 bg-amber-50/90 touch-manipulation hover:bg-amber-100/90"
+                    onClick={() => void runRothAnalysisWithTaxPrecheck()}
+                  >
+                    <BrainCircuit className="mr-2 h-4 w-4" />
+                    Roth Analysis
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {step === "saved" && (
           <Card className="rounded-[2rem] ap-glass border-0">
             <CardContent className="space-y-6 p-6 md:p-8">
@@ -2761,7 +3526,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <div className="ap-callout rounded-3xl p-5">
                   <p className="ap-eyebrow">Wrap-up actions</p>
                   <p className="mt-1 text-xs text-slate-500">Download, copy, or save once the conversation is done.</p>
-                  <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className={`mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 ${showRothOptionReport ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
                     <Button variant="outline" className="h-12 justify-start rounded-2xl bg-white/85 touch-manipulation" onClick={() => downloadPDFReport("client")}>
                       <Download className="mr-2 h-4 w-4" />
                       Client Snapshot PDF
@@ -2770,6 +3535,17 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       <Download className="mr-2 h-4 w-4" />
                       Advisor Deep Dive PDF
                     </Button>
+                    {showRothOptionReport ? (
+                      <Button
+                        variant="outline"
+                        className="h-12 justify-start rounded-2xl border-amber-200 bg-amber-50/90 touch-manipulation hover:bg-amber-100/90"
+                        onClick={() => setStep("roth")}
+                      >
+                        <Target className="mr-2 h-4 w-4" />
+                        Roth worksheet
+                        <ArrowRight className="ml-2 h-4 w-4" />
+                      </Button>
+                    ) : null}
                     <Button variant="outline" className="h-12 justify-start rounded-2xl bg-white/85 touch-manipulation" onClick={buildFollowUpEmail}>
                       <Mail className="mr-2 h-4 w-4" />
                       Follow-up email (copy)
@@ -2865,7 +3641,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </Button>
                 <Button
                   className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-5 touch-manipulation"
-                  onClick={() => { setIntakeStep(0); setActiveReviewId(null); setStep("intake"); }}
+                  onClick={() => {
+                    setIntakeStep(0);
+                    setActiveReviewId(null);
+                    setRothWorksheet(emptyRothWorksheet());
+                    setStep("intake");
+                  }}
                 >
                   Start new review
                   <ArrowRight className="ml-2 h-4 w-4" />
