@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { Buffer } from "buffer";
+import { ASSET_CLASSES } from "./asset-classes";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -59,10 +60,12 @@ export async function extractHoldingsFromFileBuffer(params: {
         file_data: `data:${mimeType};base64,${base64}`,
       };
 
+  const assetClassList = ASSET_CLASSES.join(", ");
+
   const prompt = `
 You are AdvisorPilot, an advisor-facing financial statement extraction assistant.
 
-Extract all investment holdings from the uploaded statement.
+Extract every portfolio line item the statement lists as a position or fund holding. Your output must be a complete picture of the account for allocation math — do not skip rows just because they are “cash-like” or low risk.
 
 Client context:
 ${JSON.stringify(clientContext, null, 2)}
@@ -76,7 +79,7 @@ Use this exact format:
       "rawName": "name exactly as shown on statement",
       "suggested": "best match, ticker, fund name, or Needs advisor confirmation",
       "confidence": 0-100,
-      "assetClass": "U.S. Large Cap Equity / Bond Fund / ETF / Mutual Fund / Individual Stock / Treasury / Corporate Bond / Cash / Annuity / Unknown",
+      "assetClass": "EXACTLY one string from this AdvisorPilot list (verbatim): ${assetClassList}",
       "value": number,
       "status": "matched or review",
       "accountNumber": "masked or last-4 digits as printed, or empty string if unclear",
@@ -101,7 +104,9 @@ Registration rules (per holding, from statement headings / account tiles / tax l
 Cost basis rules:
 - Populate costBasis only when the statement shows explicit cost/unrealized gain for a taxable (non_qualified) lot; otherwise 0.
 
-Rules:
+Rules (read carefully):
+- You MUST include each of these when they appear as their own line or fund (same as any stock or fund): cash balances; cash awaiting investment; sweep / bank deposit / FDIC cash; money market funds; stable value funds; GIC / capital preservation / insured interest accounts; short-term reserve or liquidity funds tied to retirement plans. Omitting them is incorrect.
+- Never skip a position because it has no ticker — still output a row with the statement name, best suggested label, and assetClass (use Cash / Money Market for true cash or core money markets; use Cash Mutual Fund when it is clearly an open-end money market mutual fund; use Bond Fund for typical stable value / fixed capital-preservation sleeves unless the statement labels them as cash).
 - If ticker is clearly visible, use it.
 - If ticker is not visible, infer likely options from the name.
 - Always provide 3-5 possible options when the name is ambiguous.
@@ -109,6 +114,8 @@ Rules:
 - If confidence is below 75, status must be "review".
 - If confidence is 75 or higher, status can be "matched".
 - Do not invent account values. Use 0 if value cannot be found.
+- For ETFs, use Equity ETF, Bond ETF, or Cash ETF when the statement or fund name shows equity vs bond vs money-market/T-bill/cash sleeve; use ETF only if unsure.
+- For open-end mutual funds, use Equity Mutual Fund, Bond Mutual Fund, or Cash Mutual Fund the same way; use Mutual Fund only if unsure.
 - For mutual funds, include possible share class tickers.
 - For ETFs, include likely ticker options.
 - For bonds, include CUSIP if visible. If not visible, classify by bond type.

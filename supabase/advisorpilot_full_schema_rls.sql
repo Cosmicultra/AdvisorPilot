@@ -120,7 +120,8 @@ alter table public.advisorpilot_upload_tokens
   add column if not exists updated_at timestamptz not null default now(),
   add column if not exists max_upload_count int not null default 25,
   add column if not exists last_used_at timestamptz,
-  add column if not exists revoked_at timestamptz;
+  add column if not exists revoked_at timestamptz,
+  add column if not exists intake_snapshot jsonb;
 
 create index if not exists advisorpilot_upload_tokens_advisor_email_idx
   on public.advisorpilot_upload_tokens (lower(advisor_owner_email));

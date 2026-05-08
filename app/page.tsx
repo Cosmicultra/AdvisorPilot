@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import type { Session } from "next-auth";
 import { signIn, signOut } from "next-auth/react";
@@ -38,6 +38,12 @@ import {
   Check,
 } from "lucide-react";
 import {
+  computeRiskProfileFromQuiz,
+  RISK_PROFILE_DESCRIPTORS,
+  RISK_QUIZ_LENGTH,
+  RISK_QUIZ_QUESTIONS,
+} from "@/lib/risk-questionnaire";
+import {
   INTAKE_STEPS,
   INTAKE_STEP_COUNT,
   type IntakeClient,
@@ -46,6 +52,7 @@ import {
   clientFirstNameSalutation,
   canAdvanceIntakeStep,
   FEDERAL_TAX_BRACKET_IDS,
+  RISK_PROFILES,
 } from "@/lib/intake-config";
 import { advisorFetch, AP_SUPABASE_AT, AP_SUPABASE_RT } from "@/lib/advisor-fetch";
 import {
@@ -78,31 +85,22 @@ import {
 } from "@/lib/holding-registration";
 import type { LiveIntakeHandoffAction } from "@/lib/live-intake-scripts";
 import { LiveIntakeOverlay } from "../components/live-intake-overlay";
+import { ASSET_CLASSES, classifyAllocationBucket, isCashLikeHolding, isCanonicalAssetClass } from "@/lib/asset-classes";
+import { bucketValuesToPercents, allocationForRiskModel } from "@/lib/allocation-math";
+import {
+  TEN_YEAR_SCENARIOS,
+  BIGGEST_DRAWDOWN_SCENARIO_YEAR,
+  formatTenYearScenarioPercent,
+  scenarioHoldingsPortfolioReturnDecimal,
+  scenarioHoldingsPortfolioSingleYearReturnDecimal,
+  scenarioProposedPortfolioReturnDecimal,
+  scenarioProposedPortfolioSingleYearReturnDecimal,
+} from "@/lib/ten-year-scenario-models";
 
 type Client = IntakeClient;
 
 type EmailAuthUser = { email?: string | null };
 
-const ASSET_CLASSES = [
-  "U.S. Large Cap Equity",
-  "U.S. Mid Cap Equity",
-  "U.S. Small Cap Equity",
-  "International Equity",
-  "Emerging Markets Equity",
-  "ETF",
-  "Mutual Fund",
-  "Individual Stock",
-  "Bond Fund",
-  "Treasury / Government Bond",
-  "Corporate Bond",
-  "Municipal Bond",
-  "Cash / Money Market",
-  "Fixed Indexed Annuity",
-  "MYGA / Fixed Annuity",
-  "SPIA / Income Annuity",
-  "Alternative / Other",
-  "Unknown",
-];
 
 const demoHoldings: Holding[] = [
   {
@@ -185,29 +183,52 @@ function targetAllocation(age: number, riskProfile: string) {
   return { equity, fixedIncome, cash };
 }
 
-function classifyBucket(assetClass: string) {
-  const lower = assetClass.toLowerCase();
-  if (lower.includes("cash") || lower.includes("money market")) return "cash";
-  if (
-    lower.includes("bond") ||
-    lower.includes("treasury") ||
-    lower.includes("municipal") ||
-    lower.includes("fixed") ||
-    lower.includes("annuity") ||
-    lower.includes("myga") ||
-    lower.includes("spia")
-  ) {
-    return "fixedIncome";
-  }
-  return "equity";
-}
-
 function allocationData(equity: number, fixedIncome: number, cash: number) {
   return [
     { label: "Equity", value: equity, color: "#0f766e" },
-    { label: "Fixed income", value: fixedIncome, color: "#1d4ed8" },
+    { label: "Fixed", value: fixedIncome, color: "#1d4ed8" },
     { label: "Cash", value: cash, color: "#c99700" },
   ];
+}
+
+function allocationDataCurrent(percents: { equity: number; fixedIncome: number; cash: number; other: number }) {
+  const items = [
+    { label: "Equity", value: percents.equity, color: "#0f766e" },
+    { label: "Fixed", value: percents.fixedIncome, color: "#1d4ed8" },
+    { label: "Cash", value: percents.cash, color: "#c99700" },
+  ];
+  if (percents.other > 0) {
+    items.push({ label: "Unclassified", value: percents.other, color: "#64748b" });
+  }
+  return items;
+}
+
+function confirmHoldingRegistrationSurfaceClasses(registration: RegistrationBucket | undefined): string {
+  const r = normalizeRegistrationType(registration);
+  switch (r) {
+    case "qualified":
+      return "rounded-3xl border border-emerald-200 bg-emerald-50/50 p-5 shadow-sm";
+    case "roth":
+      return "rounded-3xl border border-purple-200 bg-purple-50/50 p-5 shadow-sm";
+    case "non_qualified":
+      return "rounded-3xl border border-blue-200 bg-blue-50/50 p-5 shadow-sm";
+    default:
+      return "rounded-3xl border border-slate-200 bg-slate-50/70 p-5 shadow-sm";
+  }
+}
+
+function confirmHoldingDividerClass(registration: RegistrationBucket | undefined): string {
+  const r = normalizeRegistrationType(registration);
+  switch (r) {
+    case "qualified":
+      return "border-emerald-100";
+    case "roth":
+      return "border-purple-100";
+    case "non_qualified":
+      return "border-blue-100";
+    default:
+      return "border-slate-100";
+  }
 }
 
 function asNumber(value: unknown, fallback = 0) {
@@ -360,32 +381,47 @@ function successLabel(score: number) {
   return "Needs Review";
 }
 
-function computePortfolioContextFromReview(client: Client, holdings: Holding[], demoMode: boolean) {
+function computePortfolioContextFromReview(
+  client: Client,
+  holdings: Holding[],
+  demoMode: boolean,
+  opts?: { duplicatesAcknowledged?: boolean }
+) {
   const totalValue = holdings.reduce((sum, h) => sum + Number(h.value || 0), 0);
   const reviewCount = holdings.filter((h) => h.confidence < 75 || h.status === "review").length;
-  const canRunDeepAnalysis = demoMode || reviewCount === 0;
+  const duplicateCount = holdings.filter((h) => h.duplicateOfIndex !== undefined).length;
+  const enrichmentSatisfied =
+    demoMode ||
+    holdings.every(
+      (h) =>
+        isCashLikeHolding(h.assetClass, h.suggested, h.rawName) ||
+        (Boolean(h.enrichmentCompletedAt) && h.enrichmentNeedsReview !== true)
+    );
+  const duplicateOk = demoMode || duplicateCount === 0 || opts?.duplicatesAcknowledged === true;
+  const canRunDeepAnalysis =
+    duplicateOk &&
+    (demoMode || reviewCount === 0) &&
+    (reviewCount === 0 || enrichmentSatisfied);
   const buckets = holdings.reduce(
     (acc, h) => {
-      const bucket = classifyBucket(h.assetClass);
+      const bucket = classifyAllocationBucket(h.assetClass, h.suggested, h.rawName);
       acc[bucket] += Number(h.value || 0);
       return acc;
     },
-    { equity: 0, fixedIncome: 0, cash: 0 }
+    { equity: 0, fixedIncome: 0, cash: 0, other: 0 }
   );
-  const equity = totalValue ? Math.round((buckets.equity / totalValue) * 100) : 0;
-  const fixedIncome = totalValue ? Math.round((buckets.fixedIncome / totalValue) * 100) : 0;
-  const cash = totalValue ? Math.max(0, 100 - equity - fixedIncome) : 0;
-  const currentAllocation = { equity, fixedIncome, cash };
+  const currentAllocation = bucketValuesToPercents(buckets, totalValue);
+  const currentAllocationForModel = allocationForRiskModel(currentAllocation);
   const derivedAge = client.age ? Number(client.age) : getAgeFromDob(client.dob);
   const target = targetAllocation(derivedAge || 62, client.riskProfile);
-  const scores = portfolioScores(currentAllocation, target);
+  const scores = portfolioScores(currentAllocationForModel, target);
   const currentSuccessRate = calculateRetirementSuccessModel({
     age: derivedAge,
     retirementAge: Number(client.retirementAge || 67),
     portfolioValue: totalValue,
-    equity: currentAllocation.equity,
-    fixedIncome: currentAllocation.fixedIncome,
-    cash: currentAllocation.cash,
+    equity: currentAllocationForModel.equity,
+    fixedIncome: currentAllocationForModel.fixedIncome,
+    cash: currentAllocationForModel.cash,
     riskProfile: client.riskProfile,
   });
   const proposedSuccessRate = calculateRetirementSuccessModel({
@@ -648,6 +684,11 @@ export default function AdvisorPilotPage() {
     socialSecurityMonthlyClient: "",
     socialSecurityMonthlySpouse: "",
     riskProfile: "moderate-conservative",
+    riskIntakeKnown: "unset",
+    riskIntakeScreen: "gate",
+    riskQuizAnswers: {},
+    riskQuizStepIndex: 0,
+    riskProfileSuggested: "",
     calibration: "risk-profile",
     goal: "Prepare for retirement income while reducing unnecessary downside risk.",
     advisorEmail: "",
@@ -698,6 +739,10 @@ export default function AdvisorPilotPage() {
   const [magicLinkCopied, setMagicLinkCopied] = useState(false);
   const [followUpEmailSendingId, setFollowUpEmailSendingId] = useState<string | null>(null);
   const [rothWorksheet, setRothWorksheet] = useState<RothWorksheet>(() => emptyRothWorksheet());
+  const [isEnriching, setIsEnriching] = useState(false);
+  const [enrichError, setEnrichError] = useState("");
+  const [duplicatesAcknowledged, setDuplicatesAcknowledged] = useState(false);
+  const activeEnrichmentControllerRef = useRef<AbortController | null>(null);
 
   const handleEmailSessionExpired = useCallback(() => {
     setEmailAuthUser(null);
@@ -743,33 +788,48 @@ export default function AdvisorPilotPage() {
 
   const reviewCount = holdings.filter((h) => h.confidence < 75 || h.status === "review").length;
   const duplicateCount = holdings.filter((h) => h.duplicateOfIndex !== undefined).length;
-  /** Real statements: no deep analysis until the confirmation table is clean. Demo mode keeps the sample path usable. */
-  const canRunDeepAnalysis = demoMode || reviewCount === 0;
+  const enrichmentSatisfied =
+    demoMode ||
+    holdings.every(
+      (h) =>
+        isCashLikeHolding(h.assetClass, h.suggested, h.rawName) ||
+        (Boolean(h.enrichmentCompletedAt) && h.enrichmentNeedsReview !== true)
+    );
+  const duplicateOk = demoMode || duplicateCount === 0 || duplicatesAcknowledged;
+  const canRunDeepAnalysis =
+    duplicateOk &&
+    (demoMode || reviewCount === 0) &&
+    (reviewCount === 0 || enrichmentSatisfied);
 
   const currentAllocation = useMemo(() => {
-    const buckets = holdings.reduce((acc, h) => {
-      const bucket = classifyBucket(h.assetClass);
-      acc[bucket] += Number(h.value || 0);
-      return acc;
-    }, { equity: 0, fixedIncome: 0, cash: 0 });
-    const equity = totalValue ? Math.round((buckets.equity / totalValue) * 100) : 0;
-    const fixedIncome = totalValue ? Math.round((buckets.fixedIncome / totalValue) * 100) : 0;
-    const cash = totalValue ? Math.max(0, 100 - equity - fixedIncome) : 0;
-    return { equity, fixedIncome, cash };
+    const buckets = holdings.reduce(
+      (acc, h) => {
+        const bucket = classifyAllocationBucket(h.assetClass, h.suggested, h.rawName);
+        acc[bucket] += Number(h.value || 0);
+        return acc;
+      },
+      { equity: 0, fixedIncome: 0, cash: 0, other: 0 }
+    );
+    return bucketValuesToPercents(buckets, totalValue);
   }, [holdings, totalValue]);
 
+  const currentAllocationForModel = useMemo(
+    () => allocationForRiskModel(currentAllocation),
+    [currentAllocation]
+  );
+
   const target = targetAllocation(derivedAge || 62, client.riskProfile);
-  const currentPie = allocationData(currentAllocation.equity, currentAllocation.fixedIncome, currentAllocation.cash);
+  const currentPie = allocationDataCurrent(currentAllocation);
   const targetPie = allocationData(target.equity, target.fixedIncome, target.cash);
-  const scores = portfolioScores(currentAllocation, target);
+  const scores = portfolioScores(currentAllocationForModel, target);
 
   const currentSuccessRate = calculateRetirementSuccessModel({
     age: derivedAge,
     retirementAge: Number(client.retirementAge || 67),
     portfolioValue: totalValue,
-    equity: currentAllocation.equity,
-    fixedIncome: currentAllocation.fixedIncome,
-    cash: currentAllocation.cash,
+    equity: currentAllocationForModel.equity,
+    fixedIncome: currentAllocationForModel.fixedIncome,
+    cash: currentAllocationForModel.cash,
     riskProfile: client.riskProfile,
   });
 
@@ -793,6 +853,42 @@ export default function AdvisorPilotPage() {
       : `Illustrative change: ${successImprovement} points.`,
     "Model considers allocation mix, volatility, sequence risk, income support, liquidity, and retirement horizon.",
   ];
+
+  const portfolioStressScenarioRows = useMemo(() => {
+    const proposedAlloc = {
+      equity: target.equity,
+      fixedIncome: target.fixedIncome,
+      cash: target.cash,
+    };
+    const decades = TEN_YEAR_SCENARIOS.map((scenario) => ({
+      rowKey: scenario.id,
+      title: scenario.label,
+      subtitle: `${scenario.years[0]}–${scenario.years[9]} · CAGR`,
+      currentLabel: formatTenYearScenarioPercent(
+        scenarioHoldingsPortfolioReturnDecimal(scenario.years, holdings),
+      ),
+      proposedLabel: formatTenYearScenarioPercent(
+        scenarioProposedPortfolioReturnDecimal(scenario.years, proposedAlloc),
+      ),
+    }));
+
+    const drawdownCur = scenarioHoldingsPortfolioSingleYearReturnDecimal(
+      BIGGEST_DRAWDOWN_SCENARIO_YEAR,
+      holdings,
+    );
+    const drawdownProp = scenarioProposedPortfolioSingleYearReturnDecimal(BIGGEST_DRAWDOWN_SCENARIO_YEAR, proposedAlloc);
+
+    return [
+      ...decades,
+      {
+        rowKey: "biggest_drawdown_2008",
+        title: "Biggest drawdown",
+        subtitle: `${BIGGEST_DRAWDOWN_SCENARIO_YEAR} · calendar-year blend (firm S&P −36.55% in equities)`,
+        currentLabel: formatTenYearScenarioPercent(drawdownCur),
+        proposedLabel: formatTenYearScenarioPercent(drawdownProp),
+      },
+    ];
+  }, [holdings, target.equity, target.fixedIncome, target.cash]);
 
   const progress = Math.round(((intakeStep + 1) / INTAKE_STEP_COUNT) * 100);
 
@@ -874,18 +970,91 @@ export default function AdvisorPilotPage() {
     return undefined;
   }, [showRothOptionReport, step]);
 
-  const fallbackSynopsis = `Based on the client profile and confirmed holdings, the portfolio review focuses on whether the current allocation remains appropriate for the client’s age, retirement timeline, and risk profile. Current allocation appears to be approximately ${currentAllocation.equity}% equity, ${currentAllocation.fixedIncome}% fixed income, and ${currentAllocation.cash}% cash. The proposed allocation shown is ${target.equity}% equity, ${target.fixedIncome}% fixed income, and ${target.cash}% cash. Final recommendations should be reviewed by the advisor in the context of the client’s full financial plan, liquidity needs, tax situation, and income goals.`;
+  const fallbackSynopsis = useMemo(() => {
+    const analysisDate = new Date().toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const first = String(client.firstName || "").trim();
+    const opener = first
+      ? `As of ${analysisDate}, based on ${first}'s confirmed holdings`
+      : `As of ${analysisDate}, based on confirmed holdings`;
+
+    const sorted = [...holdings].sort((a, b) => Number(b.value || 0) - Number(a.value || 0));
+    const top = sorted.slice(0, 4).filter((h) => Number(h.value || 0) > 0);
+    const shortName = (raw: string) => {
+      const n = String(raw || "")
+        .trim()
+        .split(/[;\n]/)[0]
+        ?.trim();
+      if (!n) return "Unnamed holding";
+      return n.length > 52 ? `${n.slice(0, 49)}…` : n;
+    };
+
+    let holdingsSentence = "";
+    if (top.length >= 2 && totalValue > 0) {
+      const parts = top.map((h) => {
+        const pct = Math.round((Number(h.value || 0) / totalValue) * 100);
+        return `${shortName(h.rawName || h.suggested || "")} (about ${pct}% of statement value)`;
+      });
+      holdingsSentence = ` Notable line items include ${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}.`;
+    } else if (top.length === 1 && totalValue > 0) {
+      const h = top[0]!;
+      const pct = Math.round((Number(h.value || 0) / totalValue) * 100);
+      holdingsSentence = ` The largest position is ${shortName(h.rawName || h.suggested || "")} (about ${pct}% of the statement).`;
+    }
+
+    const riskLabel = String(client.riskProfile || "moderate").replace(/-/g, " ");
+    const retAge = Number(client.retirementAge || 67) || 67;
+    const ageN = derivedAge != null && Number.isFinite(Number(derivedAge)) ? Number(derivedAge) : null;
+    const timeline =
+      ageN != null ? `age ${ageN}, with retirement around ${retAge}` : `retirement around ${retAge}`;
+    const eqGap = target.equity - currentAllocation.equity;
+    const fixGap = target.fixedIncome - currentAllocation.fixedIncome;
+    const cashGap = target.cash - currentAllocation.cash;
+
+    let rationale = "";
+    if (Math.abs(eqGap) < 4 && Math.abs(fixGap) < 4 && Math.abs(cashGap) < 3) {
+      rationale = ` The proposed mix stays close to the statement weights but follows the ${riskLabel} model so each sleeve has a clearer job for someone ${timeline}.`;
+    } else if (fixGap >= 4 && eqGap <= -4) {
+      rationale = ` Relative to the statement, the proposed tilt raises fixed and trims equity to better match a ${riskLabel} sleeve and to add drawdown ballast as the timeline moves toward retirement age ${retAge}.`;
+    } else if (eqGap >= 4 && fixGap <= -4) {
+      rationale = ` Relative to the statement, the proposed tilt retains more equity for growth runway while still mapping to the ${riskLabel} calibration for someone ${timeline}.`;
+    } else {
+      rationale = ` The proposed sleeves shift the statement mix toward the ${riskLabel} calibration for ${timeline}, balancing growth with stability as withdrawals eventually matter more than headline returns alone.`;
+    }
+
+    const closer = first
+      ? `Final recommendations should be reviewed by the advisor in the context of ${first}'s full financial plan, liquidity needs, tax situation, and income goals.`
+      : "Final recommendations should be reviewed by the advisor in the context of the full financial plan, liquidity needs, tax situation, and income goals.";
+
+    return `${opener}, the statement is roughly ${currency(totalValue)} with about ${currentAllocation.equity}% equity, ${currentAllocation.fixedIncome}% fixed, and ${currentAllocation.cash}% cash.${holdingsSentence} For discussion, the calibrated mix is ${target.equity}% equity, ${target.fixedIncome}% fixed, and ${target.cash}% cash.${rationale} ${closer}`;
+  }, [
+    client.firstName,
+    client.riskProfile,
+    client.retirementAge,
+    derivedAge,
+    holdings,
+    totalValue,
+    currentAllocation.equity,
+    currentAllocation.fixedIncome,
+    currentAllocation.cash,
+    target.equity,
+    target.fixedIncome,
+    target.cash,
+  ]);
 
   const fallbackStrategies = [
     "Evaluate whether the portfolio should shift toward a more balanced growth-and-income posture.",
-    "Review fixed income quality, duration, and role within the broader retirement plan.",
+    "Review the quality, duration, and role of fixed sleeve positions within the broader retirement plan.",
     "Consider whether income-oriented strategies should complement the market-based portfolio.",
   ];
 
   const fallbackRecommendations = [
     "Review the largest positions and funds for concentration before making any final recommendation.",
     "Compare the current equity-heavy posture against a more balanced income-aware allocation.",
-    "Evaluate whether fixed income, dividend strategies, or protected income solutions are appropriate for the client’s objective.",
+    "Evaluate whether adding or adjusting fixed positioning, dividend strategies, or protected income solutions are appropriate for the client’s objective.",
   ];
 
   const fallbackPortfolioHighlights = [
@@ -934,13 +1103,13 @@ export default function AdvisorPilotPage() {
       );
     }
 
-    if (currentAllocation.equity > target.equity + 15) {
+    if (currentAllocationForModel.equity > target.equity + 15) {
       insights.push(
-        `Equity exposure is ${currentAllocation.equity}%, which is meaningfully above the ${target.equity}% proposed allocation and may amplify portfolio volatility if those equity holdings are highly correlated.`
+        `Equity exposure is ${Math.round(currentAllocationForModel.equity)}%, which is meaningfully above the ${target.equity}% proposed allocation and may amplify portfolio volatility if those equity holdings are highly correlated.`
       );
     }
 
-    if (mutualFundCount + individualStockCount >= 4 && currentAllocation.equity > 55) {
+    if (mutualFundCount + individualStockCount >= 4 && currentAllocationForModel.equity > 55) {
       insights.push(
         "The portfolio has several equity positions, but the underlying exposure should be reviewed to determine whether the holdings are truly diversified or simply different wrappers around similar market exposure."
       );
@@ -953,21 +1122,21 @@ export default function AdvisorPilotPage() {
     }
 
     return insights.slice(0, 4);
-  }, [holdings, currentAllocation.equity, target.equity]);
+  }, [holdings, currentAllocationForModel.equity, target.equity]);
 
   const displayRedFlags = analysis?.redFlags?.length ? analysis.redFlags : [
-    `Portfolio equity exposure appears elevated at ${currentAllocation.equity}% compared with the proposed allocation of ${target.equity}%.`,
+    `Portfolio equity exposure appears elevated at ${Math.round(currentAllocationForModel.equity)}% compared with the proposed allocation of ${target.equity}%.`,
     "Large-cap U.S. equity concentration should be reviewed for overlap across funds and individual stock positions.",
-    "Fixed income and income-oriented positioning may need to be evaluated against the client’s retirement timeline.",
+    "Fixed positioning and income-oriented positioning may need to be evaluated against the client’s retirement timeline.",
   ];
   const displayOverlapInsights = analysis?.overlapInsights?.length ? analysis.overlapInsights : calculatedOverlapInsights;
   const displayWhatThisMeans = analysis?.displayWhatThisMeans?.length ? analysis.displayWhatThisMeans : [
-    currentAllocation.equity > target.equity
-      ? `The portfolio may experience larger swings than expected because equity exposure is ${currentAllocation.equity}%, compared with the proposed allocation of ${target.equity}%.`
+    currentAllocationForModel.equity > target.equity
+      ? `The portfolio may experience larger swings than expected because equity exposure is ${Math.round(currentAllocationForModel.equity)}%, compared with the proposed allocation of ${target.equity}%.`
       : "The current equity exposure appears closer to the proposed allocation, but the underlying holdings should still be reviewed for concentration and correlation risk.",
-    currentAllocation.fixedIncome < target.fixedIncome
-      ? `The portfolio may not have enough fixed income support for stability, with fixed income at ${currentAllocation.fixedIncome}% compared with the proposed allocation of ${target.fixedIncome}%.`
-      : "The fixed income allocation appears closer to the proposed allocation, but the quality, duration, and income role of those holdings should still be reviewed.",
+    currentAllocationForModel.fixedIncome < target.fixedIncome
+      ? `The portfolio may not have enough fixed exposure for stability, with fixed at ${Math.round(currentAllocationForModel.fixedIncome)}% compared with the proposed allocation of ${target.fixedIncome}%.`
+      : "The fixed sleeve appears closer to the proposed allocation, but the quality, duration, and income role of those holdings should still be reviewed.",
     scores.incomeReadiness < 55
       ? "Income readiness may be limited, which means the portfolio could need more stable income sources before retirement withdrawals begin."
       : "The portfolio has a stronger income-readiness foundation, but the advisor should still confirm liquidity, tax impact, and retirement withdrawal needs.",
@@ -989,13 +1158,14 @@ export default function AdvisorPilotPage() {
   const whatToListenFor = [
     "If the client is worried about volatility, slow down and emphasize risk alignment, income stability, and sequence-of-return risk.",
     "If the client is focused on growth, frame rebalancing as reducing unnecessary concentration rather than abandoning growth.",
-    "If the client wants income, connect the fixed income gap, income readiness score, and potential income-oriented strategies.",
+    "If the client wants income, connect the gap in fixed exposure, income readiness score, and potential income-oriented strategies.",
     "If the client is hesitant to make changes, position the next step as a review and stress-test, not an immediate trading decision.",
   ];
 
   const meetingWalkthrough = [
     `Start with the portfolio scores: risk alignment ${scores.riskAlignment}/100, diversification ${scores.diversification}/100, and income readiness ${scores.incomeReadiness}/100.`,
     "Show the allocation chart and compare current positioning against the proposed allocation.",
+    "Walk through Hypothetical Allocation Stress (three decade CAGR windows plus the modeled 2008 calendar-year biggest drawdown) compared with the standardized proposed sleeve.",
     "Walk through the red flags first so the client understands the main concerns before hearing solutions.",
     "Use the overlap section to explain hidden concentration that may not be obvious from the number of holdings.",
     "Translate the analysis with the What This Means for You section before moving into strategy.",
@@ -1008,13 +1178,21 @@ export default function AdvisorPilotPage() {
     `Equity: ${currentAllocation.equity}% current → ${target.equity}% proposed`,
     `Fixed: ${currentAllocation.fixedIncome}% current → ${target.fixedIncome}% proposed`,
     `Cash: ${currentAllocation.cash}% current → ${target.cash}% proposed`,
+    ...(currentAllocation.other > 0
+      ? [
+          `Unclassified: ${currentAllocation.other}% (refine ETF/Mutual Fund line items or narrow holding labels)`,
+        ]
+      : []),
   ];
 
   const findings = [
-    `Current portfolio appears to be approximately ${currentAllocation.equity}% equity, ${currentAllocation.fixedIncome}% fixed income, and ${currentAllocation.cash}% cash.`,
-    `Based on the selected calibration, the proposed allocation is approximately ${target.equity}% equity, ${target.fixedIncome}% fixed income, and ${target.cash}% cash.`,
+    `Current portfolio appears to be approximately ${currentAllocation.equity}% equity, ${currentAllocation.fixedIncome}% fixed, and ${currentAllocation.cash}% cash.`,
+    `Based on the selected calibration, the proposed allocation is approximately ${target.equity}% equity, ${target.fixedIncome}% fixed, and ${target.cash}% cash.`,
     reviewCount > 0 ? `${reviewCount} holding${reviewCount === 1 ? "" : "s"} require advisor confirmation before final analysis.` : "All holdings are currently matched above the confidence threshold.",
     duplicateCount > 0 ? `${duplicateCount} possible duplicate holding${duplicateCount === 1 ? "" : "s"} detected across uploaded files/pages.` : "No likely duplicate holdings detected across uploaded files/pages.",
+    !demoMode && !enrichmentSatisfied
+      ? "OpenFIGI + AI verification is still running or flagged rows need advisor review before analysis."
+      : "Holdings verification is complete or not required (demo / cash positions).",
     demoMode
       ? "Demo mode is on. The sample holdings include illustrative tax registrations only."
       : "Analysis pulls both allocation and tax registration from your confirmed holdings (qualified vs taxable vs Roth).",
@@ -1056,6 +1234,46 @@ export default function AdvisorPilotPage() {
     setAnalysis(null);
   }
 
+  const runHoldingsVerification = useCallback(async (rows: Holding[]) => {
+    if (rows.length === 0) return;
+    activeEnrichmentControllerRef.current?.abort();
+    const controller = new AbortController();
+    activeEnrichmentControllerRef.current = controller;
+    try {
+      setIsEnriching(true);
+      setEnrichError("");
+      setAnalysis(null);
+      const response = await fetch("/api/enrich-holdings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ holdings: rows }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => null);
+        throw new Error(errData?.error || "Holdings verification failed.");
+      }
+      const data = await response.json();
+      const list = Array.isArray(data.holdings) ? data.holdings : [];
+      const next: Holding[] = normalizeHoldingsForUi(list).map((h) => ({
+        ...h,
+        ...validateHoldingLocally(h),
+      }));
+      setHoldings(flagLikelyDuplicateHoldings(next));
+      setDuplicatesAcknowledged(false);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setEnrichError(error instanceof Error ? error.message : "Verification failed.");
+    } finally {
+      if (activeEnrichmentControllerRef.current === controller) {
+        activeEnrichmentControllerRef.current = null;
+      }
+      if (!controller.signal.aborted) {
+        setIsEnriching(false);
+      }
+    }
+  }, []);
+
   async function handleExtractHoldings() {
     if (uploadedFiles.length === 0) {
       setExtractError("Please upload at least one PDF, screenshot, or photo first.");
@@ -1086,18 +1304,18 @@ export default function AdvisorPilotPage() {
         throw new Error("No holdings were extracted from the statement. Try a clearer image or PDF.");
       }
 
-      const normalizedExtracted: Holding[] = normalizeHoldingsForUi(extractedHoldings).map((h) => {
-        const next = {
-          ...h,
-          status: Number(h.confidence || 0) >= 75 ? "matched" : "review",
-        };
-        return { ...next, ...validateHoldingLocally(next) };
-      });
+      const normalizedExtracted: Holding[] = normalizeHoldingsForUi(extractedHoldings).map((h) => ({
+        ...h,
+        ...validateHoldingLocally(h),
+      }));
       const cleaned = flagLikelyDuplicateHoldings(normalizedExtracted);
 
       setHoldings(cleaned);
+      setDuplicatesAcknowledged(false);
+      setEnrichError("");
       setDemoMode(false);
       setStep("confirm");
+      void runHoldingsVerification(cleaned);
     } catch (error) {
       setExtractError(error instanceof Error ? error.message : "Something went wrong analyzing the statement.");
     } finally {
@@ -1113,6 +1331,10 @@ export default function AdvisorPilotPage() {
       );
       return;
     }
+
+    activeEnrichmentControllerRef.current?.abort();
+    activeEnrichmentControllerRef.current = null;
+    setIsEnriching(false);
 
     try {
       setIsAnalyzing(true);
@@ -1178,7 +1400,7 @@ export default function AdvisorPilotPage() {
       const res = await advisorFetch("/api/client-upload-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ intakeSnapshot: client }),
         onEmailSessionExpired: handleEmailSessionExpired,
       });
       const data = await res.json();
@@ -1261,6 +1483,46 @@ export default function AdvisorPilotPage() {
   }
 
   function backIntake() {
+    if (intakeStep === 7) {
+      const screen = client.riskIntakeScreen;
+      if (screen === "known") {
+        setClient((c) => ({ ...c, riskIntakeScreen: "gate", riskIntakeKnown: "unset" }));
+        return;
+      }
+      if (screen === "quiz") {
+        if (client.riskQuizStepIndex > 0) {
+          const i = client.riskQuizStepIndex;
+          const qToClear = RISK_QUIZ_QUESTIONS[i - 1];
+          setClient((c) => {
+            const nextAnswers = { ...c.riskQuizAnswers };
+            delete nextAnswers[qToClear.id];
+            return { ...c, riskQuizStepIndex: i - 1, riskQuizAnswers: nextAnswers };
+          });
+          return;
+        }
+        setClient((c) => ({ ...c, riskIntakeScreen: "gate", riskIntakeKnown: "unset" }));
+        return;
+      }
+      if (screen === "result") {
+        const lastQ = RISK_QUIZ_QUESTIONS[RISK_QUIZ_LENGTH - 1];
+        setClient((c) => {
+          const nextAnswers = { ...c.riskQuizAnswers };
+          delete nextAnswers[lastQ.id];
+          return {
+            ...c,
+            riskIntakeScreen: "quiz",
+            riskQuizStepIndex: RISK_QUIZ_LENGTH - 1,
+            riskQuizAnswers: nextAnswers,
+            riskProfileSuggested: "",
+          };
+        });
+        return;
+      }
+      if (screen === "gate") {
+        setIntakeStep(6);
+        return;
+      }
+    }
     if (intakeStep > 0) setIntakeStep(intakeStep - 1);
   }
 
@@ -1367,9 +1629,16 @@ export default function AdvisorPilotPage() {
   function openSavedReview(review: SavedReview) {
     setActiveReviewId(review.id);
     setClient(normalizeIntakeClient(review.client));
-    setHoldings(normalizeHoldingsForUi(review.holdings));
+    const reviewDemo = Boolean(review.demoMode);
+    const loaded: Holding[] = flagLikelyDuplicateHoldings(
+      normalizeHoldingsForUi(review.holdings).map((h) => ({
+        ...h,
+        ...validateHoldingLocally(h),
+      }))
+    );
+    setHoldings(loaded);
     setMeetingNotes(review.meetingNotes || "");
-    setDemoMode(Boolean(review.demoMode));
+    setDemoMode(reviewDemo);
     setAnalysis(normalizeAiAnalysis(review.analysis));
     setRothWorksheet(normalizeRothWorksheet(review.rothWorksheet));
     setFollowUpEmail("");
@@ -1377,6 +1646,16 @@ export default function AdvisorPilotPage() {
     const resumeConfirm =
       String(review.status || "").trim().toLowerCase() === "draft" && !review.analysis;
     setStep(resumeConfirm ? "confirm" : "analysis");
+    const needsEnrichment =
+      !reviewDemo &&
+      !loaded.every(
+        (h) =>
+          isCashLikeHolding(h.assetClass, h.suggested, h.rawName) ||
+          (Boolean(h.enrichmentCompletedAt) && h.enrichmentNeedsReview !== true)
+      );
+    if (resumeConfirm && needsEnrichment) {
+      void runHoldingsVerification(loaded);
+    }
   }
 
 
@@ -2550,8 +2829,182 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         {step === "intake" && intakeStep === 4 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[4].eyebrow} title={INTAKE_STEPS[4].title} helper={INTAKE_STEPS[4].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4"><div><label className="text-sm font-semibold text-slate-700">Expected retirement age (client)</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.retirementAge} onChange={(e) => setClient({ ...client, retirementAge: e.target.value })} placeholder="67" /></div>{client.married ? (<div><label className="text-sm font-semibold text-slate-700">Expected retirement age (spouse)</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.spouseRetirementAge} onChange={(e) => setClient({ ...client, spouseRetirementAge: e.target.value })} placeholder="67" /></div>) : null}</div></IntakeShell>}
         {step === "intake" && intakeStep === 5 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[5].eyebrow} title={INTAKE_STEPS[5].title} helper={INTAKE_STEPS[5].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Annual spendable income in retirement</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.retirementSpendableIncomeAnnual} onChange={(e) => setClient({ ...client, retirementSpendableIncomeAnnual: e.target.value })} placeholder="85000" /></div></div></IntakeShell>}
         {step === "intake" && intakeStep === 6 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[6].eyebrow} title={INTAKE_STEPS[6].title} helper={INTAKE_STEPS[6].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4"><div className="flex items-center justify-between gap-4 rounded-2xl border border-blue-100 bg-white px-4 py-3"><span className="text-sm font-semibold text-slate-700">Taking Social Security?</span><button type="button" role="switch" aria-checked={client.takingSocialSecurity} onClick={() => setClient((c) => (c.takingSocialSecurity ? { ...c, takingSocialSecurity: false, socialSecurityMonthlyClient: "", socialSecurityMonthlySpouse: "" } : { ...c, takingSocialSecurity: true }))} className={`relative h-8 w-14 shrink-0 rounded-full transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${client.takingSocialSecurity ? "bg-sky-500" : "bg-slate-200"}`}><span className={`absolute top-1 left-1 block h-6 w-6 rounded-full bg-white shadow transition-transform ${client.takingSocialSecurity ? "translate-x-6" : "translate-x-0"}`} /></button></div>{client.takingSocialSecurity ? (<div className="space-y-4">{client.married ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Client monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div><div><label className="text-sm font-semibold text-slate-700">Spouse monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlySpouse} onChange={(e) => setClient({ ...client, socialSecurityMonthlySpouse: e.target.value })} placeholder="1800" /></div></div></div> : <div><label className="text-sm font-semibold text-slate-700">Monthly Social Security amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div>}</div>) : <p className="text-sm text-slate-500">Leave this off if the household is not receiving benefits yet. You can continue without entering amounts.</p>}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 7 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[7].eyebrow} title={INTAKE_STEPS[7].title} helper={INTAKE_STEPS[7].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3 md:grid-cols-2">{["conservative", "moderate-conservative", "moderate", "moderate-growth", "aggressive"].map((risk) => <button key={risk} onClick={() => setClient({ ...client, riskProfile: risk })} className={`rounded-2xl border p-4 text-left capitalize transition ${client.riskProfile === risk ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}>{risk.replace("-", " ")}</button>)}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 8 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[8].eyebrow} title={INTAKE_STEPS[8].title} helper={INTAKE_STEPS[8].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3">{[["risk-profile", "Use stated risk profile", "Best default for advisor-reviewed recommendations."], ["age-default", "Run default based on age", "Good if no risk questionnaire has been completed yet."], ["income-goal", "Retirement income goal", "Best for near-retirees who need income and lower volatility."], ["custom", "Custom advisor model", "Use your own allocation model later."]].map(([value, title, desc]) => <button key={value} onClick={() => setClient({ ...client, calibration: value })} className={`rounded-2xl border p-4 text-left transition ${client.calibration === value ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}><div className="font-semibold">{title}</div><div className={`mt-1 text-sm ${client.calibration === value ? "text-blue-100" : "text-slate-500"}`}>{desc}</div></button>)}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 7 && (
+          <IntakeShell
+            progress={progress}
+            eyebrow={INTAKE_STEPS[7].eyebrow}
+            title={INTAKE_STEPS[7].title}
+            helper={INTAKE_STEPS[7].helper}
+            onBack={backIntake}
+            onNext={nextIntake}
+            nextDisabled={intakeContinueDisabled}
+            footerCenter={liveIntakeFooter}
+          >
+            {client.riskIntakeScreen === "gate" ? (
+              <div className="space-y-4">
+                <p className="text-sm font-semibold text-slate-800">
+                  Does the client already have a stated risk profile (for example from your firm questionnaire, an IPS, or prior onboarding)?
+                </p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setClient((c) => ({
+                        ...c,
+                        riskIntakeKnown: "yes",
+                        riskIntakeScreen: "known",
+                        riskQuizAnswers: {},
+                        riskQuizStepIndex: 0,
+                        riskProfileSuggested: "",
+                      }))
+                    }
+                    className="rounded-2xl border border-slate-200 bg-white p-4 text-left font-semibold transition hover:bg-sky-50"
+                  >
+                    Yes — we know their profile
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setClient((c) => ({
+                        ...c,
+                        riskIntakeKnown: "no",
+                        riskIntakeScreen: "quiz",
+                        riskQuizAnswers: {},
+                        riskQuizStepIndex: 0,
+                        riskProfileSuggested: "",
+                      }))
+                    }
+                    className="rounded-2xl border border-slate-200 bg-white p-4 text-left font-semibold transition hover:bg-sky-50"
+                  >
+                    No — use the short assessment
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500">
+                  The assessment is illustrative for discussion in AdvisorPilot—not a replacement for your firm&apos;s full risk-tolerance process.
+                </p>
+              </div>
+            ) : null}
+            {client.riskIntakeScreen === "known" ? (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {RISK_PROFILE_DESCRIPTORS.map((tier) => {
+                  const sel = client.riskProfile === tier.id;
+                  return (
+                    <button
+                      key={tier.id}
+                      type="button"
+                      onClick={() => setClient((c) => ({ ...c, riskProfile: tier.id }))}
+                      className={`rounded-2xl border p-4 text-left transition ${
+                        sel
+                          ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 text-white shadow-lg hover:from-blue-950 hover:via-blue-800 hover:to-sky-400"
+                          : "border-slate-200 bg-white hover:bg-sky-50"
+                      }`}
+                    >
+                      <div className="font-semibold">{tier.label}</div>
+                      <div className={`mt-1 text-sm ${sel ? "text-blue-100" : "text-slate-600"}`}>{tier.shortDescriptor}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+            {client.riskIntakeScreen === "quiz"
+              ? (() => {
+                  const q = RISK_QUIZ_QUESTIONS[client.riskQuizStepIndex];
+                  if (!q) return null;
+                  return (
+                    <div className="space-y-4">
+                      <p className="text-xs font-medium text-slate-500">
+                        Assessment {client.riskQuizStepIndex + 1} of {RISK_QUIZ_LENGTH}
+                      </p>
+                      <p className="text-sm font-semibold text-slate-800">{q.prompt}</p>
+                      <div className="grid grid-cols-1 gap-2">
+                        {q.options.map((opt, optIdx) => (
+                          <button
+                            key={opt.label}
+                            type="button"
+                            onClick={() =>
+                              setClient((c) => {
+                                const answers = { ...c.riskQuizAnswers, [q.id]: optIdx };
+                                const i = c.riskQuizStepIndex;
+                                if (i >= RISK_QUIZ_LENGTH - 1) {
+                                  const { profile } = computeRiskProfileFromQuiz(answers);
+                                  return {
+                                    ...c,
+                                    riskQuizAnswers: answers,
+                                    riskIntakeScreen: "result",
+                                    riskProfileSuggested: profile,
+                                    riskProfile: profile,
+                                    riskQuizStepIndex: 0,
+                                  };
+                                }
+                                return { ...c, riskQuizAnswers: answers, riskQuizStepIndex: i + 1 };
+                              })
+                            }
+                            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm transition hover:border-sky-300 hover:bg-sky-50"
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()
+              : null}
+            {client.riskIntakeScreen === "result"
+              ? (() => {
+                  const { profile: suggested, capNotes } = computeRiskProfileFromQuiz(client.riskQuizAnswers);
+                  const sugLabel = RISK_PROFILE_DESCRIPTORS.find((t) => t.id === suggested)?.label ?? suggested;
+                  return (
+                    <div className="space-y-4">
+                      <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-4">
+                        <p className="text-sm font-semibold text-slate-800">Suggested profile</p>
+                        <p className="mt-1 text-lg font-semibold text-slate-900">{sugLabel}</p>
+                        {capNotes.length > 0 ? (
+                          <ul className="mt-2 list-inside list-disc text-xs text-slate-600">
+                            {capNotes.map((note) => (
+                              <li key={note}>{note}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        <p className="mt-2 text-xs text-slate-500">
+                          You can accept this or pick a different tier if your judgment differs.
+                        </p>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-800">Select profile for this review</p>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        {RISK_PROFILES.map((id) => {
+                          const meta = RISK_PROFILE_DESCRIPTORS.find((t) => t.id === id)!;
+                          const sel = client.riskProfile === id;
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => setClient((c) => ({ ...c, riskProfile: id }))}
+                              className={`rounded-2xl border p-4 text-left transition ${
+                                sel
+                                  ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 text-white shadow-lg"
+                                  : "border-slate-200 bg-white hover:bg-sky-50"
+                              }`}
+                            >
+                              <div className="font-semibold">{meta.label}</div>
+                              <div className={`mt-1 text-sm ${sel ? "text-blue-100" : "text-slate-600"}`}>
+                                {meta.shortDescriptor}
+                              </div>
+                              {client.riskProfileSuggested === id ? (
+                                <div className={`mt-1 text-xs ${sel ? "text-blue-200" : "text-sky-700"}`}>
+                                  Matches quick assessment
+                                </div>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()
+              : null}
+          </IntakeShell>
+        )}
+        {step === "intake" && intakeStep === 8 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[8].eyebrow} title={INTAKE_STEPS[8].title} helper={INTAKE_STEPS[8].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3">{[["risk-profile", "Use stated risk profile", "Best default for advisor-reviewed recommendations."], ["age-default", "Run default based on age", "Uses age only—ignores the tier from Question 8. Consider if you want a pure age glidepath."], ["income-goal", "Retirement income goal", "Best for near-retirees who need income and lower volatility."], ["custom", "Custom advisor model", "Use your own allocation model later."]].map(([value, title, desc]) => <button key={value} onClick={() => setClient({ ...client, calibration: value })} className={`rounded-2xl border p-4 text-left transition ${client.calibration === value ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}><div className="font-semibold">{title}</div><div className={`mt-1 text-sm ${client.calibration === value ? "text-blue-100" : "text-slate-500"}`}>{desc}</div></button>)}</div></IntakeShell>}
         {step === "intake" && intakeStep === 9 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[9].eyebrow} title={INTAKE_STEPS[9].title} helper={INTAKE_STEPS[9].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><Textarea className="min-h-40 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.goal} onChange={(e) => setClient({ ...client, goal: e.target.value })} placeholder="Example: Wants retirement income, less market risk, and tax-efficient withdrawals." /></IntakeShell>}
 
         {step === "upload" && (
@@ -2666,18 +3119,49 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               )}
               {duplicateCount > 0 && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 space-y-2">
+                  <p>
+                    Advisor check: {duplicateCount} possible duplicate holding{duplicateCount === 1 ? "" : "s"} appeared across uploaded files/pages. Confirm whether these are repeated pages or separate accounts before relying on totals.
+                  </p>
+                  <label className="flex cursor-pointer items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={duplicatesAcknowledged}
+                      onChange={(e) => setDuplicatesAcknowledged(e.target.checked)}
+                      className="mt-1"
+                    />
+                    <span>I have reviewed possible duplicates and understand totals may need adjustment.</span>
+                  </label>
+                </div>
+              )}
+              {!demoMode && (
+                <div className="rounded-2xl border border-sky-200 bg-sky-50/80 px-4 py-3 text-sm text-blue-950 space-y-2">
+                  {isEnriching ? (
+                    <p className="font-semibold">Verifying holdings with OpenFIGI + AI deep search…</p>
+                  ) : enrichmentSatisfied ? (
+                    <p className="font-semibold">Holdings verified through OpenFIGI + AI deep search analysis.</p>
+                  ) : (
+                    <p className="font-semibold">Holdings verification in progress or needs advisor review.</p>
+                  )}
+                  <p className="text-xs text-slate-700">
+                    Each non-cash line is checked against Bloomberg OpenFIGI when identifiers are present, then AI-assisted research refines ticker, share class, and asset class. Proprietary products skip invented symbols.
+                  </p>
+                  {enrichError ? <p className="text-sm text-red-800">{enrichError}</p> : null}
+                </div>
+              )}
+              {!demoMode && !enrichmentSatisfied && !isEnriching && (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-                  Advisor check: {duplicateCount} possible duplicate holding{duplicateCount === 1 ? "" : "s"} appeared across uploaded files/pages. Confirm whether these are repeated pages or separate accounts before relying on totals.
+                  One or more positions still need advisor review (matches, identifiers, or verification flags) before running analysis.
                 </div>
               )}
               <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-5">
                 <p className="text-sm font-semibold text-slate-900">Accounts & tax registration</p>
                 <p className="mt-1 text-xs text-slate-600">
-                  AI tags traditional tax-deferred, Roth IRA, or taxable wrappers from statement headers. Tune each holding — Roth worksheets only sweep traditional deferred balances ({currency(registrationTotals.traditionalQualifiedValue)} detected so far).
+                  AI tags qualified (tax-deferred), Roth IRA, or taxable wrappers from statement headers. Tune each holding — Roth worksheets only sweep qualified balances ({currency(registrationTotals.traditionalQualifiedValue)} detected so far).
                 </p>
                 <dl className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 px-3 py-2">
-                    <dt className="text-xs text-emerald-900/80">Traditional / tax-deferred</dt>
+                    <dt className="text-xs text-emerald-900/80">Qualified</dt>
                     <dd className="text-lg font-semibold tabular-nums text-emerald-950">{currency(registrationTotals.traditionalQualifiedValue)}</dd>
                   </div>
                   <div className="rounded-xl border border-blue-200 bg-blue-50/40 px-3 py-2">
@@ -2750,14 +3234,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 {holdings.map((h, index) => {
                   const opts = normalizeOptions(h);
                   return (
-                    <div key={`${h.rawName}-${index}`} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div key={`${h.rawName}-${index}`} className={confirmHoldingRegistrationSurfaceClasses(h.registrationType)}>
                       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
                         <div className="lg:col-span-3"><p className="text-xs text-slate-500">Statement name</p><p className="font-semibold">{h.rawName}</p><p className="text-sm text-slate-500">{currency(h.value)}</p></div>
                         <div className="lg:col-span-4"><p className="mb-1 text-xs text-slate-500">Matched holding / multiple choice</p><Select value={h.suggested} onValueChange={(value) => updateHolding(index, { suggested: value, status: value.includes("Manual") ? "review" : "confirmed", confidence: value.includes("Manual") ? Math.min(h.confidence, 74) : Math.max(h.confidence, 85) })}><SelectTrigger className="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent>{opts.map((option) => <SelectItem key={option} value={option}>{formatMatchedHoldingOptionLabel(option)}</SelectItem>)}</SelectContent></Select></div>
-                        <div className="lg:col-span-3"><p className="mb-1 text-xs text-slate-500">Asset class</p><Select value={ASSET_CLASSES.includes(h.assetClass) ? h.assetClass : "Unknown"} onValueChange={(value) => updateHolding(index, { assetClass: value })}><SelectTrigger className="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent>{ASSET_CLASSES.map((asset) => <SelectItem key={asset} value={asset}>{asset}</SelectItem>)}</SelectContent></Select></div>
+                        <div className="lg:col-span-3"><p className="mb-1 text-xs text-slate-500">Asset class</p><Select value={isCanonicalAssetClass(h.assetClass) ? h.assetClass : "Unknown"} onValueChange={(value) => updateHolding(index, { assetClass: value })}><SelectTrigger className="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent>{ASSET_CLASSES.map((asset) => <SelectItem key={asset} value={asset}>{asset}</SelectItem>)}</SelectContent></Select></div>
                         <div className="lg:col-span-2"><p className="text-xs text-slate-500">Confidence</p><Progress value={h.confidence} className="my-2" /><div className="flex items-center gap-2">{h.confidence >= 75 ? <CheckCircle className="h-4 w-4 text-emerald-600" /> : <AlertTriangle className="h-4 w-4 text-red-600" />}<span className="text-sm font-medium">{h.confidence}%</span></div></div>
                       </div>
-                      <div className="mt-4 grid grid-cols-1 gap-3 border-t border-slate-100 pt-4 md:grid-cols-3">
+                      <div className={`mt-4 grid grid-cols-1 gap-3 border-t pt-4 md:grid-cols-3 ${confirmHoldingDividerClass(h.registrationType)}`}>
                         <div>
                           <p className="mb-1 text-xs text-slate-500">Account # (custodian hint)</p>
                           <Input
@@ -2857,7 +3341,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         {step === "analysis" && (
           <div className="space-y-4 pb-24 md:space-y-5 md:pb-5">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3"><MetricCard icon={<TrendingUp className="h-5 w-5" />} label="Total value" value={currency(totalValue)} /><MetricCard icon={<User className="h-5 w-5" />} label="Client age" value={derivedAge ? String(derivedAge) : "Not set"} /><MetricCard icon={<ShieldCheck className="h-5 w-5" />} label="Risk profile" value={client.riskProfile.replace("-", " ")} /></div>
-            <Card className="rounded-[2rem] ap-glass border-0"><CardContent className="space-y-6 p-6 pb-8 md:p-8"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><BarChart3 className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Portfolio Review</h2><p className="text-sm text-slate-500">Advisor-facing analysis based on confirmed holdings and selected calibration.</p></div></div>{analysisError && <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">{analysisError}</div>}<div className="ap-callout rounded-3xl p-5 md:flex md:items-center md:justify-between md:gap-4"><div><p className="ap-eyebrow">Next up</p><p className="mt-1 font-serif text-xl font-semibold text-blue-950">Sit with the client</p><p className="mt-1 text-sm text-slate-600">Meeting Guide is the default path from here. PDFs and email are easiest as a wrap-up after the conversation.</p></div><Button className="mt-4 h-12 w-full rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 md:mt-0 md:w-auto md:shrink-0 md:px-8" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Start Meeting Guide<ArrowRight className="ml-2 h-4 w-4" /></Button></div><div className="grid grid-cols-1 gap-5 md:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Based on confirmed holdings" data={currentPie} /><ProfessionalDonutChart title="Proposed Allocation" subtitle="Age and risk-profile calibration" data={targetPie} /></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Scores</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-3"><ScoreCard label="Risk Alignment" value={scores.riskAlignment} helper="How closely risk matches the proposed allocation" /><ScoreCard label="Diversification" value={scores.diversification} helper="Balance across major asset groups" /><ScoreCard label="Income Readiness" value={scores.incomeReadiness} helper="Support for retirement income stability" /></div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Current vs Proposed Allocation</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><div className="mt-4 space-y-3 text-sm"><div className="flex justify-between"><span>Equity</span><strong>{currentAllocation.equity}%</strong></div><div className="flex justify-between"><span>Fixed Income</span><strong>{currentAllocation.fixedIncome}%</strong></div><div className="flex justify-between"><span>Cash</span><strong>{currentAllocation.cash}%</strong></div></div></div><div className="rounded-3xl border border-sky-200 bg-sky-50/60 p-5"><p className="text-sm font-semibold text-blue-700">Proposed Allocation</p><div className="mt-4 space-y-3 text-sm"><div className="flex justify-between"><span>Equity</span><strong>{target.equity}%</strong></div><div className="flex justify-between"><span>Fixed Income</span><strong>{target.fixedIncome}%</strong></div><div className="flex justify-between"><span>Cash</span><strong>{target.cash}%</strong></div></div></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{positioningImpact.map((item) => <li key={item} className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Retirement Success Model</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{currentSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(currentSuccessRate)} estimated success</p><Progress value={currentSuccessRate} className="mt-4" /></div><div className="rounded-3xl border border-sky-200 bg-sky-50/60 p-5"><p className="text-sm font-semibold text-blue-700">Proposed Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{proposedSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p><Progress value={proposedSuccessRate} className="mt-4" /></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Synopsis</h3><div className="rounded-2xl border bg-white p-5 text-sm leading-7 text-slate-700">{displaySynopsis}</div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Highlights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-3">{displayPortfolioHighlights.slice(0, 3).map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-2xl border border-red-200 bg-red-50/60 p-4 text-sm leading-6 text-slate-700">{flag}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-4 text-sm leading-6 text-slate-700">{insight}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-emerald-900">What This Means for You</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Strategic Considerations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4 text-sm leading-6 text-slate-700">{idea}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Advisor Example Recommendations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4 text-sm leading-6 text-slate-700">{rec}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Key findings</h3><ul className="space-y-2 text-sm">{findings.map((f) => <li key={f} className="rounded-2xl border bg-white p-4">{f}</li>)}</ul></div><div className="hidden border-t border-sky-100/60 pt-5 md:flex md:flex-wrap md:items-center md:gap-3"><Button variant="outline" className="h-12 rounded-2xl" onClick={() => setStep("confirm")}><ArrowLeft className="mr-2 h-4 w-4" />Back</Button><Button variant="outline" className="h-12 rounded-2xl" onClick={runAIAnalysis} disabled={isAnalyzing || !canRunDeepAnalysis}><BrainCircuit className="mr-2 h-4 w-4" />{isAnalyzing ? ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length] : "Regenerate analysis"}</Button><Button className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-5 md:ml-auto" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Meeting Guide<ArrowRight className="ml-2 h-4 w-4" /></Button></div>{isAnalyzing && <p className="hidden text-sm text-slate-600 md:block" aria-live="polite">{ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]} Often 30–90 seconds.</p>}</CardContent></Card>
+            <Card className="rounded-[2rem] ap-glass border-0"><CardContent className="space-y-6 p-6 pb-8 md:p-8"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><BarChart3 className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Portfolio Review</h2><p className="text-sm text-slate-500">Advisor-facing analysis based on confirmed holdings and selected calibration.</p></div></div>{analysisError && <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">{analysisError}</div>}<div className="ap-callout rounded-3xl p-5 md:flex md:items-center md:justify-between md:gap-4"><div><p className="ap-eyebrow">Next up</p><p className="mt-1 font-serif text-xl font-semibold text-blue-950">Sit with the client</p><p className="mt-1 text-sm text-slate-600">Meeting Guide is the default path from here. PDFs and email are easiest as a wrap-up after the conversation.</p></div><Button className="mt-4 h-12 w-full rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 md:mt-0 md:w-auto md:shrink-0 md:px-8" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Start Meeting Guide<ArrowRight className="ml-2 h-4 w-4" /></Button></div><div className="grid grid-cols-1 gap-5 md:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Based on confirmed holdings" data={currentPie} /><ProfessionalDonutChart title="Proposed Allocation" subtitle="Age and risk-profile calibration" data={targetPie} /></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Scores</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-3"><ScoreCard label="Risk Alignment" value={scores.riskAlignment} helper="How closely risk matches the proposed allocation" /><ScoreCard label="Diversification" value={scores.diversification} helper="Balance across major asset groups" /><ScoreCard label="Income Readiness" value={scores.incomeReadiness} helper="Support for retirement income stability" /></div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Synopsis</h3><div className="rounded-2xl border bg-white p-5 text-sm leading-7 text-slate-700">{displaySynopsis}</div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Hypothetical Allocation Stress</h3><p className="mb-4 text-sm text-slate-600"><strong className="font-semibold text-slate-800">Annualized geometric return (CAGR):</strong> each window chains the sleeve’s calendar-year % returns across 10 years, then applies the tenth root—not a straight sum or a cumulative decade total %. Static sleeve weights approximate annual rebalancing; illustrative only, not a forecast. Current mix weights each confirmed holding into equity (S&P calibration when no ticker history row), bonds (Bloomberg US Aggregate / AGG proxy), or cash / MM (annual-average Treasury-bill proxy); unclassified sleeves use a 50/50 equity/bond-index blend. The <strong className="font-semibold text-slate-800">biggest drawdown</strong> row is <strong className="font-semibold text-slate-800">2008 only</strong> — a single calendar-year blend using the −36.55% equity calibration alongside bond and cash proxies; not a multi-year CAGR.</p><div className="overflow-x-auto rounded-3xl border border-slate-200 bg-white"><table className="min-w-full text-sm"><thead><tr className="border-b border-slate-200 bg-slate-50"><th className="px-4 py-3 text-left font-semibold text-slate-700">Stress window</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Current</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Proposed</th></tr></thead><tbody>{portfolioStressScenarioRows.map(({ rowKey, title, subtitle, currentLabel, proposedLabel }) => (<tr key={rowKey} className="border-b border-slate-100 last:border-0"><td className="px-4 py-3 align-top"><p className="font-semibold text-slate-900">{title}</p><p className="text-xs text-slate-500">{subtitle}</p></td><td className="px-4 py-3 text-right font-semibold tabular-nums">{currentLabel}</td><td className="px-4 py-3 text-right font-semibold tabular-nums text-blue-900">{proposedLabel}</td></tr>))}</tbody></table></div><p className="mt-3 text-xs leading-relaxed text-slate-500">Ticker-specific equity histories can be added in code later; untouched tickers still assume the firm’s S&P calibration in each year. Bond roles use the Aggregate proxy; cash/MM uses the T-bill average proxy. Proposed path is the same index sleeves at target weights. First three rows: one CAGR each (10-year windows), read as “≈ % per year.” Biggest drawdown: modeled 2008 calendar-year blend only—not averaged over years.</p></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Retirement Success Model</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{currentSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(currentSuccessRate)} estimated success</p><Progress value={currentSuccessRate} className="mt-4" /></div><div className="rounded-3xl border border-sky-200 bg-sky-50/60 p-5"><p className="text-sm font-semibold text-blue-700">Proposed Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{proposedSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p><Progress value={proposedSuccessRate} className="mt-4" /></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Highlights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-3">{displayPortfolioHighlights.slice(0, 3).map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-2xl border border-red-200 bg-red-50/60 p-4 text-sm leading-6 text-slate-700">{flag}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-4 text-sm leading-6 text-slate-700">{insight}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-emerald-900">What This Means for You</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Strategic Considerations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4 text-sm leading-6 text-slate-700">{idea}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Advisor Example Recommendations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4 text-sm leading-6 text-slate-700">{rec}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Key findings</h3><ul className="space-y-2 text-sm">{findings.map((f) => <li key={f} className="rounded-2xl border bg-white p-4">{f}</li>)}</ul></div><div className="hidden border-t border-sky-100/60 pt-5 md:flex md:flex-wrap md:items-center md:gap-3"><Button variant="outline" className="h-12 rounded-2xl" onClick={() => setStep("confirm")}><ArrowLeft className="mr-2 h-4 w-4" />Back</Button><Button variant="outline" className="h-12 rounded-2xl" onClick={runAIAnalysis} disabled={isAnalyzing || isEnriching || !canRunDeepAnalysis}><BrainCircuit className="mr-2 h-4 w-4" />{isAnalyzing ? ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length] : "Regenerate analysis"}</Button><Button className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-5 md:ml-auto" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Meeting Guide<ArrowRight className="ml-2 h-4 w-4" /></Button></div>{isAnalyzing && <p className="hidden text-sm text-slate-600 md:block" aria-live="polite">{ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]} Often 30–90 seconds.</p>}</CardContent></Card>
           <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-sky-200/50 bg-white/85 p-4 shadow-[0_-8px_32px_rgba(15,58,122,0.12)] backdrop-blur-xl md:hidden">
             <div className="mx-auto flex max-w-3xl flex-col gap-2">
               {isAnalyzing && <p className="text-center text-xs text-slate-600" aria-live="polite">{ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]}</p>}
@@ -2930,7 +3414,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {(analysis?.objectionHandling?.length ? analysis.objectionHandling : [
                     "If the client asks why reduce stocks now: The goal is not to abandon growth, but to reduce unnecessary concentration and make sure the risk still fits the retirement timeline.",
-                    "If the client asks why add fixed income: Fixed income can help create more stability and may reduce the impact of market downturns as retirement approaches.",
+                    "If the client asks why add fixed: Holding more in fixed can help create more stability and may reduce the impact of market downturns as retirement approaches.",
                     "If the client wants to wait: Waiting is an option, but we should still stress-test whether the current portfolio could handle a meaningful downturn.",
                   ]).map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700">{item}</li>)}
                 </ul>
@@ -3624,7 +4108,8 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-5"><div><h1 className="font-serif text-4xl font-bold text-slate-950">Portfolio Review Snapshot</h1><p className="mt-2 text-sm text-slate-600">Prepared for {clientDisplayName(client) || "Client"} | Age {derivedAge || "N/A"} | Risk Profile: {client.riskProfile.replace("-", " ")}</p></div><LogoBlock compact /></div>
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2 print:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Current statement" data={currentPie} /><ProfessionalDonutChart title="Proposed Allocation" subtitle="Calibration mix for discussion" data={targetPie} /></div>
                 <div><h2 className="font-serif text-2xl font-bold text-slate-950">Portfolio Scores</h2><div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3 print:grid-cols-3"><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Risk Alignment</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.riskAlignment}/100</p><p className="mt-1 text-xs text-slate-500">Risk vs proposed allocation</p></div><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Diversification</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.diversification}/100</p><p className="mt-1 text-xs text-slate-500">Asset balance</p></div><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Income Readiness</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.incomeReadiness}/100</p><p className="mt-1 text-xs text-slate-500">Income stability</p></div></div></div>
-                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Retirement Success Model</h2><div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 print:grid-cols-2"><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-sm font-semibold text-slate-700">Current Allocation</p><p className="mt-1 text-3xl font-bold text-slate-950">{currentSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(currentSuccessRate)} estimated success</p></div><div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 print:bg-white"><p className="text-sm font-semibold text-blue-700">Proposed Allocation</p><p className="mt-1 text-3xl font-bold text-slate-950">{proposedSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p></div></div><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div><div><h2 className="font-serif text-2xl font-bold text-slate-950">Current vs Proposed Allocation</h2><p className="mt-1 text-sm text-slate-500">Allocation change only.</p><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3 print:grid-cols-3">{positioningImpact.map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div><div><h2 className="font-serif text-2xl font-bold text-slate-950">Synopsis</h2><p className="mt-2 text-sm leading-7 text-slate-700">{displaySynopsis}</p></div>
+                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Synopsis</h2><p className="mt-2 text-sm leading-7 text-slate-700">{displaySynopsis}</p></div>
+                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Retirement Success Model</h2><div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 print:grid-cols-2"><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-sm font-semibold text-slate-700">Current Allocation</p><p className="mt-1 text-3xl font-bold text-slate-950">{currentSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(currentSuccessRate)} estimated success</p></div><div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 print:bg-white"><p className="text-sm font-semibold text-blue-700">Proposed Allocation</p><p className="mt-1 text-3xl font-bold text-slate-950">{proposedSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p></div></div><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div>
                 <div><h2 className="font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{flag}</li>)}</ul></div>
                 <div><h2 className="font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-2xl border border-indigo-200 bg-indigo-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{insight}</li>)}</ul></div>
                 <div><h2 className="font-serif text-2xl font-bold text-emerald-900">What This Means for You</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div>

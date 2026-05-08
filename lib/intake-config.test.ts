@@ -64,4 +64,23 @@ describe("intake-config", () => {
     expect(canAdvanceIntakeStep(6, client({ takingSocialSecurity: true }))).toBe(false);
     expect(canAdvanceIntakeStep(6, client({ takingSocialSecurity: true, socialSecurityMonthlyClient: "2400" }))).toBe(true);
   });
+
+  it("Question 8: blocks Continue on gate and quiz; allows on known/result with valid tier", () => {
+    expect(canAdvanceIntakeStep(7, client({}))).toBe(false);
+    expect(
+      canAdvanceIntakeStep(
+        7,
+        client({ riskIntakeScreen: "known", riskProfile: "moderate" })
+      )
+    ).toBe(true);
+    expect(canAdvanceIntakeStep(7, client({ riskIntakeScreen: "quiz", riskProfile: "moderate" }))).toBe(
+      false
+    );
+    expect(
+      canAdvanceIntakeStep(
+        7,
+        client({ riskIntakeScreen: "result", riskProfile: "moderate-conservative" })
+      )
+    ).toBe(true);
+  });
 });

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { Buffer } from "buffer";
 import { createClient } from "@supabase/supabase-js";
 import { extractHoldingsFromFileBuffer } from "@/lib/extract-statement-holdings";
@@ -6,6 +6,9 @@ import { writeAuditEvent } from "@/lib/audit-log";
 import { flagLikelyDuplicateHoldings } from "@/lib/holding-merge";
 import { validateHoldingLocally } from "@/lib/holding-validation";
 import { normalizeRegistrationType } from "@/lib/holding-registration";
+import { canonicalizeAssetClass } from "@/lib/asset-classes";
+import { deriveHoldingStatus } from "@/lib/holding-status";
+import { normalizeIntakeClient, isIntakeComplete, intakeIncompleteStepTitles } from "@/lib/intake-config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,9 +33,9 @@ function normalizeHoldings(raw: unknown[]) {
       rawName: h.rawName || "Unknown holding",
       suggested: h.suggested || "Needs advisor confirmation",
       confidence,
-      assetClass: h.assetClass || "Unknown",
+      assetClass: canonicalizeAssetClass(String(h.assetClass || "Unknown")),
       value: Number(h.value || 0),
-      status: confidence >= 75 ? "matched" : "review",
+      status: deriveHoldingStatus(h.status, confidence),
       options:
         Array.isArray(h.options) && h.options.length > 0
           ? h.options
@@ -76,6 +79,7 @@ export async function POST(request: Request) {
     const firstName = String(formData.get("firstName") || "").trim();
     const lastName = String(formData.get("lastName") || "").trim();
     const advisorEmail = String(formData.get("advisorEmail") || "").trim();
+    const intakeJsonRaw = formData.get("intakeJson");
 
     if (!token) {
       return NextResponse.json({ error: "Missing upload link." }, { status: 400 });
@@ -128,6 +132,62 @@ export async function POST(request: Request) {
       lastName: lastName || undefined,
     };
 
+    let clientPayload: Record<string, unknown>;
+
+    if (typeof intakeJsonRaw === "string" && intakeJsonRaw.trim().length > 0) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(intakeJsonRaw);
+      } catch {
+        return NextResponse.json(
+          { error: "Could not read your profile answers. Refresh the page and try again." },
+          { status: 400 }
+        );
+      }
+      const profile = normalizeIntakeClient(parsed);
+      const emailFromIntake = String(profile.advisorEmail || "").trim();
+      const effectiveAdvisorEmail =
+        emailFromIntake || advisorEmail.trim() || "";
+
+      const profileForValidate =
+        effectiveAdvisorEmail && !emailFromIntake
+          ? { ...profile, advisorEmail: effectiveAdvisorEmail }
+          : profile;
+
+      if (!isIntakeComplete(profileForValidate)) {
+        return NextResponse.json(
+          {
+            error: "Please complete every profile section before uploading.",
+            missingSteps: intakeIncompleteStepTitles(profileForValidate),
+          },
+          { status: 400 }
+        );
+      }
+
+      clientPayload = {
+        ...profileForValidate,
+        advisorEmail: effectiveAdvisorEmail || profileForValidate.advisorEmail,
+        magicLinkUpload: true,
+      };
+      const fn = profileForValidate.firstName.trim();
+      const ln = profileForValidate.lastName.trim();
+      if (fn) clientContext.firstName = fn;
+      if (ln) clientContext.lastName = ln;
+    } else {
+      clientPayload = {
+        firstName: firstName || "Client",
+        lastName: lastName || "(shared link)",
+        dob: "",
+        age: "",
+        retirementAge: "67",
+        riskProfile: "moderate-conservative",
+        calibration: "risk-profile",
+        goal: "Prepare for retirement income while reducing unnecessary downside risk.",
+        advisorEmail: advisorEmail,
+        magicLinkUpload: true,
+      };
+    }
+
     const extractedHoldings: unknown[] = [];
     for (const [index, file] of files.entries()) {
       const bytes = Buffer.from(await file.arrayBuffer());
@@ -158,19 +218,6 @@ export async function POST(request: Request) {
     const holdings = flagLikelyDuplicateHoldings(normalizeHoldings(extractedHoldings));
     const totalValue = holdings.reduce((sum, h) => sum + Number(h.value || 0), 0);
 
-    const client = {
-      firstName: firstName || "Client",
-      lastName: lastName || "(shared link)",
-      dob: "",
-      age: "",
-      retirementAge: "67",
-      riskProfile: "moderate-conservative",
-      calibration: "risk-profile",
-      goal: "Prepare for retirement income while reducing unnecessary downside risk.",
-      advisorEmail,
-      magicLinkUpload: true,
-    };
-
     const meetingNotes = `Uploaded by client via advisor magic link (${new Date().toISOString()}). Files: ${files.map((file) => file.name || "statement").join(", ")}.`;
 
     const { data: inserted, error: insertErr } = await supabaseAdmin
@@ -178,7 +225,7 @@ export async function POST(request: Request) {
       .insert({
         owner_email: ownerEmail,
         owner_user_id: tokenRow.advisor_user_id || null,
-        client,
+        client: clientPayload,
         holdings,
         meeting_notes: meetingNotes,
         demo_mode: false,
@@ -219,10 +266,13 @@ export async function POST(request: Request) {
       console.error("MAGIC LINK TOKEN BUMP:", bumpErr);
     }
 
+    const clientEmailForAudit =
+      String((clientPayload.advisorEmail as string | undefined) ?? advisorEmail ?? "").trim() || null;
+
     await writeAuditEvent({
       ownerEmail,
       ownerUserId: tokenRow.advisor_user_id || null,
-      actorEmail: advisorEmail || null,
+      actorEmail: clientEmailForAudit,
       action: "client_upload.ingested",
       entityType: "client",
       entityId: inserted.id,
@@ -242,3 +292,4 @@ export async function POST(request: Request) {
     );
   }
 }
+

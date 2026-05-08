@@ -1,12 +1,13 @@
-import { normalizeIntakeClient, type IntakeClient } from "@/lib/intake-config";
+﻿import { normalizeIntakeClient, type IntakeClient } from "@/lib/intake-config";
 import { normalizeRothWorksheet, type RothWorksheet } from "@/lib/roth-worksheet";
 import type { HoldingValidationMetadata, HoldingValidationStatus } from "@/lib/holding-validation";
 import {
   normalizeRegistrationType,
   type RegistrationBucket,
 } from "@/lib/holding-registration";
+import { canonicalizeAssetClass } from "@/lib/asset-classes";
+import { deriveHoldingStatus } from "@/lib/holding-status";
 
-/** Mirrors `Holding` / persisted rows from Supabase JSON. */
 export type UiHolding = {
   rawName: string;
   suggested: string;
@@ -26,9 +27,21 @@ export type UiHolding = {
   accountNumber?: string;
   registrationType?: RegistrationBucket;
   costBasis?: number;
+  enrichmentCompletedAt?: string;
+  enrichmentResolvedTicker?: string;
+  enrichmentResolvedName?: string;
+  enrichmentShareClass?: string;
+  enrichmentMappedAssetClass?: string;
+  enrichmentSourceUrls?: string[];
+  enrichmentFigi?: string;
+  enrichmentFigiSecurityType?: string;
+  enrichmentFigiSkippedReason?: string;
+  enrichmentConfidence?: number;
+  enrichmentIsProprietaryOrThinData?: boolean;
+  enrichmentNeedsReview?: boolean;
+  enrichmentNotes?: string;
 };
 
-/** Mirrors `AIAnalysis` used in reports. */
 export type NormalizedAiAnalysis = {
   synopsis: string;
   portfolioHighlights?: string[];
@@ -53,7 +66,6 @@ export type SavedReviewNormalized = {
   status?: string;
   lastContactedAt?: string;
   totalValue?: number;
-  /** Roth conversion worksheet saved with this profile */
   rothWorksheet?: RothWorksheet | null;
 };
 
@@ -62,14 +74,16 @@ export function normalizeHoldingsForUi(raw: unknown): UiHolding[] {
   return raw.map((item): UiHolding => {
     const h = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
     const options = Array.isArray(h.options) ? h.options.map((o) => String(o)) : [];
+    const confRaw = Number.isFinite(Number(h.confidence)) ? Number(h.confidence) : 0;
+    const acRaw = canonicalizeAssetClass(String(h.assetClass ?? "Unknown"));
 
     const base: UiHolding = {
       rawName: String(h.rawName ?? ""),
       suggested: String(h.suggested ?? ""),
-      confidence: Number.isFinite(Number(h.confidence)) ? Number(h.confidence) : 0,
-      assetClass: String(h.assetClass ?? "Unknown"),
+      confidence: confRaw,
+      assetClass: acRaw,
       value: Number.isFinite(Number(h.value)) ? Number(h.value) : 0,
-      status: String(h.status ?? "review"),
+      status: deriveHoldingStatus(h.status, confRaw),
       options,
     };
 
@@ -102,6 +116,46 @@ export function normalizeHoldingsForUi(raw: unknown): UiHolding[] {
     );
     const cb = Number(h.costBasis);
     if (Number.isFinite(cb) && cb > 0) base.costBasis = cb;
+
+    if (typeof h.enrichmentCompletedAt === "string" && h.enrichmentCompletedAt.trim()) {
+      base.enrichmentCompletedAt = h.enrichmentCompletedAt.trim();
+    }
+    if (typeof h.enrichmentResolvedTicker === "string" && h.enrichmentResolvedTicker.trim()) {
+      base.enrichmentResolvedTicker = h.enrichmentResolvedTicker.trim();
+    }
+    if (typeof h.enrichmentResolvedName === "string" && h.enrichmentResolvedName.trim()) {
+      base.enrichmentResolvedName = h.enrichmentResolvedName.trim();
+    }
+    if (typeof h.enrichmentShareClass === "string" && h.enrichmentShareClass.trim()) {
+      base.enrichmentShareClass = h.enrichmentShareClass.trim();
+    }
+    if (typeof h.enrichmentMappedAssetClass === "string" && h.enrichmentMappedAssetClass.trim()) {
+      base.enrichmentMappedAssetClass = h.enrichmentMappedAssetClass.trim();
+    }
+    if (Array.isArray(h.enrichmentSourceUrls)) {
+      base.enrichmentSourceUrls = h.enrichmentSourceUrls.map((u) => String(u)).filter(Boolean);
+    }
+    if (typeof h.enrichmentFigi === "string" && h.enrichmentFigi.trim()) {
+      base.enrichmentFigi = h.enrichmentFigi.trim();
+    }
+    if (typeof h.enrichmentFigiSecurityType === "string" && h.enrichmentFigiSecurityType.trim()) {
+      base.enrichmentFigiSecurityType = h.enrichmentFigiSecurityType.trim();
+    }
+    if (typeof h.enrichmentFigiSkippedReason === "string" && h.enrichmentFigiSkippedReason.trim()) {
+      base.enrichmentFigiSkippedReason = h.enrichmentFigiSkippedReason.trim();
+    }
+    if (Number.isFinite(Number(h.enrichmentConfidence))) {
+      base.enrichmentConfidence = Number(h.enrichmentConfidence);
+    }
+    if (typeof h.enrichmentIsProprietaryOrThinData === "boolean") {
+      base.enrichmentIsProprietaryOrThinData = h.enrichmentIsProprietaryOrThinData;
+    }
+    if (typeof h.enrichmentNeedsReview === "boolean") {
+      base.enrichmentNeedsReview = h.enrichmentNeedsReview;
+    }
+    if (typeof h.enrichmentNotes === "string" && h.enrichmentNotes.trim()) {
+      base.enrichmentNotes = h.enrichmentNotes.trim();
+    }
 
     return base;
   });

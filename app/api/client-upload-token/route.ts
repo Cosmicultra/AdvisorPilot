@@ -49,6 +49,10 @@ export async function POST(request: Request) {
     expiresAt.setDate(expiresAt.getDate() + days);
 
     const token = randomBytes(24).toString("hex");
+    const intakeSnapshot =
+      body?.intakeSnapshot !== undefined && body?.intakeSnapshot !== null && typeof body.intakeSnapshot === "object"
+        ? body.intakeSnapshot
+        : null;
 
     const { data, error } = await supabaseAdmin
       .from("advisorpilot_upload_tokens")
@@ -58,6 +62,7 @@ export async function POST(request: Request) {
         advisor_user_id: identity.userId,
         expires_at: expiresAt.toISOString(),
         upload_count: 0,
+        ...(intakeSnapshot ? { intake_snapshot: intakeSnapshot } : {}),
       })
       .select("id, expires_at, created_at")
       .single();

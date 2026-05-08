@@ -111,8 +111,17 @@ export function buildStepConfirmationScript(stepIndex: number, client: IntakeCli
       return ssClient
         ? `Social Security about ${ssClient} dollars a month. Does that match?`
         : `Did I capture Social Security correctly?`;
-    case 7:
+    case 7: {
+      if (client.riskIntakeKnown === "no" && client.riskProfileSuggested.trim()) {
+        const sug = client.riskProfileSuggested.replace(/-/g, " ").trim();
+        if (client.riskProfile.trim() && client.riskProfile !== client.riskProfileSuggested) {
+          const fin = client.riskProfile.replace(/-/g, " ").trim();
+          return `We're recording a ${fin} risk profile for this review—the quick assessment suggested ${sug}. Sound right?`;
+        }
+        return `We're recording a ${risk} risk profile from the quick assessment. Sound right?`;
+      }
       return `So that's a ${risk} risk profile. Sound right?`;
+    }
     case 8:
       return `We'll calibrate using ${calibration}. Sound good?`;
     case 9:

@@ -37,7 +37,7 @@ Focus on:
 - interest rates and bond environment
 - sector leadership/weakness
 - volatility and sequence-of-return risk
-- fixed income landscape
+- bond and credit market dynamics (including how rate moves affect fixed sleeve positioning)
 - income-oriented strategies
 - relevance to these holdings
 
@@ -96,7 +96,7 @@ Return ONLY valid JSON. No markdown. No code fences.
 
 Use this exact JSON shape:
 {
-  "synopsis": "Client-facing executive summary dated with today's analysis date.",
+  "synopsis": "As of [long date]. Executive summary: concrete holdings fact, integrated current vs proposed sleeves in prose, 2+ tight sentences on why the proposed mix fits risk/age/timeline/income (causal reasoning; not a pitch). No client-profile clichés.",
   "portfolioHighlights": [
     "highlight 1",
     "highlight 2",
@@ -148,18 +148,18 @@ Each section has a distinct job. Do not repeat the same talking point across sec
 SECTION ROLES:
 
 1. synopsis
-- Client-facing executive summary.
+- This is the client-facing executive summary at the top of the report. Write it as if an exceptional advisor and portfolio analyst drafted it: calm, precise, ethically tight, and easy to trust. Short does not mean shallow—every sentence should earn its place.
 - Must start with: "As of ${analysisDate}, ..."
-- Keep the date.
-- 6-8 sentences max.
-- Include the most important portfolio facts and holdings when relevant.
-- It may reference actual tickers/holdings because the client report is based on their statement.
-- It should explain the portfolio in a clear advisor voice, not a generic AI voice.
-- It should prioritize the 3-5 most important observations only.
-- It should NOT include a checklist of every possible issue.
-- It should NOT duplicate exact wording from portfolioHighlights, overlapInsights, displayWhatThisMeans, strategies, or next steps.
-- Avoid phrase stacking such as "demonstrates," "highlighting a need," "suggesting an opportunity," "may benefit from adjustments," or "ensure alignment" unless truly necessary.
-- Use confident but compliance-aware language.
+- Hard cap: 6-7 sentences (not more). Dense plain English. No bullet characters inside the synopsis string. No markdown.
+- After the date, use first name when Client.firstName exists ("For Morgan," or woven into the first clause). If firstName is missing, use neutral phrasing—never "the client profile," "on the client's profile," or "per the client profile."
+- Do all of the following in order, without sounding like a mail-merge template:
+  a) Ground the reader in 1-2 concrete facts from their holdings: largest positions by weight or dollars when values exist, or one clear concentration fact if a sleeve dominates. Use names/tickers from the Holdings data.
+  b) Describe current vs proposed sleeves once, in prose. Prefer weaving percentages in naturally; avoid a dry "current X% vs proposed Y%" rundown unless one contrast is essential.
+  c) Reasoning (required): Spend at least 2 sentences on why the proposed mix is directionally appropriate for this person. Tie to stated risk profile, age or retirement timeline, income or stability needs, concentration, or volatility—only what the Client + holdings data support. Explain cause and effect (e.g., added fixed sleeve to buffer drawdowns with a shorter runway; retained equity when the timeline still supports growth; reduced dominant equity weight when one sleeve drives most outcome risk). If proposed is close to current, explain what the calibration still clarifies or tightens (roles of sleeves, drift from stated risk posture).
+  d) Optional: one short clause from Market Research Notes only if it directly supports that rationale—never a macro lecture.
+- Compliance: No return guarantees, no buy/sell commands, no tax or legal advice. Use disciplined wording: illustrative, for discussion, aligned with, where appropriate.
+- Tone: institutional confidence, zero hype, zero filler ("leverage synergies," "optimize alignment," "holistic"). Avoid stacked abstractions ("demonstrates," "underscores," "positions the portfolio to") unless unavoidable.
+- Do not duplicate wording from portfolioHighlights, overlapInsights, displayWhatThisMeans, strategies, or recommendations. Synopsis = the arc; other sections hold the detail list.
 
 2. portfolioHighlights
 - Client-facing.
@@ -233,8 +233,8 @@ SECTION ROLES:
 
 STYLE RULES:
 - Make it specific to the client age, retirement timeline, risk profile, goals, holdings, and allocation.
-- Use "Fixed" instead of "Fixed Income" in short labels.
-- Do not call dividend equity exposure fixed income or guaranteed income.
+- Use "Fixed" (or "fixed sleeve") instead of "Fixed Income" when naming the allocation bucket in outputs.
+- Do not call dividend equity exposure fixed or guaranteed income.
 - Distinguish bond funds, Treasuries, cash, dividend equity, annuities, and guaranteed income as different tools.
 - When registration summary shows both traditional tax-deferred balances and non-qualified (taxable) balances, discuss them separately: qualified-style assets vs brokerage/taxable buckets, and tie Roth conversion framing to traditional tax-deferred sources only (do not treat taxable or Roth IRA balances as Roth conversion sources).
 - If nonQualifiedWithCostBasis is non-empty, include at least one advisor-facing note (in redFlags and/or recommendations and/or talkingPoints) that selling or rotating taxable positions may realize capital gains versus stated cost basis — qualitative only, not tax advice, no dollar tax estimates unless the stated basis and market value plainly imply a taxable gain magnitude you describe in general terms.
@@ -244,6 +244,11 @@ STYLE RULES:
 - Do not claim exact live prices unless they were found in research notes.
 - Do not phrase anything as tax, legal, or investment advice.
 - Do not make final trade instructions.
+
+RISK INTAKE AND QUESTIONNAIRE (use Client JSON fields riskIntakeKnown, riskIntakeScreen, riskQuizAnswers, riskProfileSuggested, riskProfile):
+- If riskIntakeKnown is "yes" (or the record clearly reflects a stated tier only), treat riskProfile as the client's existing stated posture from their process. Do not imply a full in-app questionnaire was completed.
+- If riskIntakeKnown is "no" and riskQuizAnswers has entries, ground one or two sentences of synopsis reasoning (and where relevant displayWhatThisMeans or redFlags) in concrete themes those answers support—such as withdrawal horizon, liquidity outside the portfolio, dependence on the portfolio for essential expenses, comfort with drawdown scenarios, or concentration—only when consistent with Client + holdings. The in-app questions are illustrative discussion support in AdvisorPilot, not a regulated risk-tolerance instrument; do not guarantee future behavior.
+- If riskProfileSuggested is present and differs from riskProfile, you may add at most one neutral clause that the advisor chose a different tier than the quick assessment suggested—no suitability or "correct profile" language.
 `;
 
     const jsonResponse = await openai.responses.create({

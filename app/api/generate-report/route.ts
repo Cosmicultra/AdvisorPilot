@@ -4,6 +4,16 @@ import { Buffer } from "buffer";
 import fs from "fs/promises";
 import path from "path";
 import { clientDisplayName } from "@/lib/intake-config";
+import type { ScenarioHoldingLike } from "@/lib/ten-year-scenario-models";
+import {
+  TEN_YEAR_SCENARIOS,
+  BIGGEST_DRAWDOWN_SCENARIO_YEAR,
+  formatTenYearScenarioPercent,
+  scenarioHoldingsPortfolioReturnDecimal,
+  scenarioHoldingsPortfolioSingleYearReturnDecimal,
+  scenarioProposedPortfolioReturnDecimal,
+  scenarioProposedPortfolioSingleYearReturnDecimal,
+} from "@/lib/ten-year-scenario-models";
 
 type ReportMode = "client" | "advisor";
 
@@ -149,10 +159,10 @@ export async function POST(req: Request) {
         insights.push(`Equity exposure at ${currentEquity}% may cause multiple equity holdings to move together during broad market declines, reducing the practical benefit of holding many separate positions.`);
       }
       if (currentFixed < targetFixed && hasMultipleBondFunds) {
-        insights.push("Fixed income holdings should be reviewed for role clarity, because bond funds, aggregate bond exposure, and Treasury positions may behave differently across rate environments.");
+        insights.push("Fixed-position holdings should be reviewed for role clarity, because bond funds, aggregate bond exposure, and Treasury positions may behave differently across rate environments.");
       }
       if (hasDividend && currentEquity > 60) {
-        insights.push("Dividend-oriented equity exposure may help with income, but it should still be reviewed as equity risk rather than being treated as a substitute for fixed income or guaranteed income.");
+        insights.push("Dividend-oriented equity exposure may help with income, but it should still be reviewed as equity risk rather than being treated as a substitute for fixed or guaranteed income.");
       }
       if (!insights.length) {
         insights.push("No major overlap pattern was automatically detected, but underlying fund holdings should still be reviewed for hidden concentration before making final recommendations.");
@@ -395,6 +405,9 @@ export async function POST(req: Request) {
     const CONTENT_W = 612 - MARGIN * 2;
     let exhibitCounter = 0;
 
+    /** Minimum y for body content (points above page bottom); keeps text clear of footer rule and disclaimer. */
+    const FOOTER_SAFE_Y = 74;
+
     let y = 740;
     let pageNumber = 1;
 
@@ -508,13 +521,16 @@ export async function POST(req: Request) {
 
     function drawSmallHeader() {
       drawTopAccentLine(page, 792);
-      page.drawRectangle({ x: 0, y: 758, width: 612, height: 1, color: ruleStrong });
-      page.drawText("AdvisorPilot", { x: MARGIN, y: 768, size: 10, font: bold, color: navyLight });
-      page.drawText(cleanText(pageTitle()), { x: MARGIN, y: 755, size: 7.2, font: regular, color: muted });
+      /* Full-width rule sits above the subtitle so caps (above baseline) are not struck through. */
+      page.drawRectangle({ x: 0, y: 762, width: 612, height: 1, color: ruleStrong });
+      page.drawText("AdvisorPilot", { x: MARGIN, y: 770, size: 10, font: bold, color: navyLight });
+      page.drawText(cleanText(pageTitle()), { x: MARGIN, y: 746, size: 7.2, font: regular, color: muted });
       const rightTxt = `Page ${pageNumber}`;
       const rw = regular.widthOfTextAtSize(rightTxt, 7.2);
-      page.drawText(rightTxt, { x: 612 - MARGIN - rw, y: 762, size: 7.2, font: regular, color: muted });
-      y = 728;
+      page.drawText(rightTxt, { x: 612 - MARGIN - rw, y: 770, size: 7.2, font: regular, color: muted });
+      /* Closer to header band so body sections are not visually “pushed down” on continuation pages. */
+      /* Continuation pages: start body closer to mini-header for tighter editorial rhythm */
+      y = 732;
     }
 
     /** All-caps section eyebrow (McKinsey-style section labels). */
@@ -522,11 +538,11 @@ export async function POST(req: Request) {
       page.drawText(cleanText(label.toUpperCase()), {
         x: MARGIN,
         y,
-        size: 6.5,
+        size: 6.4,
         font: bold,
         color: stayBar,
       });
-      y -= 16;
+      y -= 14;
     }
 
     function newPage() {
@@ -536,160 +552,42 @@ export async function POST(req: Request) {
     }
 
     function availableHeight() {
-      return y - 62;
+      return y - FOOTER_SAFE_Y;
     }
 
-    function synopsisLeadParagraph(text: unknown, maxLen = 420) {
-      const t = cleanText(text);
-      if (t.length <= maxLen) return t;
-      const cut = t.slice(0, maxLen);
-      const last = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf(" "));
-      return cut.slice(0, last > 200 ? last + 1 : maxLen).trim() + "...";
-    }
+    /** Page 1 only: synopsis must not push content past floorY (stays above footer band). */
+    function drawSynopsisOnPageOne(text: unknown, floorY: number) {
+      const maxChars = 100;
+      const size = 7.6;
+      const gap = 3.2;
+      const lineH = size + gap;
+      let t = cleanText(text) || "No analysis available.";
+      const maxLines = Math.max(3, Math.floor((y - floorY - 6) / lineH));
 
-    /** Opening page: narrative priorities the reader should absorb first. */
-    function drawExecutiveSummary() {
-      ensureBlock(160);
-      drawSectionEyebrow("Executive summary");
-      page.drawText(mode === "client" ? "What matters most from this review" : "Advisor priorities for this case", {
-        x: MARGIN,
-        y,
-        size: 12,
-        font: bold,
-        color: navy,
-      });
-      y -= 22;
-      page.drawLine({
-        start: { x: MARGIN, y: y + 8 },
-        end: { x: MARGIN + CONTENT_W, y: y + 8 },
-        thickness: 0.5,
-        color: rule,
-      });
-      y -= 18;
+      const truncateToMaxLines = (s: string): string => {
+        let cur = s;
+        while (wrapLines(cur, maxChars).length > maxLines && cur.length > 40) {
+          cur = cur.slice(0, cur.length - 6).trim();
+          const cut = cur.replace(/\s+\S*$/, "");
+          cur = cut + "...";
+        }
+        const lines = wrapLines(cur, maxChars);
+        if (lines.length <= maxLines) return cur;
+        const joined = lines.slice(0, maxLines).join(" ");
+        return joined.slice(0, Math.max(20, joined.length - 12)).replace(/\s+\S*$/, "") + "...";
+      };
 
-      const bullets =
-        mode === "client"
-          ? portfolioHighlightItems.slice(0, 4)
-          : [...portfolioHighlightItems.slice(0, 2), ...strategyItems.slice(0, 2)].slice(0, 4);
-
-      let n = 1;
-      const lineW = CONTENT_W - 28;
-      for (const b of bullets) {
-        if (!cleanText(b)) continue;
-        ensureBlock(48);
-        const num = `${n}.`;
-        page.drawText(num, { x: MARGIN, y, size: 8.5, font: bold, color: stayBar });
-        y = drawWrappedText(b, MARGIN + 22, y, Math.floor(lineW / 4.2), 8.5, ink, regular, 3.8) - 8;
-        n++;
-      }
-      y -= 14;
-    }
-
-    /** Snapshot KPI strip: scannable facts before narrative detail. */
-    function drawAtAGlance() {
-      ensureBlock(120);
-      drawSectionEyebrow("At a glance");
-      page.drawText("Key figures for this portfolio", {
-        x: MARGIN,
-        y,
-        size: 12,
-        font: bold,
-        color: navy,
-      });
-      y -= 26;
-
-      const kpiH = 58;
-      const gap = 10;
-      const colW = (CONTENT_W - gap * 3) / 4;
-      const kpiTop = y;
-
-      type Kpi = { label: string; value: string; note: string };
-      const kpis: Kpi[] = [
-        { label: "Total portfolio", value: money(totalValue), note: "Per statement intake" },
-        {
-          label: "Current mix (E / F / C)",
-          value: `${Math.round(asNumber(currentAllocation.equity))} / ${Math.round(asNumber(currentAllocation.fixedIncome))} / ${Math.round(asNumber(currentAllocation.cash))}`,
-          note: "Percent weights",
-        },
-        {
-          label: "Success (current)",
-          value: `${Math.round(currentSuccessRate)}`,
-          note: "Illustrative / 100",
-        },
-        {
-          label: "Success (proposed)",
-          value: `${Math.round(proposedSuccessRate)}`,
-          note: "Illustrative / 100",
-        },
-      ];
-
-      kpis.forEach((k, i) => {
-        const x = MARGIN + i * (colW + gap);
-        page.drawRectangle({
-          x,
-          y: kpiTop - kpiH,
-          width: colW,
-          height: kpiH,
-          color: white,
-          borderColor: rule,
-          borderWidth: 0.5,
-        });
-        page.drawRectangle({ x, y: kpiTop - 3, width: colW, height: 2.5, color: goldAccent });
-        page.drawText(cleanText(k.label), {
-          x: x + 8,
-          y: kpiTop - 18,
-          size: 6.5,
-          font: bold,
-          color: muted,
-        });
-        page.drawText(cleanText(k.value), {
-          x: x + 8,
-          y: kpiTop - 38,
-          size: k.label.length > 18 ? 11 : 13,
-          font: bold,
-          color: navy,
-        });
-        page.drawText(cleanText(k.note), {
-          x: x + 8,
-          y: kpiTop - 52,
-          size: 5.8,
-          font: regular,
-          color: muted,
-        });
-      });
-
-      y = kpiTop - kpiH - 28;
-    }
-
-    function drawSynopsisFrontMatter() {
-      const raw = analysis?.synopsis || "No analysis available.";
-      const shortPara = synopsisLeadParagraph(raw, 520);
-      const lineCount = estimateLines(shortPara, 92);
-      const lineStep = 9 + 4.8;
-      const barH = lineCount * lineStep + 4;
-      ensureBlock(barH + 72);
-      drawSectionEyebrow("Situation overview");
-      page.drawText("Synopsis", { x: MARGIN, y, size: 12, font: bold, color: navy });
-      y -= 20;
-      const yTextTop = y;
+      t = truncateToMaxLines(t);
+      const lines = wrapLines(t, maxChars);
+      const barH = Math.max(lines.length * lineH + 4, lineH + 4);
       page.drawRectangle({
         x: MARGIN,
-        y: yTextTop - barH,
+        y: y - barH,
         width: 2.5,
         height: barH,
         color: goldAccent,
       });
-      y = drawWrappedText(shortPara, MARGIN + 16, yTextTop, 92, 9, ink, regular, 4.8) - 16;
-      if (cleanText(raw).length > shortPara.length + 10) {
-        page.drawText("Full narrative continues in the detailed sections that follow.", {
-          x: MARGIN + 16,
-          y,
-          size: 7.2,
-          font: regular,
-          color: muted,
-        });
-        y -= 16;
-      }
+      y = drawWrappedText(t, MARGIN + 12, y, maxChars, size, ink, regular, gap) - 5;
     }
 
     function estimateLines(text: unknown, maxChars = 92) {
@@ -773,48 +671,59 @@ export async function POST(req: Request) {
           font: bold,
           color: muted,
         });
-        y -= 12;
+        y -= 11;
       }
-      page.drawRectangle({ x: MARGIN, y: y - 2, width: 3, height: 14, color: stayBar });
+      page.drawRectangle({ x: MARGIN, y: y - 11, width: 3, height: 13, color: stayBar });
       page.drawText(cleanText(title), { x: MARGIN + 10, y, size: 11, font: bold, color: navyLight });
-      y -= 22;
+      y -= 19;
       page.drawLine({
-        start: { x: MARGIN, y: y + 8 },
-        end: { x: MARGIN + CONTENT_W, y: y + 8 },
-        thickness: 0.5,
+        start: { x: MARGIN, y: y + 9 },
+        end: { x: MARGIN + CONTENT_W, y: y + 9 },
+        thickness: 0.45,
         color: rule,
       });
-      y -= 14;
+      y -= 11;
       if (subtitle) {
-        page.drawText(cleanText(subtitle), { x: MARGIN, y, size: 7.8, font: regular, color: muted });
-        y -= 18;
+        page.drawText(cleanText(subtitle), { x: MARGIN, y, size: 7.6, font: regular, color: muted });
+        y -= 13;
       } else {
-        y -= 4;
+        y -= 5;
       }
     }
 
     function drawTextSection(title: string, subtitle: string, text: unknown) {
+      const maxW = 98;
+      const fs = 8.6;
+      const lineGap = 5;
+      const padT = 10;
+      const padB = 11;
+      const lines = wrapLines(text, maxW);
+      const textBodyH = lines.length * (fs + lineGap) - lineGap + padT + padB;
       const h = paragraphBlockHeight(text, subtitle);
-      ensureBlock(h);
+      ensureBlock(Math.max(h, textBodyH + 80));
       sectionTitle(title, subtitle);
-      const boxHeight = Math.max(72, estimateLines(text, 100) * 13.2 + 22);
+      const gapBelowTitle = 6;
+      const boxTop = y - gapBelowTitle;
+      const boxBottom = boxTop - textBodyH;
+
       page.drawRectangle({
         x: MARGIN,
-        y: y - boxHeight + 10,
+        y: boxBottom,
         width: CONTENT_W,
-        height: boxHeight,
+        height: textBodyH,
         color: surface,
         borderColor: rule,
-        borderWidth: 0.45,
+        borderWidth: 0.4,
       });
       page.drawRectangle({
         x: MARGIN,
-        y: y - boxHeight + 10,
+        y: boxBottom,
         width: 2,
-        height: boxHeight,
+        height: textBodyH,
         color: goldAccent,
       });
-      y = drawWrappedText(text, MARGIN + 16, y - 6, 98, 8.6, ink, regular, 4.8) - 18;
+      y = drawWrappedText(text, MARGIN + 14, boxTop - padT, maxW, fs, ink, regular, lineGap);
+      y = y - padB - 8;
     }
 
     function drawCardSection(title: string, subtitle: string, items: string[], _accent: RGB = stayBar, _fill: RGB = surface) {
@@ -824,63 +733,76 @@ export async function POST(req: Request) {
       ensureBlock(sectionHeight);
       sectionTitle(title, subtitle);
 
-      let idx = 1;
-      for (const item of items) {
+      const lineGap = 4.4;
+      for (let idx = 1; idx <= items.length; idx++) {
+        const item = items[idx - 1]!;
         const lines = estimateLines(item, 88);
-        const blockH = Math.max(28, lines * 12 + 16);
-        if (blockH + 56 > availableHeight()) newPage();
+        const blockH = Math.max(28, lines * (8.4 + lineGap) + 20);
+        if (blockH + 40 > availableHeight()) newPage();
 
+        const itemTop = y;
         page.drawText(`${idx}.`, {
           x: MARGIN,
-          y,
+          y: itemTop,
           size: 8.5,
           font: bold,
           color: stayBar,
         });
-        y = drawWrappedText(item, MARGIN + 22, y, 88, 8.4, ink, regular, 4.2) - 6;
+        const textBottom = drawWrappedText(item, MARGIN + 22, itemTop, 88, 8.4, ink, regular, lineGap);
+        const dividerY = textBottom - 5;
         page.drawLine({
-          start: { x: MARGIN, y: y + 4 },
-          end: { x: MARGIN + CONTENT_W, y: y + 4 },
-          thickness: 0.35,
-          color: rgb(0.92, 0.93, 0.95),
+          start: { x: MARGIN, y: dividerY },
+          end: { x: MARGIN + CONTENT_W, y: dividerY },
+          thickness: 0.3,
+          color: rgb(0.88, 0.9, 0.93),
         });
-        y -= 14;
-        idx++;
+        y = dividerY - 11;
       }
-      y -= 6;
+      y -= 5;
     }
 
-    function drawPositioningTable() {
-      const rows = [
-        {
-          asset: "Equity",
-          current: `${asNumber(currentAllocation.equity)}%`,
-          proposed: `${asNumber(targetAllocation.equity, 60)}%`,
-          color: stayBar,
-        },
-        {
-          asset: "Fixed",
-          current: `${asNumber(currentAllocation.fixedIncome)}%`,
-          proposed: `${asNumber(targetAllocation.fixedIncome, 35)}%`,
-          color: accentSecondary,
-        },
-        {
-          asset: "Cash",
-          current: `${asNumber(currentAllocation.cash)}%`,
-          proposed: `${asNumber(targetAllocation.cash, 5)}%`,
-          color: goldAccent,
-        },
-      ];
-
-      const sectionHeight = 150;
+    function drawHistoricalDecadeScenarios() {
+      const rowCount = TEN_YEAR_SCENARIOS.length + 1;
+      const sectionHeight = 80 + 22 + rowCount * 26 + 30;
       ensureBlock(sectionHeight);
-      sectionTitle("Current vs Proposed Allocation", "Allocation comparison for discussion.", { exhibit: true });
+      sectionTitle(
+        "Hypothetical Allocation Stress",
+        "Decade rows: CAGR vs proposed sleeve. Bottom row: 2008 modeled calendar-year blend (worst calibrated S&P year).",
+        { exhibit: true }
+      );
+
+      const targetSlice = {
+        equity: asNumber(targetAllocation.equity, 60),
+        fixedIncome: asNumber(targetAllocation.fixedIncome, 35),
+        cash: asNumber(targetAllocation.cash, 5),
+      };
 
       const tableX = MARGIN;
       const tableW = CONTENT_W;
-      const headerH = 28;
-      const rowH = 30;
-      const tableTop = y + 6;
+      const headerH = 22;
+      const rowH = 26;
+      const rows = [
+        ...TEN_YEAR_SCENARIOS.map((scenario) => {
+          const cur = scenarioHoldingsPortfolioReturnDecimal(scenario.years, holdings as ScenarioHoldingLike[]);
+          const prop = scenarioProposedPortfolioReturnDecimal(scenario.years, targetSlice);
+          return {
+            label: `${scenario.label} (${scenario.years[0]}-${scenario.years[9]}, CAGR)`,
+            current: formatTenYearScenarioPercent(cur),
+            proposed: formatTenYearScenarioPercent(prop),
+          };
+        }),
+        {
+          label: `Biggest drawdown (${BIGGEST_DRAWDOWN_SCENARIO_YEAR} calendar year)`,
+          current: formatTenYearScenarioPercent(
+            scenarioHoldingsPortfolioSingleYearReturnDecimal(BIGGEST_DRAWDOWN_SCENARIO_YEAR, holdings as ScenarioHoldingLike[]),
+          ),
+          proposed: formatTenYearScenarioPercent(
+            scenarioProposedPortfolioSingleYearReturnDecimal(BIGGEST_DRAWDOWN_SCENARIO_YEAR, targetSlice),
+          ),
+        },
+      ];
+
+      const tableTop = y + 2;
       const tableBottom = tableTop - headerH - rows.length * rowH;
 
       page.drawRectangle({
@@ -890,9 +812,8 @@ export async function POST(req: Request) {
         height: headerH + rows.length * rowH,
         color: white,
         borderColor: rule,
-        borderWidth: 0.75,
+        borderWidth: 0.55,
       });
-
       page.drawRectangle({
         x: tableX,
         y: tableTop - headerH,
@@ -900,22 +821,19 @@ export async function POST(req: Request) {
         height: headerH,
         color: navy,
       });
-
-      page.drawText("Asset class", { x: tableX + 20, y: tableTop - 18, size: 8, font: bold, color: white });
-      const colCurX = tableX + 330;
-      const colPropX = tableX + 448;
-      const colNumW = 52;
-      const wH1 = bold.widthOfTextAtSize("Current", 8);
-      const wH2 = bold.widthOfTextAtSize("Proposed", 8);
-      page.drawText("Current", { x: colCurX + colNumW - wH1, y: tableTop - 18, size: 8, font: bold, color: white });
-      page.drawText("Proposed", { x: colPropX + colNumW - wH2, y: tableTop - 18, size: 8, font: bold, color: white });
+      page.drawText("Stress window", { x: tableX + 14, y: tableTop - 15, size: 7.5, font: bold, color: white });
+      const cx = tableX + 330;
+      const px = tableX + 446;
+      const numW = 56;
+      const wHc = bold.widthOfTextAtSize("Current", 7.5);
+      const wHp = bold.widthOfTextAtSize("Proposed", 7.5);
+      page.drawText("Current", { x: cx + numW - wHc, y: tableTop - 15, size: 7.5, font: bold, color: white });
+      page.drawText("Proposed", { x: px + numW - wHp, y: tableTop - 15, size: 7.5, font: bold, color: white });
 
       let rowY = tableTop - headerH;
-
       rows.forEach((row, index) => {
         rowY -= rowH;
         const rowFill = index % 2 === 0 ? surface : white;
-
         page.drawRectangle({
           x: tableX,
           y: rowY,
@@ -923,59 +841,86 @@ export async function POST(req: Request) {
           height: rowH,
           color: rowFill,
           borderColor: rgb(0.91, 0.94, 0.96),
-          borderWidth: 0.25,
+          borderWidth: 0.22,
         });
-
-        page.drawRectangle({ x: tableX + 12, y: rowY + 10, width: 3, height: rowH - 8, color: row.color });
-        page.drawText(row.asset, { x: tableX + 22, y: rowY + 11, size: 9, font: bold, color: navy });
-
-        const curStr = row.current;
-        const propStr = row.proposed;
-        const wCur = bold.widthOfTextAtSize(curStr, 10);
-        const wProp = bold.widthOfTextAtSize(propStr, 10);
-        page.drawText(curStr, { x: colCurX + colNumW - wCur, y: rowY + 11, size: 10, font: bold, color: ink });
-        page.drawText(propStr, { x: colPropX + colNumW - wProp, y: rowY + 11, size: 10, font: bold, color: navy });
+        const baseline = rowY + rowH / 2 - 2;
+        page.drawText(cleanText(row.label).slice(0, 58), {
+          x: tableX + 12,
+          y: baseline,
+          size: 8,
+          font: regular,
+          color: navy,
+        });
+        const wC = bold.widthOfTextAtSize(row.current, 9);
+        const wP = bold.widthOfTextAtSize(row.proposed, 9);
+        page.drawText(row.current, { x: cx + numW - wC, y: baseline, size: 9, font: bold, color: ink });
+        page.drawText(row.proposed, { x: px + numW - wP, y: baseline, size: 9, font: bold, color: navy });
       });
 
-      y = tableBottom - 24;
+      y = tableBottom - 14;
+      page.drawText(
+        cleanText(
+          "Decades: CAGR (10-year geometric mean). Bottom row: 2008 modeled one-year blended return (firm S&P -36.55% on equities)."
+        ),
+        { x: MARGIN, y, size: 6.2, font: regular, color: muted }
+      );
+      y -= 12;
     }
 
-    function drawScoreCard(title: string, value: number, helper: string, x: number, top: number, color: RGB) {
+    function drawScoreCard(
+      title: string,
+      value: number,
+      helper: string,
+      x: number,
+      top: number,
+      color: RGB,
+      boxH = 76
+    ) {
       const n = Math.max(0, Math.min(100, Number(value || 0)));
-      page.drawRectangle({ x, y: top - 76, width: 168, height: 76, color: white, borderColor: rule, borderWidth: 0.7 });
-      page.drawRectangle({ x, y: top - 4, width: 168, height: 4, color });
-      page.drawText(title, { x: x + 12, y: top - 22, size: 8.6, font: bold, color: navy });
-      page.drawText(`${Math.round(n)}`, { x: x + 12, y: top - 50, size: 22, font: bold, color: navy });
-      page.drawText("/100", { x: x + 46, y: top - 47, size: 8.5, font: regular, color: muted });
-      page.drawText(helper, { x: x + 12, y: top - 64, size: 6.8, font: regular, color: muted });
-      page.drawRectangle({ x: x + 78, y: top - 50, width: 76, height: 4, color: rgb(0.89, 0.92, 0.95) });
-      page.drawRectangle({ x: x + 78, y: top - 50, width: 76 * (n / 100), height: 4, color: n >= 75 ? stayBar : n >= 55 ? goldAccent : red });
+      const titleSize = boxH < 68 ? 8 : 8.6;
+      const numSize = boxH < 68 ? 18 : 22;
+      const titleY = top - (boxH < 68 ? 18 : 22);
+      const numY = top - (boxH < 68 ? 36 : 50);
+      const slashY = top - (boxH < 68 ? 34 : 47);
+      const helperY = top - (boxH < 68 ? 52 : 64);
+      const barY = top - (boxH < 68 ? 44 : 50);
+
+      page.drawRectangle({ x, y: top - boxH, width: 168, height: boxH, color: white, borderColor: rule, borderWidth: 0.4 });
+      page.drawRectangle({ x, y: top - 3, width: 168, height: 3, color });
+      page.drawText(title, { x: x + 12, y: titleY, size: titleSize, font: bold, color: navy });
+      page.drawText(`${Math.round(n)}`, { x: x + 12, y: numY, size: numSize, font: bold, color: navy });
+      page.drawText("/100", { x: x + Math.round(numSize === 18 ? 38 : 46), y: slashY, size: 8.5, font: regular, color: muted });
+      page.drawText(helper, { x: x + 12, y: helperY, size: 6.6, font: regular, color: muted });
+      page.drawRectangle({ x: x + 78, y: barY, width: 76, height: 3, color: rgb(0.89, 0.92, 0.95) });
+      page.drawRectangle({ x: x + 78, y: barY, width: 76 * (n / 100), height: 3, color: n >= 75 ? stayBar : n >= 55 ? goldAccent : red });
     }
 
 
     function drawRetirementSuccessModel() {
-      const sectionHeight = 250;
+      const sectionHeight = 300;
       ensureBlock(sectionHeight);
-      sectionTitle("Retirement success model", "Illustrative Monte Carlo sustainability scores (not a guarantee).", { exhibit: true });
+      sectionTitle("Retirement success model", undefined, { exhibit: true });
 
       const boxX = MARGIN;
-      const boxY = y + 8;
+      const boxTop = y - 4;
       const boxW = CONTENT_W;
-      const boxH = 188;
+      /* Tall enough for second bar + delta band + padding above card bottom */
+      const boxH = 156;
+      const boxBottom = boxTop - boxH;
 
       page.drawRectangle({
         x: boxX,
-        y: boxY - boxH,
+        y: boxBottom,
         width: boxW,
         height: boxH,
         color: white,
         borderColor: rule,
-        borderWidth: 0.45,
+        borderWidth: 0.4,
       });
 
       page.drawRectangle({
         x: boxX,
-        y: boxY - 3,
+        y: boxTop - 3,
         width: boxW,
         height: 2.5,
         color: goldAccent,
@@ -988,9 +933,10 @@ export async function POST(req: Request) {
       }
 
       const innerX = boxX + 14;
-      const barW = 278;
-      const scoreX = innerX + barW + 18;
-      const barH = 12;
+      const barW = 274;
+      const scoreX = innerX + barW + 14;
+      const barH = 11;
+      const markH = barH + 5;
 
       function drawSuccessBar(label: string, value: number, modelLabel: string, top: number) {
         const n = Math.max(0, Math.min(100, Number(value || 0)));
@@ -1014,9 +960,9 @@ export async function POST(req: Request) {
 
         page.drawRectangle({
           x: scoreX,
-          y: top - 28,
-          width: 92,
-          height: 34,
+          y: top - 27,
+          width: 90,
+          height: 32,
           color: white,
           borderColor: scoreColor,
           borderWidth: 0.55,
@@ -1025,14 +971,14 @@ export async function POST(req: Request) {
         page.drawText(`${Math.round(n)}/100`, {
           x: scoreX + 10,
           y: top - 11,
-          size: 15,
+          size: 14,
           font: bold,
           color: navy,
         });
 
         page.drawText(successLabel(n), {
           x: scoreX + 10,
-          y: top - 23,
+          y: top - 22,
           size: 6.8,
           font: regular,
           color: scoreColor,
@@ -1040,7 +986,7 @@ export async function POST(req: Request) {
 
         page.drawRectangle({
           x: innerX,
-          y: top - 40,
+          y: top - 38,
           width: barW,
           height: barH,
           color: rgb(0.90, 0.93, 0.96),
@@ -1048,7 +994,7 @@ export async function POST(req: Request) {
 
         page.drawRectangle({
           x: innerX,
-          y: top - 40,
+          y: top - 38,
           width: barW * (n / 100),
           height: barH,
           color: scoreColor,
@@ -1056,24 +1002,31 @@ export async function POST(req: Request) {
 
         page.drawRectangle({
           x: innerX + barW * 0.85,
-          y: top - 44,
-          width: 1.1,
-          height: barH + 9,
+          y: top - 40,
+          width: 1,
+          height: markH,
           color: navy,
         });
       }
 
-      drawSuccessBar("Current allocation", currentSuccessRate, "Based on current positioning", boxY - 32);
-      drawSuccessBar("Proposed allocation", proposedSuccessRate, "Based on proposed allocation", boxY - 102);
+      const rowTopCurrent = boxTop - 24;
+      const rowTopProposed = boxTop - 90;
+      drawSuccessBar("Current allocation", currentSuccessRate, "Based on current positioning", rowTopCurrent);
+      drawSuccessBar("Proposed allocation", proposedSuccessRate, "Based on proposed allocation", rowTopProposed);
 
       const delta = proposedSuccessRate - currentSuccessRate;
       const deltaText = delta >= 0 ? `+${delta} points vs. current` : `${delta} points vs. current`;
 
+      const deltaH = 20;
+      /* Bar track y is the rectangle bottom edge in PDF coords */
+      const secondBarBottomY = rowTopProposed - 38;
+      const gapAboveDelta = 5;
+      const deltaY = secondBarBottomY - gapAboveDelta - deltaH;
       page.drawRectangle({
         x: innerX,
-        y: boxY - 166,
-        width: 178,
-        height: 24,
+        y: deltaY,
+        width: 176,
+        height: deltaH,
         color: delta >= 0 ? softTeal : softRed,
         borderColor: delta >= 0 ? stayBar : red,
         borderWidth: 0.45,
@@ -1081,68 +1034,71 @@ export async function POST(req: Request) {
 
       page.drawText(cleanText(deltaText), {
         x: innerX + 10,
-        y: boxY - 157,
-        size: 8.8,
+        y: deltaY + 13,
+        size: 8.2,
         font: bold,
         color: delta >= 0 ? stayBar : red,
       });
 
-      const noteX = innerX + 196;
-      page.drawText("Bars reflect illustrative success rates (5,000 simulations each).", {
-        x: noteX,
-        y: boxY - 156,
-        size: 6.5,
-        font: regular,
-        color: muted,
-      });
-
-      page.drawText("Vertical line: 85+ illustrative target band. Not a performance guarantee.", {
-        x: noteX,
-        y: boxY - 168,
-        size: 6.5,
-        font: regular,
-        color: muted,
-      });
-
-      y = boxY - boxH - 22;
+      y = boxBottom - 10;
     }
 
 
     function drawMonteCarloExplanation() {
+      const methodologyAddendum =
+        "Illustrative Monte Carlo sustainability scores (not a guarantee). Vertical line: 85+ illustrative target band. Not a performance guarantee.";
       const explanation =
         mode === "client"
-          ? "This model estimates how the portfolio may hold up under many different market environments. It uses 5,000 simulated scenarios that include market returns, fixed performance, cash reserves, inflation, withdrawals, sequence-of-return risk, and a retirement horizon to age 95."
-          : "This Retirement Success Model is based on a Monte Carlo simulation designed to evaluate the long-term sustainability of a portfolio under a wide range of market conditions. The analysis runs 5,000 simulated scenarios incorporating equity returns, fixed performance, cash reserves, inflation, retirement withdrawals, sequence-of-return risk, and a retirement horizon to age 95.";
+          ? `This model estimates how the portfolio may hold up under many different market environments. It uses 5,000 simulated scenarios that include market returns, fixed performance, cash reserves, inflation, withdrawals, sequence-of-return risk, and a retirement horizon to age 95. ${methodologyAddendum}`
+          : `This Retirement Success Model is based on a Monte Carlo simulation designed to evaluate the long-term sustainability of a portfolio under a wide range of market conditions. The analysis runs 5,000 simulated scenarios incorporating equity returns, fixed performance, cash reserves, inflation, retirement withdrawals, sequence-of-return risk, and a retirement horizon to age 95. ${methodologyAddendum}`;
 
+      const maxW = 98;
+      const fs = 8.3;
+      const lineGap = 4.8;
+      const padT = 10;
+      const padB = 10;
+      const lines = wrapLines(explanation, maxW);
+      const textBodyH = lines.length * (fs + lineGap) - lineGap + padT + padB;
       const sectionHeight = paragraphBlockHeight(explanation, "Methodology summary.");
-      ensureBlock(sectionHeight);
+      ensureBlock(Math.max(sectionHeight, textBodyH + 80));
 
       sectionTitle("How this analysis works", "Methodology summary.");
 
-      const boxHeight = Math.max(72, estimateLines(explanation, 98) * 12.8 + 22);
+      const gapBelowTitle = 5;
+      const boxTop = y - gapBelowTitle;
+      const boxBottom = boxTop - textBodyH;
 
       page.drawRectangle({
         x: MARGIN,
-        y: y - boxHeight + 12,
+        y: boxBottom,
         width: CONTENT_W,
-        height: boxHeight,
+        height: textBodyH,
         color: surface,
         borderColor: rule,
-        borderWidth: 0.45,
+        borderWidth: 0.4,
       });
 
       page.drawRectangle({
         x: MARGIN,
-        y: y - boxHeight + 12,
+        y: boxBottom,
         width: 2,
-        height: boxHeight,
+        height: textBodyH,
         color: goldAccent,
       });
 
-      y = drawWrappedText(explanation, MARGIN + 14, y - 6, 98, 8.3, ink, regular, 4.8) - 16;
+      y = drawWrappedText(explanation, MARGIN + 14, boxTop - padT, maxW, fs, ink, regular, lineGap);
+      y = y - padB - 6;
     }
 
-    function allocationCard(title: string, subtitle: string, x: number, top: number, data: unknown, accent: RGB) {
+    function allocationCard(
+      title: string,
+      subtitle: string,
+      x: number,
+      top: number,
+      data: unknown,
+      accent: RGB,
+      cardH = 124
+    ) {
       const record = asRecord(data);
       const equity = asNumber(record.equity);
       const fixed = asNumber(record.fixedIncome);
@@ -1154,47 +1110,103 @@ export async function POST(req: Request) {
         { label: "Cash", value: cash, color: goldAccent },
       ];
 
-      page.drawRectangle({ x, y: top - 128, width: cardW, height: 128, color: white, borderColor: rule, borderWidth: 0.45 });
-      page.drawRectangle({ x, y: top - 3, width: cardW, height: 2.5, color: accent });
-      page.drawText(title, { x: x + 12, y: top - 22, size: 11, font: bold, color: navyLight });
-      page.drawText(subtitle, { x: x + 12, y: top - 36, size: 7.2, font: regular, color: muted });
+      const cardBottomY = top - cardH;
+      page.drawRectangle({ x, y: cardBottomY, width: cardW, height: cardH, color: white, borderColor: rule, borderWidth: 0.35 });
+      page.drawRectangle({ x, y: top - 2.5, width: cardW, height: 2.5, color: accent });
 
-      const barMax = Math.max(124, cardW - 44);
-      let yy = top - 58;
+      page.drawText(title, { x: x + 12, y: top - 20, size: 10.5, font: bold, color: navyLight });
+      page.drawText(subtitle, { x: x + 12, y: top - 34, size: 7, font: regular, color: muted });
+
+      const padSides = 12;
+      const labelSize = 8;
+      const pctSize = 8.2;
+      const barH = 3;
+      const barGapBelowLabel = 6;
+      const rowStride = 26;
+      const accentW = 2.5;
+      const accentH = 10;
+
+      const barTrackW = cardW - padSides * 2 - 8;
+      const pctColX = x + cardW - padSides;
+
+      let rowBaseline = top - 48;
       for (const item of values) {
-        page.drawRectangle({ x: x + 12, y: yy + 4, width: 2.5, height: 10, color: item.color });
-        page.drawText(item.label, { x: x + 20, y: yy - 1, size: 8.2, font: regular, color: ink });
+        const barY = rowBaseline - barGapBelowLabel - barH;
+
+        page.drawRectangle({
+          x: x + padSides,
+          y: rowBaseline - 2,
+          width: accentW,
+          height: accentH,
+          color: item.color,
+        });
+        page.drawText(item.label, { x: x + padSides + accentW + 6, y: rowBaseline, size: labelSize, font: regular, color: ink });
+
         const pct = `${item.value}%`;
-        const pw = bold.widthOfTextAtSize(pct, 8.5);
-        page.drawText(pct, { x: x + cardW - 14 - pw, y: yy - 1, size: 8.5, font: bold, color: navy });
-        page.drawRectangle({ x: x + 20, y: yy - 12, width: barMax, height: 3, color: rgb(0.90, 0.93, 0.96) });
-        page.drawRectangle({ x: x + 20, y: yy - 12, width: barMax * (item.value / 100), height: 3, color: item.color });
-        yy -= 30;
+        const pw = bold.widthOfTextAtSize(pct, pctSize);
+        page.drawText(pct, {
+          x: pctColX - pw,
+          y: rowBaseline,
+          size: pctSize,
+          font: bold,
+          color: navy,
+        });
+
+        page.drawRectangle({
+          x: x + padSides,
+          y: barY,
+          width: barTrackW,
+          height: barH,
+          color: rgb(0.9, 0.93, 0.96),
+        });
+        page.drawRectangle({
+          x: x + padSides,
+          y: barY,
+          width: Math.max(barH, barTrackW * (item.value / 100)),
+          height: barH,
+          color: item.color,
+        });
+
+        rowBaseline -= rowStride;
       }
     }
 
-    function drawOverview() {
-      ensureBlock(265);
-      drawSectionEyebrow("Portfolio diagnostics");
-      sectionTitle("Allocation overview", "Current positioning compared with proposed allocation.");
+    function drawPageOneAllocationScoresSynopsis() {
+      drawHeader();
+
+      sectionTitle("Allocation overview", undefined);
+      y += 11;
+
       const cardGap = 12;
       const cardW = Math.floor((CONTENT_W - cardGap) / 2);
+      const cardH = 124;
+      const cardTopOffset = 0;
       const x1 = MARGIN;
       const x2 = MARGIN + cardW + cardGap;
-      allocationCard("Current allocation", "Based on confirmed holdings", x1, y + 4, currentAllocation, stayBar);
-      allocationCard("Proposed allocation", "Illustrative target mix for discussion", x2, y + 4, targetAllocation, accentSecondary);
-      y -= 140;
+      const cardTopY = y + cardTopOffset;
+      allocationCard("Current allocation", "Based on confirmed holdings", x1, cardTopY, currentAllocation, stayBar, cardH);
+      allocationCard("Proposed allocation", "Illustrative target mix for discussion", x2, cardTopY, targetAllocation, accentSecondary, cardH);
+      const cardBottomY = cardTopY - cardH;
+      y = cardBottomY - 22;
 
-      sectionTitle("Portfolio scores", "Diagnostic view of alignment, diversification, and income readiness.");
+      sectionTitle("Portfolio scores", "Alignment, diversification, income readiness.");
+      y += 3;
       const cardPx = 168;
       const scoreGap = Math.max(8, Math.floor((CONTENT_W - cardPx * 3) / 2));
       const sx1 = MARGIN;
       const sx2 = MARGIN + cardPx + scoreGap;
       const sx3 = MARGIN + (cardPx + scoreGap) * 2;
-      drawScoreCard("Risk alignment", scores.riskAlignment, "Versus proposed allocation", sx1, y + 6, stayBar);
-      drawScoreCard("Diversification", scores.diversification, "Balance across sleeves", sx2, y + 6, accentSecondary);
-      drawScoreCard("Income readiness", scores.incomeReadiness, "Stability for income needs", sx3, y + 6, goldAccent);
-      y -= 98;
+      const scoreBoxH = 58;
+      const scoreTopOffset = 4;
+      const scoreTopY = y + scoreTopOffset;
+      drawScoreCard("Risk alignment", scores.riskAlignment, "Versus proposed allocation", sx1, scoreTopY, stayBar, scoreBoxH);
+      drawScoreCard("Diversification", scores.diversification, "Balance across sleeves", sx2, scoreTopY, accentSecondary, scoreBoxH);
+      drawScoreCard("Income readiness", scores.incomeReadiness, "Stability for income needs", sx3, scoreTopY, goldAccent, scoreBoxH);
+      y = scoreTopY - scoreBoxH - 21;
+
+      sectionTitle("Synopsis", "Summary of the portfolio review.");
+      y += 2;
+      drawSynopsisOnPageOne(analysis?.synopsis || "No analysis available.", FOOTER_SAFE_Y);
     }
 
     function drawHoldingsAppendix() {
@@ -1205,12 +1217,12 @@ export async function POST(req: Request) {
 
       const hx = MARGIN;
       const hW = CONTENT_W;
-      page.drawRectangle({ x: hx, y: y - 18, width: hW, height: 22, color: navy });
-      page.drawText("Holding", { x: hx + 10, y: y - 12, size: 7.5, font: bold, color: white });
-      page.drawText("Selected match", { x: hx + 168, y: y - 12, size: 7.5, font: bold, color: white });
-      page.drawText("Asset class", { x: hx + 330, y: y - 12, size: 7.5, font: bold, color: white });
-      page.drawText("Value", { x: hx + hW - 62, y: y - 12, size: 7.5, font: bold, color: white });
-      y -= 30;
+      page.drawRectangle({ x: hx, y: y - 16, width: hW, height: 20, color: navy });
+      page.drawText("Holding", { x: hx + 10, y: y - 11, size: 7.5, font: bold, color: white });
+      page.drawText("Selected match", { x: hx + 168, y: y - 11, size: 7.5, font: bold, color: white });
+      page.drawText("Asset class", { x: hx + 330, y: y - 11, size: 7.5, font: bold, color: white });
+      page.drawText("Value", { x: hx + hW - 62, y: y - 11, size: 7.5, font: bold, color: white });
+      y -= 27;
 
       for (let i = 0; i < holdings.length; i++) {
         const h = asRecord(holdings[i]);
@@ -1219,31 +1231,25 @@ export async function POST(req: Request) {
           sectionTitle("Holdings detail (continued)", "Remaining positions.");
         }
         const rowFill = i % 2 === 0 ? surface : white;
-        page.drawRectangle({ x: hx, y: y - 15, width: hW, height: 20, color: rowFill, borderColor: rgb(0.91, 0.94, 0.96), borderWidth: 0.2 });
-        page.drawText(cleanText(h?.rawName || "Unknown").slice(0, 32), { x: hx + 10, y: y - 8, size: 6.9, font: regular, color: ink });
-        page.drawText(cleanText(h?.suggested || "Needs review").slice(0, 34), { x: hx + 168, y: y - 8, size: 6.9, font: regular, color: ink });
-        page.drawText(cleanText(h?.assetClass || "Unknown").slice(0, 28), { x: hx + 330, y: y - 8, size: 6.9, font: regular, color: ink });
+        page.drawRectangle({ x: hx, y: y - 13, width: hW, height: 17, color: rowFill, borderColor: rgb(0.91, 0.94, 0.96), borderWidth: 0.2 });
+        page.drawText(cleanText(h?.rawName || "Unknown").slice(0, 32), { x: hx + 10, y: y - 7, size: 6.9, font: regular, color: ink });
+        page.drawText(cleanText(h?.suggested || "Needs review").slice(0, 34), { x: hx + 168, y: y - 7, size: 6.9, font: regular, color: ink });
+        page.drawText(cleanText(h?.assetClass || "Unknown").slice(0, 28), { x: hx + 330, y: y - 7, size: 6.9, font: regular, color: ink });
         const mv = money(h?.value || 0);
         const mw = regular.widthOfTextAtSize(mv, 6.9);
-        page.drawText(mv, { x: hx + hW - 10 - mw, y: y - 8, size: 6.9, font: regular, color: ink });
-        y -= 20;
+        page.drawText(mv, { x: hx + hW - 10 - mw, y: y - 7, size: 6.9, font: regular, color: ink });
+        y -= 18;
       }
     }
 
-    drawHeader();
-    drawExecutiveSummary();
-    drawAtAGlance();
-    drawSynopsisFrontMatter();
-
-    newPage();
-    drawOverview();
+    drawPageOneAllocationScoresSynopsis();
 
     newPage();
     drawRetirementSuccessModel();
 
     drawMonteCarloExplanation();
 
-    drawPositioningTable();
+    drawHistoricalDecadeScenarios();
 
     drawSectionEyebrow("Insights and implications");
     if (mode === "advisor") {

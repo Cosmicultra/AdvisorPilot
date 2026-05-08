@@ -92,22 +92,22 @@ function drawScenarioBarBlock(
 ): number {
   const leftPad = 40;
   const labelColW = 118;
-  const barMaxW = 218;
-  const barH = 11;
-  const rowGap = 5;
-  const blockGap = 20;
+  const barMaxW = 230;
+  const barH = 12;
+  const rowGap = 6;
+  const blockGap = 22;
   const scaleMax = Math.max(stayVal, rothVal, 1);
 
   let y = topY;
 
-  pg.drawText(cleanText(metric), {
-    x: leftPad,
-    y,
-    size: 8.25,
-    font: bold,
-    color: theme.ink,
-  });
-  y -= 15;
+    pg.drawText(cleanText(metric), {
+      x: leftPad,
+      y,
+      size: 8.5,
+      font: bold,
+      color: theme.ink,
+    });
+    y -= 16;
 
   const drawPair = (
     subtitle: string,
@@ -122,32 +122,33 @@ function drawScenarioBarBlock(
       font: regular,
       color: theme.muted,
     });
-    y -= rowGap + 1;
+    y -= rowGap + 2;
     const trackX = leftPad + labelColW;
     const w = Math.max(2, (val / scaleMax) * barMaxW);
+    const barBottomY = y - barH + 2;
     pg.drawRectangle({
       x: trackX,
-      y: y - barH + 2,
+      y: barBottomY,
       width: barMaxW,
       height: barH,
       color: track,
     });
-    pg.drawRectangle({ x: trackX, y: y - barH + 2, width: w, height: barH, color: fill });
+    pg.drawRectangle({ x: trackX, y: barBottomY, width: w, height: barH, color: fill });
     const valTxt = cleanText(money(val));
     pg.drawText(valTxt, {
-      x: trackX + barMaxW + 8,
-      y: y - barH + 4,
+      x: trackX + barMaxW + 10,
+      y: barBottomY + 3,
       size: 8,
       font: bold,
       color: theme.ink,
     });
-    y -= barH + rowGap + 8;
+    y -= barH + rowGap + 10;
   };
 
   drawPair("Current allocation path", stayVal, theme.stayBar, theme.stayBarSoft);
   drawPair("Roth conversion path", rothVal, theme.rothBar, theme.rothBarSoft);
 
-  y -= blockGap - 14;
+  y -= blockGap - 8;
   return y;
 }
 

@@ -3,6 +3,12 @@
  * To add/remove/reorder questions, edit INTAKE_STEPS only.
  */
 
+import { canAdvanceRiskIntake } from "@/lib/risk-questionnaire";
+import type { RiskIntakeScreen } from "@/lib/risk-questionnaire";
+import { RISK_PROFILES } from "@/lib/risk-profiles";
+
+export type RiskIntakeKnown = "unset" | "yes" | "no";
+
 export type IntakeClient = {
   firstName: string;
   lastName: string;
@@ -20,6 +26,16 @@ export type IntakeClient = {
   /** Spouse monthly Social Security when married and collecting. */
   socialSecurityMonthlySpouse: string;
   riskProfile: string;
+  /** Gate for Question 8: does the client already have a stated risk profile? */
+  riskIntakeKnown: RiskIntakeKnown;
+  /** Sub-view within Question 8 (typed wizard). */
+  riskIntakeScreen: RiskIntakeScreen;
+  /** Option index per quiz question id (see RISK_QUIZ_QUESTION_IDS). */
+  riskQuizAnswers: Record<string, number>;
+  /** Current quiz step index 0..7 while riskIntakeScreen is quiz. */
+  riskQuizStepIndex: number;
+  /** Tier suggested by the quick assessment (may differ from riskProfile if advisor overrides). */
+  riskProfileSuggested: string;
   calibration: string;
   goal: string;
   /** Client's email — used as the *To:* address for Client Snapshot / follow-up (not the advisor's login). */
@@ -35,7 +51,9 @@ export type IntakeClient = {
   magicLinkUpload?: boolean;
 };
 
-export const RISK_PROFILES = ["conservative", "moderate-conservative", "moderate", "moderate-growth", "aggressive"] as const;
+export type { RiskIntakeScreen } from "@/lib/risk-questionnaire";
+export { canAdvanceRiskIntake } from "@/lib/risk-questionnaire";
+export { RISK_PROFILES, type RiskProfileId } from "@/lib/risk-profiles";
 
 export const CALIBRATION_OPTIONS = ["risk-profile", "age-default", "income-goal", "custom"] as const;
 
@@ -109,14 +127,16 @@ export const INTAKE_STEPS: IntakeStepMeta[] = [
     id: "risk",
     eyebrow: "Question 8",
     title: "What is their risk profile?",
-    helper: "The app will use this as the preferred calibration instead of relying on age alone.",
-    fields: ["riskProfile"],
+    helper:
+      "First confirm whether they already have a stated profile (IPS, firm questionnaire, or prior onboarding). If yes, pick the matching tier. If not, use the short on-screen assessment—illustrative for discussion, not a substitute for your firm's full risk process. Either path feeds the same calibration engine.",
+    fields: ["riskProfile", "riskIntakeKnown", "riskIntakeScreen", "riskQuizAnswers", "riskProfileSuggested"],
   },
   {
     id: "calibration",
     eyebrow: "Question 9",
     title: "How should AdvisorPilot calibrate the review?",
-    helper: "You can use the client risk profile, run an age-based default, or focus on retirement income.",
+    helper:
+      "Stated risk profile is the default fit after Question 8. Age-based default ignores that tier and uses age only. Retirement income goal emphasizes income stability. Custom leaves room for your own model—even if you used the in-app risk assessment, you may still pick age-based or custom here if appropriate.",
     fields: ["calibration"],
   },
   {
@@ -147,6 +167,31 @@ export function clientFirstNameSalutation(c: Partial<IntakeClient> & { name?: st
 }
 
 /** Normalize client JSON from storage (legacy single `name` field). */
+function normRiskIntakeKnown(v: unknown): RiskIntakeKnown {
+  if (v === "yes" || v === "no") return v;
+  return "unset";
+}
+
+function normRiskIntakeScreen(v: unknown): RiskIntakeScreen {
+  if (v === "known" || v === "quiz" || v === "result" || v === "gate") return v;
+  return "gate";
+}
+
+function normRiskQuizAnswers(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, number> = {};
+  for (const [k, val] of Object.entries(raw as Record<string, unknown>)) {
+    const n = Number(val);
+    if (Number.isFinite(n) && n >= 0 && Number.isInteger(n)) out[k] = n;
+  }
+  return out;
+}
+
+function normRiskQuizStepIndex(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 && n <= 7 ? Math.floor(n) : 0;
+}
+
 export function normalizeIntakeClient(raw: unknown): IntakeClient {
   const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   let firstName = String(r.firstName ?? "");
@@ -169,6 +214,11 @@ export function normalizeIntakeClient(raw: unknown): IntakeClient {
     socialSecurityMonthlyClient: String(r.socialSecurityMonthlyClient ?? ""),
     socialSecurityMonthlySpouse: String(r.socialSecurityMonthlySpouse ?? ""),
     riskProfile: String(r.riskProfile ?? "moderate-conservative"),
+    riskIntakeKnown: normRiskIntakeKnown(r.riskIntakeKnown),
+    riskIntakeScreen: normRiskIntakeScreen(r.riskIntakeScreen),
+    riskQuizAnswers: normRiskQuizAnswers(r.riskQuizAnswers),
+    riskQuizStepIndex: normRiskQuizStepIndex(r.riskQuizStepIndex),
+    riskProfileSuggested: String(r.riskProfileSuggested ?? ""),
     calibration: String(r.calibration ?? "risk-profile"),
     goal: String(
       r.goal ?? "Prepare for retirement income while reducing unnecessary downside risk."
@@ -254,6 +304,32 @@ export function applyIntakePatch(base: IntakeClient, patch: Partial<Record<keyof
       if (n) next.riskProfile = n;
       continue;
     }
+    if (key === "riskProfileSuggested" && typeof raw === "string") {
+      const n = normRisk(raw.trim());
+      next.riskProfileSuggested = n ?? "";
+      continue;
+    }
+    if (key === "riskIntakeKnown" && typeof raw === "string") {
+      const v = raw.trim().toLowerCase();
+      if (v === "yes" || v === "no" || v === "unset") next.riskIntakeKnown = v as RiskIntakeKnown;
+      continue;
+    }
+    if (key === "riskIntakeScreen" && typeof raw === "string") {
+      const v = raw.trim().toLowerCase();
+      if (v === "gate" || v === "known" || v === "quiz" || v === "result") {
+        next.riskIntakeScreen = v as RiskIntakeScreen;
+      }
+      continue;
+    }
+    if (key === "riskQuizStepIndex" && typeof raw === "number" && Number.isFinite(raw)) {
+      next.riskQuizStepIndex = Math.max(0, Math.min(7, Math.floor(raw)));
+      continue;
+    }
+    if (key === "riskQuizAnswers" && raw && typeof raw === "object") {
+      const merged = { ...next.riskQuizAnswers, ...normRiskQuizAnswers(raw) };
+      next.riskQuizAnswers = merged;
+      continue;
+    }
     if (key === "federalTaxBracket" && typeof raw === "string") {
       const digits = raw.replace(/%/g, "").trim();
       if (FEDERAL_TAX_BRACKET_IDS.includes(digits as FederalTaxBracketId)) next.federalTaxBracket = digits;
@@ -288,6 +364,23 @@ export function applyIntakePatch(base: IntakeClient, patch: Partial<Record<keyof
 function positiveMoneyString(s: string): boolean {
   const n = Number(String(s ?? "").replace(/[$,]/g, "").trim());
   return Number.isFinite(n) && n > 0;
+}
+
+/** True when every intake step passes the same checks as the advisor wizard. */
+export function isIntakeComplete(c: IntakeClient): boolean {
+  for (let i = 0; i < INTAKE_STEP_COUNT; i++) {
+    if (!canAdvanceIntakeStep(i, c)) return false;
+  }
+  return true;
+}
+
+/** Step titles that still fail validation (for client magic-link UX). */
+export function intakeIncompleteStepTitles(c: IntakeClient): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < INTAKE_STEP_COUNT; i++) {
+    if (!canAdvanceIntakeStep(i, c)) out.push(INTAKE_STEPS[i].title);
+  }
+  return out;
 }
 
 export function canAdvanceIntakeStep(stepIndex: number, c: IntakeClient): boolean {
@@ -329,7 +422,7 @@ export function canAdvanceIntakeStep(stepIndex: number, c: IntakeClient): boolea
       if (c.married && !positiveMoneyString(c.socialSecurityMonthlySpouse)) return false;
       return true;
     case 7:
-      return RISK_PROFILES.includes(c.riskProfile as (typeof RISK_PROFILES)[number]);
+      return canAdvanceRiskIntake(c);
     case 8:
       return CALIBRATION_OPTIONS.includes(c.calibration as (typeof CALIBRATION_OPTIONS)[number]);
     case 9:

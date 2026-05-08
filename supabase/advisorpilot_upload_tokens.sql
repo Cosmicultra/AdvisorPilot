@@ -14,7 +14,8 @@ create table if not exists public.advisorpilot_upload_tokens (
   upload_count int not null default 0,
   max_upload_count int not null default 25,
   last_used_at timestamptz,
-  revoked_at timestamptz
+  revoked_at timestamptz,
+  intake_snapshot jsonb
 );
 
 create index if not exists advisorpilot_upload_tokens_advisor_idx

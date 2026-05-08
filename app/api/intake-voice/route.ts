@@ -67,6 +67,9 @@ function asPatch(obj: unknown): Partial<IntakeClient> & { name?: string } {
     "socialSecurityMonthlyClient",
     "socialSecurityMonthlySpouse",
     "riskProfile",
+    "riskProfileSuggested",
+    "riskIntakeKnown",
+    "riskIntakeScreen",
     "calibration",
     "goal",
     "advisorEmail",
@@ -77,14 +80,23 @@ function asPatch(obj: unknown): Partial<IntakeClient> & { name?: string } {
     "spouseAge",
     "spouseRetirementAge",
     "takingSocialSecurity",
+    "riskQuizStepIndex",
   ];
   const record = obj as Record<string, unknown>;
   for (const k of keys) {
     const v = record[k];
+    if (k === "riskQuizStepIndex" && typeof v === "number" && Number.isFinite(v)) {
+      (out as Record<string, unknown>).riskQuizStepIndex = Math.floor(v);
+      continue;
+    }
     if (typeof v === "string") (out as Record<string, string>)[k] = v;
     if ((k === "married" || k === "takingSocialSecurity") && typeof v === "boolean") {
       (out as Record<string, boolean>)[k as string] = v;
     }
+  }
+  const rqa = record.riskQuizAnswers;
+  if (rqa && typeof rqa === "object" && !Array.isArray(rqa)) {
+    out.riskQuizAnswers = rqa as Record<string, number>;
   }
   return out;
 }
@@ -177,6 +189,12 @@ Fields to collect this step: ${step.fields.join(", ")}
 Allowed risk profiles (exact strings if relevant): ${RISK_PROFILES.join(", ")}
 Allowed calibration modes (exact strings): ${CALIBRATION_OPTIONS.join(", ")}
 
+${
+  intakeStep === 7
+    ? `For this step: ask if they already know the client's stated risk profile from your firm, IPS, or prior onboarding—or if you should use the short on-screen assessment in the form (don't walk through every assessment question out loud here).`
+    : ""
+}
+
 Write 2–4 short sentences. Introduce this step and ask the main question naturally.
 
 Return JSON with exactly this shape: {"assistantMessage":"your text here"}`;
@@ -212,22 +230,23 @@ Client just said:
 "${userText}"
 
 Rules:
-1. Put field updates in clientPatch (partial object). Keys allowed: firstName, lastName, advisorEmail, married (boolean), spouseFirstName, spouseLastName, dob, age, spouseDob, spouseAge, adjustedGrossIncomeAnnual, federalTaxBracket, retirementAge, spouseRetirementAge, retirementSpendableIncomeAnnual, takingSocialSecurity (boolean), socialSecurityMonthlyClient, socialSecurityMonthlySpouse, riskProfile, calibration, goal. You may also use a single "name" string only if they give full name at once (e.g. "Jane Smith"); the app will split it.
+1. Put field updates in clientPatch (partial object). Keys allowed: firstName, lastName, advisorEmail, married (boolean), spouseFirstName, spouseLastName, dob, age, spouseDob, spouseAge, adjustedGrossIncomeAnnual, federalTaxBracket, retirementAge, spouseRetirementAge, retirementSpendableIncomeAnnual, takingSocialSecurity (boolean), socialSecurityMonthlyClient, socialSecurityMonthlySpouse, riskProfile, riskProfileSuggested, riskIntakeKnown ("yes"|"no"|"unset"), riskIntakeScreen ("gate"|"known"|"quiz"|"result"), riskQuizStepIndex (integer 0–7), riskQuizAnswers (object mapping question ids to option index numbers—do not fabricate answers), calibration, goal. You may also use a single "name" string only if they give full name at once (e.g. "Jane Smith"); the app will split it.
 2. For question 1 (Who is this review for?) you MUST put firstName and lastName in clientPatch whenever the user gives a full name (e.g. "Jane Smith" → firstName "Jane", lastName "Smith"). Never leave both empty if they clearly stated a name. If they indicate married, set married true and capture spouseFirstName and spouseLastName when given. Only set advance true when firstName and lastName are both filled (or a splittable full name in clientPatch / name), and when married is false OR (spouseFirstName and spouseLastName are both filled).
 3. Question 2: if married is true, also capture spouseDob (YYYY-MM-DD) and/or spouseAge.
 4. Question 5: if married is true, also capture spouseRetirementAge as a string number like "67".
 5. Question 7 Social Security: set takingSocialSecurity false if they are not receiving benefits (advance is ok with no dollar amounts). If takingSocialSecurity true, capture socialSecurityMonthlyClient; if married also socialSecurityMonthlySpouse — string monthly dollar amounts like "2400".
-6. riskProfile must be one of: ${RISK_PROFILES.join(", ")}
-7. calibration must be one of: ${CALIBRATION_OPTIONS.join(", ")}
-8. dob as YYYY-MM-DD when you can infer it.
-9. age and retirementAge as string numbers like "62".
-10. adjustedGrossIncomeAnnual as a string annual dollar amount for AGI from the latest tax return, like "165000" or "165432.50" (Federal Form 1040 AGI — not monthly).
-11. federalTaxBracket as one of: 10, 12, 22, 24, 32, 35, 37 (string like "22").
-12. retirementSpendableIncomeAnnual as a string number for dollars/year, like "85000" or "85000.00".
-13. If unclear, ask one short follow-up in assistantMessage and set advance false.
-14. Set advance true when this step's required information is clearly captured.
-15. assistantMessage must sound like a person talking across the table—never metadata (“updated age”) unless briefly confirming like a human would.
-16. On the final step (main client goal) only: if the user already said how they will provide statements in this same reply, set handoffAction to one of: "paper" (physical statement with advisor), "digital_email" (wants link emailed / upload via emailed link), "advisor_upload" (upload on this computer now). Otherwise set handoffAction to null.
+6. Question 8 risk profile: first ask if they already know the tier (IPS, firm questionnaire, or before). If yes, set riskIntakeKnown "yes", riskIntakeScreen "known", riskProfile to one of: ${RISK_PROFILES.join(", ")}. If they do not know—which is common—tell them to complete the on-screen assessment buttons with the client and set advance false; do not invent riskQuizAnswers or all eight assessment selections. If they clearly state a tier in one turn, you may still fill riskProfile and set riskIntakeKnown "yes", riskIntakeScreen "known".
+7. riskProfile must be one of: ${RISK_PROFILES.join(", ")}
+8. calibration must be one of: ${CALIBRATION_OPTIONS.join(", ")}
+9. dob as YYYY-MM-DD when you can infer it.
+10. age and retirementAge as string numbers like "62".
+11. adjustedGrossIncomeAnnual as a string annual dollar amount for AGI from the latest tax return, like "165000" or "165432.50" (Federal Form 1040 AGI — not monthly).
+12. federalTaxBracket as one of: 10, 12, 22, 24, 32, 35, 37 (string like "22").
+13. retirementSpendableIncomeAnnual as a string number for dollars/year, like "85000" or "85000.00".
+14. If unclear, ask one short follow-up in assistantMessage and set advance false.
+15. Set advance true when this step's required information is clearly captured.
+16. assistantMessage must sound like a person talking across the table—never metadata (“updated age”) unless briefly confirming like a human would.
+17. On the final step (main client goal) only: if the user already said how they will provide statements in this same reply, set handoffAction to one of: "paper" (physical statement with advisor), "digital_email" (wants link emailed / upload via emailed link), "advisor_upload" (upload on this computer now). Otherwise set handoffAction to null.
 
 Return JSON with exactly this shape:
 {"clientPatch":{},"assistantMessage":"...","advance":false,"handoffAction":null}`;

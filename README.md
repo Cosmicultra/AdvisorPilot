@@ -30,16 +30,17 @@ The primary workflow lives in `app/page.tsx` and calls these route handlers:
 - **`POST /api/email-client-snapshot`**: generates the client PDF and sends it via Gmail (requires Google sign-in).
 - **`POST /api/intake-voice`**: OpenAI chat turn that maps spoken intent to intake fields (used by **AdvisorPilot Live Intake**).
 - **`POST /api/intake-tts`**: OpenAI **text-to-speech** for natural voice playback in Live Intake (`gpt-4o-mini-tts` by default).
-- **`POST /api/client-upload-token`**: mints a **magic link** bound to the signed-in advisor (Google session or Supabase JWT from email/password login).
-- **`POST /api/client-upload/ingest`**: **public** upload endpoint used by `/client-upload/[token]`; validates the token, runs statement extraction, and inserts a **Draft** row on that advisor’s client list only.
+- **`POST /api/client-upload-token`**: mints a **magic link** bound to the signed-in advisor (Google session or Supabase JWT from email/password login). Optional **`intakeSnapshot`** body stores prefilled profile JSON for the client page.
+- **`GET /api/client-upload-context/[token]`**: **public** helper for `/client-upload/[token]`; validates the token and returns any stored intake snapshot + expiry (no upload side effects).
+- **`POST /api/client-upload/ingest`**: **public** upload endpoint used by `/client-upload/[token]`; validates the token, accepts **`intakeJson`** (full normalized profile), runs statement extraction, and inserts a **Draft** row on that advisor’s client list only.
 
 ## Client upload link (magic link + optional QR)
 
-Clients can upload a statement on **their phone** without signing in:
+Clients can confirm the full intake profile and upload statement(s) on **their phone** without signing in:
 
-1. Run the SQL in **`supabase/advisorpilot_upload_tokens.sql`** once in the Supabase SQL editor (creates the token table).
-2. Sign in to AdvisorPilot, open **Statement Capture**, and tap **Create link**. Copy the URL or use the **QR** (same URL).
-3. After the client uploads, open **Client Database** — the row appears as a **Draft** with a **Client link upload** badge. Open it to confirm holdings and continue the workflow.
+1. Run **`supabase/advisorpilot_upload_tokens_add_intake_snapshot.sql`** if your upload-token table existed before intake snapshots were added (adds optional `intake_snapshot` JSON for advisor-prefilled answers). New installs running `supabase/advisorpilot_full_schema_rls.sql` include this column.
+2. Sign in to AdvisorPilot, open **Statement Capture**, and tap **Create link**. Copy the URL or use the **QR** (same URL). Your current intake form is bundled into the link so the client sees the same profile questions prefilled where you already answered.
+3. After the client confirms their profile and uploads, open **Client Database** — the row appears as a **Draft** with a **Client link upload** badge. Open it to confirm holdings and continue the workflow.
 
 **Production:** set **`NEXT_PUBLIC_APP_URL`** to your public site origin (e.g. `https://app.example.com`) so generated links point at the right host. If unset, the app uses the incoming request host.
 
