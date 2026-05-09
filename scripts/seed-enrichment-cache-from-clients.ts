@@ -18,7 +18,7 @@
  *   SEED_CACHE_OWNER_EMAILS   Alternative to --email (comma-separated).
  */
 
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
@@ -82,9 +82,7 @@ function sanitizeEmailContainsForIlike(s: string): string {
   return s.replace(/\\/g, "").replace(/%/g, "").replace(/_/g, "").trim();
 }
 
-async function printAdvisorEmails(
-  supabase: ReturnType<typeof createClient>
-): Promise<void> {
+async function printAdvisorEmails(supabase: SupabaseClient): Promise<void> {
   const { data, error } = await supabase.from("advisorpilot_clients").select("owner_email");
   if (error) {
     console.error("Could not list advisors:", error.message);

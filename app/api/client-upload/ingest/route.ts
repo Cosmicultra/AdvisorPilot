@@ -29,9 +29,12 @@ function normalizeHoldings(raw: unknown[]) {
   return raw.map((holding) => {
     const h = holding && typeof holding === "object" ? (holding as Record<string, unknown>) : {};
     const confidence = Number(h.confidence || 0);
+    const rawName = String(h.rawName ?? "").trim() || "Unknown holding";
+    const suggestedBase =
+      String(h.suggested ?? "").trim() || "Needs advisor confirmation";
     const normalized = applySyntheticCashTickerIfEligible({
-      rawName: h.rawName || "Unknown holding",
-      suggested: h.suggested || "Needs advisor confirmation",
+      rawName,
+      suggested: suggestedBase,
       confidence,
       assetClass: canonicalizeAssetClass(String(h.assetClass || "Unknown")),
       value: Number(h.value || 0),
@@ -39,7 +42,7 @@ function normalizeHoldings(raw: unknown[]) {
       options:
         Array.isArray(h.options) && h.options.length > 0
           ? h.options
-          : [h.suggested || "Needs advisor confirmation", "Manual ticker / CUSIP entry"],
+          : [suggestedBase, "Manual ticker / CUSIP entry"],
       registrationType: normalizeRegistrationType(h.registrationType),
     });
     const acct = typeof h.accountNumber === "string" ? h.accountNumber.trim() : "";
