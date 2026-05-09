@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SYNTHETIC_CASH_TICKER } from "./cash-holding-constants";
 import { normalizeAiAnalysis, normalizeHoldingsForUi, normalizeSavedReviewRow } from "./saved-review-normalize";
 
 describe("normalizeHoldingsForUi", () => {
@@ -22,6 +23,22 @@ describe("normalizeHoldingsForUi", () => {
     expect(out[2].options).toEqual([]);
   });
 
+  it("preserves confirmedMatchOverridesReview when saved", () => {
+    const out = normalizeHoldingsForUi([
+      {
+        rawName: "Fund A",
+        suggested: "PIMIX",
+        confidence: 50,
+        assetClass: "Mutual Fund",
+        value: 1000,
+        status: "review",
+        options: [],
+        confirmedMatchOverridesReview: true,
+      },
+    ]);
+    expect(out[0].confirmedMatchOverridesReview).toBe(true);
+  });
+
   it("preserves optional enrichment fields when present", () => {
     const out = normalizeHoldingsForUi([
       {
@@ -38,6 +55,21 @@ describe("normalizeHoldingsForUi", () => {
     ]);
     expect(out[0].normalizedSymbol).toBe("QQQ");
     expect(out[0].duplicateOfIndex).toBe(2);
+  });
+
+  it("applies AP_CASH for cash-sleeve rows without a reliable ticker", () => {
+    const out = normalizeHoldingsForUi([
+      {
+        rawName: "FDIC Bank Deposit Sweep",
+        suggested: "FDIC Bank Deposit Sweep",
+        confidence: 80,
+        assetClass: "Cash / Money Market",
+        value: 500,
+        status: "matched",
+        options: [],
+      },
+    ]);
+    expect(out[0].suggested).toBe(SYNTHETIC_CASH_TICKER);
   });
 });
 

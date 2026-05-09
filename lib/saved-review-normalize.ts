@@ -7,6 +7,7 @@ import {
 } from "@/lib/holding-registration";
 import { canonicalizeAssetClass } from "@/lib/asset-classes";
 import { deriveHoldingStatus } from "@/lib/holding-status";
+import { applySyntheticCashTickerIfEligible } from "@/lib/holding-validation";
 
 export type UiHolding = {
   rawName: string;
@@ -16,6 +17,8 @@ export type UiHolding = {
   value: number;
   status: string;
   options: string[];
+  masterResolvedSymbol?: string;
+  masterResolvedNote?: string;
   normalizedSymbol?: string;
   normalizedCusip?: string;
   validationStatus?: HoldingValidationStatus;
@@ -40,6 +43,8 @@ export type UiHolding = {
   enrichmentIsProprietaryOrThinData?: boolean;
   enrichmentNeedsReview?: boolean;
   enrichmentNotes?: string;
+  /** Advisor confirmed the proposed match on Confirm Holdings despite low AI confidence / review status. */
+  confirmedMatchOverridesReview?: boolean;
 };
 
 export type NormalizedAiAnalysis = {
@@ -156,8 +161,19 @@ export function normalizeHoldingsForUi(raw: unknown): UiHolding[] {
     if (typeof h.enrichmentNotes === "string" && h.enrichmentNotes.trim()) {
       base.enrichmentNotes = h.enrichmentNotes.trim();
     }
+    if (typeof h.confirmedMatchOverridesReview === "boolean") {
+      base.confirmedMatchOverridesReview = h.confirmedMatchOverridesReview;
+    }
+    if (typeof (h as { masterResolvedSymbol?: unknown }).masterResolvedSymbol === "string") {
+      const m = String((h as { masterResolvedSymbol?: string }).masterResolvedSymbol).trim();
+      if (m) base.masterResolvedSymbol = m;
+    }
+    if (typeof (h as { masterResolvedNote?: unknown }).masterResolvedNote === "string") {
+      const m = String((h as { masterResolvedNote?: string }).masterResolvedNote).trim();
+      if (m) base.masterResolvedNote = m;
+    }
 
-    return base;
+    return applySyntheticCashTickerIfEligible(base);
   });
 }
 

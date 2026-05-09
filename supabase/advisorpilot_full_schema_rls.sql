@@ -190,11 +190,28 @@ create index if not exists advisorpilot_audit_events_owner_user_id_idx
 create index if not exists advisorpilot_audit_events_created_at_idx
   on public.advisorpilot_audit_events (created_at desc);
 
+create table if not exists public.advisorpilot_security_enrichment_cache (
+  lookup_key text primary key,
+  payload jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists advisorpilot_sec_enrich_cache_updated_at_idx
+  on public.advisorpilot_security_enrichment_cache (updated_at desc);
+
+drop trigger if exists set_advisorpilot_sec_enrich_cache_updated_at
+  on public.advisorpilot_security_enrichment_cache;
+
+create trigger set_advisorpilot_sec_enrich_cache_updated_at
+before update on public.advisorpilot_security_enrichment_cache
+for each row execute function public.set_advisorpilot_updated_at();
+
 alter table public.advisorpilot_clients enable row level security;
 alter table public.advisorpilot_advisor_profiles enable row level security;
 alter table public.advisorpilot_upload_tokens enable row level security;
 alter table public.advisorpilot_documents enable row level security;
 alter table public.advisorpilot_audit_events enable row level security;
+alter table public.advisorpilot_security_enrichment_cache enable row level security;
 
 drop policy if exists "advisorpilot_clients_select_own" on public.advisorpilot_clients;
 drop policy if exists "advisorpilot_clients_insert_own" on public.advisorpilot_clients;

@@ -1,6 +1,11 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { buildRegistrationSummaryForAnalysis } from "@/lib/holding-registration";
+import {
+  analysisJsonModel,
+  analysisResearchModel,
+  logOpenAiPass,
+} from "@/lib/openai-route-models";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -59,8 +64,11 @@ ${totalValue}
 Write concise research notes only. Do not return JSON.
 `;
 
+    const researchModel = analysisResearchModel();
+    logOpenAiPass("generate-analysis", "research", researchModel);
+
     const researchResponse = await openai.responses.create({
-      model: "gpt-4o",
+      model: researchModel,
       tools: [{ type: "web_search_preview" }],
       input: researchPrompt,
     });
@@ -251,8 +259,11 @@ RISK INTAKE AND QUESTIONNAIRE (use Client JSON fields riskIntakeKnown, riskIntak
 - If riskProfileSuggested is present and differs from riskProfile, you may add at most one neutral clause that the advisor chose a different tier than the quick assessment suggested—no suitability or "correct profile" language.
 `;
 
+    const jsonModel = analysisJsonModel();
+    logOpenAiPass("generate-analysis", "json", jsonModel);
+
     const jsonResponse = await openai.responses.create({
-      model: "gpt-4o",
+      model: jsonModel,
       input: jsonPrompt,
       text: {
         format: {

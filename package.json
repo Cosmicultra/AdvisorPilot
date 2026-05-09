@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "seed:enrichment-cache": "npx --yes tsx scripts/seed-enrichment-cache-from-clients.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",

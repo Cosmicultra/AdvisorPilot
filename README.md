@@ -22,7 +22,7 @@ AdvisorPilot is a Next.js (App Router) web app for financial advisors to:
 
 The primary workflow lives in `app/page.tsx` and calls these route handlers:
 
-- **`POST /api/analyze-statement`**: sends the uploaded statement to OpenAI and returns extracted holdings JSON.
+- **`POST /api/analyze-statement`**: sends the uploaded statement to OpenAI for extracted holdings JSON, then optionally **augments rows from** the Supabase `advisorpilot_securities_master` catalog when `ADVISORPILOT_SECURITIES_MASTER=1`.
 - **`POST /api/generate-analysis`**: generates market research notes + a structured portfolio review JSON.
 - **`POST /api/generate-report`**: generates a PDF (client/advisor mode) using `pdf-lib` and returns bytes.
 - **`GET/POST/DELETE /api/client-database`**: stores and retrieves saved reviews in Supabase.
@@ -71,6 +71,20 @@ Optional overrides:
 # OPENAI_TTS_MODEL=gpt-4o-mini-tts   # natural voice for /api/intake-tts (default)
 # OPENAI_TTS_VOICE=sage              # alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse
 # OPENAI_STT_MODEL=whisper-1         # Whisper model used by /api/intake-stt (mic transcription)
+
+# Per-pass models (defaults: gpt-4o). JSON passes are good candidates for gpt-4o-mini after QA.
+# OPENAI_ANALYSIS_RESEARCH_MODEL=gpt-4o           # macro web-search pass for /api/generate-analysis
+# OPENAI_ANALYSIS_JSON_MODEL=gpt-4o               # structured review JSON for /api/generate-analysis
+# OPENAI_ENRICHMENT_RESEARCH_MODEL=gpt-4o        # web-search pass per holding in /api/enrich-holdings
+# OPENAI_ENRICHMENT_JSON_MODEL=gpt-4o            # enrichment JSON mapping per holding
+# OPENAI_EXTRACTION_MODEL=gpt-4o                 # PDF/image holdings extraction (/api/analyze-statement)
+
+# ADVISORPILOT_SECURITIES_MASTER=1              # ticker-first match vs Supabase advisorpilot_securities_master after extract / before enrichment web run
+# ADVISORPILOT_MASTER_NAME_SCORE_THRESHOLD=35   # 0–100 Jaccard word-overlap gate (statement vs master holding_name) when symbol matches
+
+# ADVISORPILOT_EVAL_JSON_COMPARE=1                # paired OpenAI Responses JSON smoke vs fixtures (Vitest); needs OPENAI_API_KEY
+# ADVISORPILOT_EVAL_JSON_BASELINE_MODEL=gpt-4o
+# ADVISORPILOT_EVAL_JSON_CANDIDATE_MODEL=gpt-4o-mini
 ```
 
 **Live Intake:** Opens a full-screen session with the logo and a **mic level visualizer**. The browser captures speech; OpenAI turns each pause-separated utterance into intake updates; replies play back via **OpenAI TTS** so they sound human—not the browser’s robotic voice. True **streaming** two-way voice (like ChatGPT Advanced Voice) would use OpenAI’s Realtime API separately; this flow is pause-based dialogue plus premium TTS.
@@ -86,6 +100,8 @@ NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
 ```
+
+**Firm securities catalog (`advisorpilot_securities_master`):** Run `supabase/advisorpilot_securities_master.sql` once. If your table came from CSV import first, rename columns to snake_case (`primary_symbol`, …)—see commented examples in that file—and then set **`ADVISORPILOT_SECURITIES_MASTER=1`**.
 
 ### Google OAuth / NextAuth (for Gmail sending)
 
@@ -110,6 +126,7 @@ npm run dev      # start dev server
 npm run build    # production build
 npm run start    # run production server
 npm run lint     # eslint
+npm test         # Vitest (set ADVISORPILOT_EVAL_JSON_COMPARE=1 + OPENAI_API_KEY for optional paired-model JSON QA)
 ```
 
 ## Project layout

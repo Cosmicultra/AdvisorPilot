@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { extractHoldingsFromFileBuffer } from "@/lib/extract-statement-holdings";
 import { writeAuditEvent } from "@/lib/audit-log";
 import { flagLikelyDuplicateHoldings } from "@/lib/holding-merge";
-import { validateHoldingLocally } from "@/lib/holding-validation";
+import { applySyntheticCashTickerIfEligible, validateHoldingLocally } from "@/lib/holding-validation";
 import { normalizeRegistrationType } from "@/lib/holding-registration";
 import { canonicalizeAssetClass } from "@/lib/asset-classes";
 import { deriveHoldingStatus } from "@/lib/holding-status";
@@ -29,7 +29,7 @@ function normalizeHoldings(raw: unknown[]) {
   return raw.map((holding) => {
     const h = holding && typeof holding === "object" ? (holding as Record<string, unknown>) : {};
     const confidence = Number(h.confidence || 0);
-    const normalized = {
+    const normalized = applySyntheticCashTickerIfEligible({
       rawName: h.rawName || "Unknown holding",
       suggested: h.suggested || "Needs advisor confirmation",
       confidence,
@@ -41,7 +41,7 @@ function normalizeHoldings(raw: unknown[]) {
           ? h.options
           : [h.suggested || "Needs advisor confirmation", "Manual ticker / CUSIP entry"],
       registrationType: normalizeRegistrationType(h.registrationType),
-    };
+    });
     const acct = typeof h.accountNumber === "string" ? h.accountNumber.trim() : "";
     const cbRaw = Number(h.costBasis);
     const costBasis =

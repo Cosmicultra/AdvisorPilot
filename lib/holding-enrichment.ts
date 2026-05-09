@@ -1,36 +1,31 @@
 ﻿import OpenAI from "openai";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { ASSET_CLASSES, canonicalizeAssetClass, isCashLikeHolding } from "./asset-classes";
+import type { EnrichmentInputHolding, EnrichmentPatch } from "./enrichment-types";
 import { extractLikelyCusip, extractLikelySymbol } from "./holding-validation";
+import { SYNTHETIC_CASH_TICKER } from "./cash-holding-constants";
+import {
+  enrichmentJsonModel,
+  enrichmentResearchModel,
+  logOpenAiPass,
+} from "./openai-route-models";
 import { mapHoldingToOpenFigi } from "./openfigi";
+import {
+  insertMasterFromWebEnrichment,
+  masterHitToEnrichmentPatch,
+  resolveFromSecuritiesMaster,
+  securitiesMasterFeatureEnabled,
+} from "./securities-master";
+import {
+  tryGetCachedEnrichmentPatch,
+  upsertCachedEnrichmentPatch,
+} from "./security-enrichment-cache";
 
-export type EnrichmentInputHolding = {
-  rawName: string;
-  suggested: string;
-  assetClass: string;
-  value: number;
-  confidence: number;
-  status: string;
-  options: string[];
-};
+export type { EnrichmentInputHolding, EnrichmentPatch } from "./enrichment-types";
 
-export type EnrichmentPatch = {
-  enrichmentCompletedAt: string;
-  enrichmentResolvedTicker: string;
-  enrichmentResolvedName: string;
-  enrichmentShareClass: string;
-  enrichmentMappedAssetClass: string;
-  enrichmentSourceUrls: string[];
-  enrichmentFigi: string;
-  enrichmentFigiSecurityType: string;
-  enrichmentFigiSkippedReason: string;
-  enrichmentConfidence: number;
-  enrichmentIsProprietaryOrThinData: boolean;
-  enrichmentNeedsReview: boolean;
-  enrichmentNotes: string;
-  suggested: string;
-  assetClass: string;
-  confidence: number;
-  status: string;
+export type EnrichOneHoldingResult = {
+  patch: EnrichmentPatch;
+  cacheHit: boolean;
 };
 
 function detectProprietaryHint(h: EnrichmentInputHolding): boolean {
@@ -71,40 +66,97 @@ function figiSkipReason(figi: { skipped?: boolean; reason?: string }): string {
   return figi.skipped ? String(figi.reason || "") : "";
 }
 
+function patchFromCachedPayload(
+  holding: EnrichmentInputHolding,
+  cached: Omit<EnrichmentPatch, "enrichmentCompletedAt">
+): EnrichmentPatch {
+  const now = new Date().toISOString();
+  const needsReview = cached.enrichmentNeedsReview;
+  const conf = cached.enrichmentConfidence;
+  const nextStatus =
+    needsReview || conf < 75 ? "review" : holding.status === "confirmed" ? "confirmed" : "matched";
+
+  return {
+    enrichmentCompletedAt: now,
+    enrichmentResolvedTicker: cached.enrichmentResolvedTicker,
+    enrichmentResolvedName: cached.enrichmentResolvedName,
+    enrichmentShareClass: cached.enrichmentShareClass,
+    enrichmentMappedAssetClass: cached.enrichmentMappedAssetClass,
+    enrichmentSourceUrls: cached.enrichmentSourceUrls,
+    enrichmentFigi: cached.enrichmentFigi,
+    enrichmentFigiSecurityType: cached.enrichmentFigiSecurityType,
+    enrichmentFigiSkippedReason: cached.enrichmentFigiSkippedReason,
+    enrichmentConfidence: cached.enrichmentConfidence,
+    enrichmentIsProprietaryOrThinData: cached.enrichmentIsProprietaryOrThinData,
+    enrichmentNeedsReview: cached.enrichmentNeedsReview,
+    enrichmentNotes: cached.enrichmentNotes,
+    suggested: cached.suggested,
+    assetClass: cached.assetClass,
+    confidence: cached.confidence,
+    status: nextStatus,
+  };
+}
+
 export async function enrichOneHolding(
   openai: OpenAI,
   holding: EnrichmentInputHolding,
-  opts: { openfigiApiKey?: string }
-): Promise<EnrichmentPatch> {
+  opts: {
+    openfigiApiKey?: string;
+    /** When set, cached rows skip OpenAI web search + JSON passes for eligible holdings. */
+    supabaseCache?: SupabaseClient | null;
+    /** When `ADVISORPILOT_SECURITIES_MASTER=1`, Nasdaq seed / firm catalog lookups skip OpenFIGI + OpenAI hits. */
+    supabaseMaster?: SupabaseClient | null;
+  }
+): Promise<EnrichOneHoldingResult> {
   const now = new Date().toISOString();
 
   if (isCashLikeHolding(holding.assetClass, holding.suggested, holding.rawName)) {
     const mapped = canonicalizeAssetClass(holding.assetClass);
     const conf = Math.max(Number(holding.confidence) || 0, 91);
     return {
-      enrichmentCompletedAt: now,
-      enrichmentResolvedTicker: "",
-      enrichmentResolvedName: holding.suggested || holding.rawName,
-      enrichmentShareClass: "",
-      enrichmentMappedAssetClass: mapped,
-      enrichmentSourceUrls: [],
-      enrichmentFigi: "",
-      enrichmentFigiSecurityType: "",
-      enrichmentFigiSkippedReason: "cash_like_skip",
-      enrichmentConfidence: conf,
-      enrichmentIsProprietaryOrThinData: false,
-      enrichmentNeedsReview: false,
-      enrichmentNotes: "Cash or money market — skipped web and OpenFIGI.",
-      suggested: holding.suggested || mapped,
-      assetClass: mapped,
-      confidence: conf,
-      status: conf >= 75 ? "matched" : "review",
+      cacheHit: false,
+      patch: {
+        enrichmentCompletedAt: now,
+        enrichmentResolvedTicker: "",
+        enrichmentResolvedName: holding.suggested || holding.rawName,
+        enrichmentShareClass: "",
+        enrichmentMappedAssetClass: mapped,
+        enrichmentSourceUrls: [],
+        enrichmentFigi: "",
+        enrichmentFigiSecurityType: "",
+        enrichmentFigiSkippedReason: "cash_like_skip",
+        enrichmentConfidence: conf,
+        enrichmentIsProprietaryOrThinData: false,
+        enrichmentNeedsReview: false,
+        enrichmentNotes: "Cash or money market — skipped web and OpenFIGI.",
+        suggested: holding.suggested || mapped,
+        assetClass: mapped,
+        confidence: conf,
+        status: conf >= 75 ? "matched" : "review",
+      },
     };
   }
 
   const cusip = extractLikelyCusip(holding.suggested, holding.rawName);
   let sym = extractLikelySymbol(holding.suggested, holding.rawName);
   if (sym && /^(NEEDS|MANUAL|CASH)/i.test(sym)) sym = "";
+
+  if (
+    securitiesMasterFeatureEnabled() &&
+    opts.supabaseMaster &&
+    sym &&
+    sym !== SYNTHETIC_CASH_TICKER
+  ) {
+    const masterHit = await resolveFromSecuritiesMaster(opts.supabaseMaster, {
+      inferredSymbol: sym,
+      suggested: holding.suggested,
+      rawName: holding.rawName,
+    });
+    if (masterHit) {
+      const patchEarly = masterHitToEnrichmentPatch(holding, masterHit);
+      return { patch: patchEarly, cacheHit: false };
+    }
+  }
 
   const figi = await mapHoldingToOpenFigi({
     cusip,
@@ -113,6 +165,17 @@ export async function enrichOneHolding(
   });
 
   const proprietaryHint = detectProprietaryHint(holding);
+
+  if (opts.supabaseCache) {
+    const cached = await tryGetCachedEnrichmentPatch(opts.supabaseCache, {
+      figi,
+      cusip,
+      inferredSymbol: sym,
+    });
+    if (cached) {
+      return { patch: patchFromCachedPayload(holding, cached), cacheHit: true };
+    }
+  }
 
   const figiSummary = figiHasSkip(figi)
     ? `OpenFIGI: skipped (${figi.reason || "unknown"})`
@@ -141,8 +204,11 @@ Rules:
 Write concise research bullets (max 8). Cite no URLs in this step — facts only.
 `;
 
+  const researchModel = enrichmentResearchModel();
+  logOpenAiPass("enrich-holdings", "research", researchModel);
+
   const researchResponse = await openai.responses.create({
-    model: "gpt-4o",
+    model: researchModel,
     tools: [{ type: "web_search_preview" }],
     input: researchPrompt,
   });
@@ -185,8 +251,11 @@ resolvedTicker must be empty if proprietary/no public symbol.
 sourceUrls must include at least one https URL whenever you claim a ticker/CUSIP mapping for a public instrument. For proprietary-only, URLs may be carrier/product pages or empty with needsAdvisorReview=true.
 `;
 
+  const jsonModel = enrichmentJsonModel();
+  logOpenAiPass("enrich-holdings", "json", jsonModel);
+
   const jsonResponse = await openai.responses.create({
-    model: "gpt-4o",
+    model: jsonModel,
     input: jsonPrompt,
     text: { format: { type: "json_object" } },
   });
@@ -211,10 +280,16 @@ sourceUrls must include at least one https URL whenever you claim a ticker/CUSIP
   const display = str(parsed.suggestedDisplay) || holding.suggested;
   const conf = Math.max(0, Math.min(100, num(parsed.confidence) || 72));
 
+  let enrichmentNotes = str(parsed.notes);
+  if (!enrichmentNotes.trim() && thin) {
+    enrichmentNotes =
+      "Could not verify this holding against the firm securities master catalog or widely available public sources. It may be proprietary, institutional-only, or not publicly listed.";
+  }
+
   const nextStatus =
     needsReview || conf < 75 ? "review" : holding.status === "confirmed" ? "confirmed" : "matched";
 
-  return {
+  const patch: EnrichmentPatch = {
     enrichmentCompletedAt: now,
     enrichmentResolvedTicker: resolvedTicker,
     enrichmentResolvedName: str(parsed.resolvedName),
@@ -227,10 +302,24 @@ sourceUrls must include at least one https URL whenever you claim a ticker/CUSIP
     enrichmentConfidence: conf,
     enrichmentIsProprietaryOrThinData: thin,
     enrichmentNeedsReview: needsReview,
-    enrichmentNotes: str(parsed.notes),
+    enrichmentNotes,
     suggested: display,
     assetClass: mapped,
     confidence: conf,
     status: nextStatus,
   };
+
+  if (opts.supabaseCache) {
+    await upsertCachedEnrichmentPatch(opts.supabaseCache, patch, {
+      figi,
+      cusip,
+      inferredSymbol: sym,
+    });
+  }
+
+  if (securitiesMasterFeatureEnabled() && opts.supabaseMaster) {
+    await insertMasterFromWebEnrichment(opts.supabaseMaster, patch);
+  }
+
+  return { patch, cacheHit: false };
 }

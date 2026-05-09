@@ -73,6 +73,8 @@ import {
 import { formatMatchedHoldingOptionLabel } from "@/lib/holding-option-display";
 import { flagLikelyDuplicateHoldings } from "@/lib/holding-merge";
 import { validateHoldingLocally } from "@/lib/holding-validation";
+import { holdingAdvisorReviewBlocking } from "@/lib/holding-advisor-review";
+import { SYNTHETIC_CASH_TICKER } from "@/lib/cash-holding-constants";
 import {
   accountGroupKey,
   buildRegistrationSummaryForAnalysis,
@@ -203,22 +205,27 @@ function allocationDataCurrent(percents: { equity: number; fixedIncome: number; 
   return items;
 }
 
-function confirmHoldingRegistrationSurfaceClasses(registration: RegistrationBucket | undefined): string {
+function confirmHoldingRegistrationSurfaceClasses(
+  registration: RegistrationBucket | undefined,
+  needsAdvisorReview?: boolean
+): string {
   const r = normalizeRegistrationType(registration);
+  const attentive = Boolean(needsAdvisorReview);
   switch (r) {
     case "qualified":
-      return "rounded-3xl border border-emerald-200 bg-emerald-50/50 p-5 shadow-sm";
+      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-3xl border border-emerald-200 bg-emerald-50/50 p-5 shadow-sm`;
     case "roth":
-      return "rounded-3xl border border-purple-200 bg-purple-50/50 p-5 shadow-sm";
+      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-3xl border border-purple-200 bg-purple-50/50 p-5 shadow-sm`;
     case "non_qualified":
-      return "rounded-3xl border border-blue-200 bg-blue-50/50 p-5 shadow-sm";
+      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-3xl border border-blue-200 bg-blue-50/50 p-5 shadow-sm`;
     default:
-      return "rounded-3xl border border-slate-200 bg-slate-50/70 p-5 shadow-sm";
+      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-3xl border border-slate-200 bg-slate-50/70 p-5 shadow-sm`;
   }
 }
 
-function confirmHoldingDividerClass(registration: RegistrationBucket | undefined): string {
+function confirmHoldingDividerClass(registration: RegistrationBucket | undefined, needsAdvisorReview?: boolean): string {
   const r = normalizeRegistrationType(registration);
+  if (needsAdvisorReview) return "border-red-200/90";
   switch (r) {
     case "qualified":
       return "border-emerald-100";
@@ -381,6 +388,13 @@ function successLabel(score: number) {
   return "Needs Review";
 }
 
+/** Non–cash-like rows that qualify for optional AI + OpenFIGI enrichment (web search). */
+function eligibleForAiVerification(h: Holding): boolean {
+  if (isCashLikeHolding(h.assetClass, h.suggested, h.rawName)) return false;
+  if (h.confirmedMatchOverridesReview === true) return false;
+  return h.confidence < 75 || h.status === "review" || h.enrichmentNeedsReview === true;
+}
+
 function computePortfolioContextFromReview(
   client: Client,
   holdings: Holding[],
@@ -388,7 +402,7 @@ function computePortfolioContextFromReview(
   opts?: { duplicatesAcknowledged?: boolean }
 ) {
   const totalValue = holdings.reduce((sum, h) => sum + Number(h.value || 0), 0);
-  const reviewCount = holdings.filter((h) => h.confidence < 75 || h.status === "review").length;
+  const reviewCount = holdings.filter((h) => holdingAdvisorReviewBlocking(h)).length;
   const duplicateCount = holdings.filter((h) => h.duplicateOfIndex !== undefined).length;
   const enrichmentSatisfied =
     demoMode ||
@@ -786,8 +800,12 @@ export default function AdvisorPilotPage() {
   const registrationTotals = useMemo(() => buildRegistrationSummaryForAnalysis(holdings), [holdings]);
   const accountRollups = useMemo(() => rollupAccounts(holdings), [holdings]);
 
-  const reviewCount = holdings.filter((h) => h.confidence < 75 || h.status === "review").length;
+  const reviewCount = holdings.filter((h) => holdingAdvisorReviewBlocking(h)).length;
   const duplicateCount = holdings.filter((h) => h.duplicateOfIndex !== undefined).length;
+  const eligibleAiVerificationIndices = useMemo(
+    () => holdings.map((h, i) => (eligibleForAiVerification(h) ? i : -1)).filter((i) => i >= 0),
+    [holdings]
+  );
   const enrichmentSatisfied =
     demoMode ||
     holdings.every(
@@ -1190,9 +1208,9 @@ export default function AdvisorPilotPage() {
     `Based on the selected calibration, the proposed allocation is approximately ${target.equity}% equity, ${target.fixedIncome}% fixed, and ${target.cash}% cash.`,
     reviewCount > 0 ? `${reviewCount} holding${reviewCount === 1 ? "" : "s"} require advisor confirmation before final analysis.` : "All holdings are currently matched above the confidence threshold.",
     duplicateCount > 0 ? `${duplicateCount} possible duplicate holding${duplicateCount === 1 ? "" : "s"} detected across uploaded files/pages.` : "No likely duplicate holdings detected across uploaded files/pages.",
-    !demoMode && !enrichmentSatisfied
-      ? "OpenFIGI + AI verification is still running or flagged rows need advisor review before analysis."
-      : "Holdings verification is complete or not required (demo / cash positions).",
+    !demoMode && reviewCount > 0 && !enrichmentSatisfied
+      ? "Some review rows still need enrichment resolved (run optional AI verify on uncertain positions or fix matches manually) before analysis."
+      : "Optional AI verification applies only to uncertain / flagged lines; high-confidence rows are not auto-enriched.",
     demoMode
       ? "Demo mode is on. The sample holdings include illustrative tax registrations only."
       : "Analysis pulls both allocation and tax registration from your confirmed holdings (qualified vs taxable vs Roth).",
@@ -1234,45 +1252,70 @@ export default function AdvisorPilotPage() {
     setAnalysis(null);
   }
 
-  const runHoldingsVerification = useCallback(async (rows: Holding[]) => {
-    if (rows.length === 0) return;
-    activeEnrichmentControllerRef.current?.abort();
-    const controller = new AbortController();
-    activeEnrichmentControllerRef.current = controller;
-    try {
-      setIsEnriching(true);
-      setEnrichError("");
-      setAnalysis(null);
-      const response = await fetch("/api/enrich-holdings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holdings: rows }),
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const errData = await response.json().catch(() => null);
-        throw new Error(errData?.error || "Holdings verification failed.");
+  const runHoldingsVerificationForIndices = useCallback(
+    async (indices: number[]) => {
+      if (indices.length === 0) return;
+      activeEnrichmentControllerRef.current?.abort();
+      const controller = new AbortController();
+      activeEnrichmentControllerRef.current = controller;
+      try {
+        setIsEnriching(true);
+        setEnrichError("");
+        setAnalysis(null);
+        const response = await fetch("/api/enrich-holdings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ holdings, enrichIndices: indices }),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const errData = await response.json().catch(() => null);
+          throw new Error(errData?.error || "Holdings verification failed.");
+        }
+        const data = (await response.json()) as {
+          patches?: { index: number; holding: unknown }[];
+          holdings?: unknown[];
+        };
+
+        if (Array.isArray(data.patches)) {
+          setHoldings((prev) => {
+            const next = [...prev];
+            for (const p of data.patches!) {
+              const idx = Number(p.index);
+              if (!Number.isInteger(idx) || idx < 0 || idx >= next.length) continue;
+              const row = p.holding;
+              if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+              const [u] = normalizeHoldingsForUi([row]).map((h) => ({
+                ...h,
+                ...validateHoldingLocally(h),
+              }));
+              next[idx] = { ...next[idx], ...u, ...validateHoldingLocally({ ...next[idx], ...u }) };
+            }
+            return flagLikelyDuplicateHoldings(next);
+          });
+        } else if (Array.isArray(data.holdings)) {
+          const list = data.holdings;
+          const next: Holding[] = normalizeHoldingsForUi(list).map((h) => ({
+            ...h,
+            ...validateHoldingLocally(h),
+          }));
+          setHoldings(flagLikelyDuplicateHoldings(next));
+        }
+        setDuplicatesAcknowledged(false);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setEnrichError(error instanceof Error ? error.message : "Verification failed.");
+      } finally {
+        if (activeEnrichmentControllerRef.current === controller) {
+          activeEnrichmentControllerRef.current = null;
+        }
+        if (!controller.signal.aborted) {
+          setIsEnriching(false);
+        }
       }
-      const data = await response.json();
-      const list = Array.isArray(data.holdings) ? data.holdings : [];
-      const next: Holding[] = normalizeHoldingsForUi(list).map((h) => ({
-        ...h,
-        ...validateHoldingLocally(h),
-      }));
-      setHoldings(flagLikelyDuplicateHoldings(next));
-      setDuplicatesAcknowledged(false);
-    } catch (error) {
-      if (controller.signal.aborted) return;
-      setEnrichError(error instanceof Error ? error.message : "Verification failed.");
-    } finally {
-      if (activeEnrichmentControllerRef.current === controller) {
-        activeEnrichmentControllerRef.current = null;
-      }
-      if (!controller.signal.aborted) {
-        setIsEnriching(false);
-      }
-    }
-  }, []);
+    },
+    [holdings]
+  );
 
   async function handleExtractHoldings() {
     if (uploadedFiles.length === 0) {
@@ -1315,7 +1358,6 @@ export default function AdvisorPilotPage() {
       setEnrichError("");
       setDemoMode(false);
       setStep("confirm");
-      void runHoldingsVerification(cleaned);
     } catch (error) {
       setExtractError(error instanceof Error ? error.message : "Something went wrong analyzing the statement.");
     } finally {
@@ -1646,16 +1688,6 @@ export default function AdvisorPilotPage() {
     const resumeConfirm =
       String(review.status || "").trim().toLowerCase() === "draft" && !review.analysis;
     setStep(resumeConfirm ? "confirm" : "analysis");
-    const needsEnrichment =
-      !reviewDemo &&
-      !loaded.every(
-        (h) =>
-          isCashLikeHolding(h.assetClass, h.suggested, h.rawName) ||
-          (Boolean(h.enrichmentCompletedAt) && h.enrichmentNeedsReview !== true)
-      );
-    if (resumeConfirm && needsEnrichment) {
-      void runHoldingsVerification(loaded);
-    }
   }
 
 
@@ -3102,7 +3134,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         {step === "confirm" && (
           <Card className="rounded-[2rem] ap-glass border-0">
             <CardContent className="space-y-6 p-6 pb-28 md:p-8 md:pb-8">
-              <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><ShieldCheck className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Confirm Holdings</h2><p className="text-sm text-slate-500">Review matches, choose alternate matches, enter manual tickers, and select asset classes.</p></div></div><Badge className={`rounded-full ${reviewCount ? "bg-red-600" : "bg-emerald-600"}`}>{reviewCount} need review</Badge></div>
+              <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><ShieldCheck className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Confirm Holdings</h2><p className="text-sm text-slate-500">Review matches, choose alternate matches, enter manual tickers, and select asset classes.</p><p className="mt-1 max-w-2xl text-xs text-slate-500">Broker cash and sweep lines without a visible ticker are labeled <code className="rounded bg-slate-100 px-1 font-mono text-[0.85rem]">{SYNTHETIC_CASH_TICKER}</code> (placeholder, not listed). Allocation uses the cash sleeve; scenario models use a Treasury-bill–style proxy for cash returns.</p></div></div><Badge className={`rounded-full ${reviewCount ? "bg-red-600" : "bg-emerald-600"}`}>{reviewCount} need review</Badge></div>
               {!demoMode && !String(session?.user?.email || emailAuthUser?.email || "").trim() && (
                 <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">Sign in to auto-save this confirmation as a <strong>Draft</strong> in your Client Database (helps if the tab closes mid-meeting).</p>
               )}
@@ -3134,24 +3166,47 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   </label>
                 </div>
               )}
-              {!demoMode && (
-                <div className="rounded-2xl border border-sky-200 bg-sky-50/80 px-4 py-3 text-sm text-blue-950 space-y-2">
-                  {isEnriching ? (
-                    <p className="font-semibold">Verifying holdings with OpenFIGI + AI deep search…</p>
-                  ) : enrichmentSatisfied ? (
-                    <p className="font-semibold">Holdings verified through OpenFIGI + AI deep search analysis.</p>
-                  ) : (
-                    <p className="font-semibold">Holdings verification in progress or needs advisor review.</p>
-                  )}
-                  <p className="text-xs text-slate-700">
-                    Each non-cash line is checked against Bloomberg OpenFIGI when identifiers are present, then AI-assisted research refines ticker, share class, and asset class. Proprietary products skip invented symbols.
-                  </p>
-                  {enrichError ? <p className="text-sm text-red-800">{enrichError}</p> : null}
-                </div>
-              )}
-              {!demoMode && !enrichmentSatisfied && !isEnriching && (
+              {!demoMode &&
+                (isEnriching ||
+                  eligibleAiVerificationIndices.length > 0 ||
+                  Boolean(enrichError)) && (
+                  <div className="rounded-2xl border border-sky-200 bg-sky-50/80 px-4 py-3 text-sm text-blue-950 space-y-3">
+                    {isEnriching ? (
+                      <p className="font-semibold">
+                        Verifying {eligibleAiVerificationIndices.length} uncertain position
+                        {eligibleAiVerificationIndices.length === 1 ? "" : "s"} with OpenFIGI + AI…
+                      </p>
+                    ) : eligibleAiVerificationIndices.length > 0 ? (
+                      <>
+                        <p className="font-semibold">Optional: verify uncertain positions (AI)</p>
+                        <p className="text-xs text-slate-700">
+                          Runs only on non–cash lines that are below 75% confidence, marked for review, or still flagged from a prior enrichment. Each included line uses OpenFIGI when identifiers are present, then a web-backed research pass and structured mapping. Proprietary products never get invented tickers.
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-11 rounded-2xl border-blue-300 bg-white/90 text-blue-950 hover:bg-white"
+                          onClick={() => void runHoldingsVerificationForIndices(eligibleAiVerificationIndices)}
+                        >
+                          Verify uncertain holdings (AI){" "}
+                          <span className="tabular-nums">({eligibleAiVerificationIndices.length})</span>
+                        </Button>
+                      </>
+                    ) : null}
+                    {enrichError ? <p className="text-sm text-red-800">{enrichError}</p> : null}
+                  </div>
+                )}
+              {!demoMode && reviewCount > 0 && !enrichmentSatisfied && !isEnriching && (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-                  One or more positions still need advisor review (matches, identifiers, or verification flags) before running analysis.
+                  Rows still marked for advisor review keep the Qualified / Roth / Taxable tint and gain a{" "}
+                  <strong className="font-semibold">red outline</strong> until fixed. Resolve each flagged line manually
+                  {eligibleAiVerificationIndices.length > 0 ? (
+                    <>
+                      , or click <strong className="font-semibold">Verify uncertain holdings (AI)</strong> above for enrichment-backed uncertainty.
+                    </>
+                  ) : (
+                    <>.</>
+                  )}
                 </div>
               )}
               <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-5">
@@ -3233,15 +3288,71 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               <div className="space-y-4">
                 {holdings.map((h, index) => {
                   const opts = normalizeOptions(h);
+                  const needsAdvisorReview = holdingAdvisorReviewBlocking(h);
                   return (
-                    <div key={`${h.rawName}-${index}`} className={confirmHoldingRegistrationSurfaceClasses(h.registrationType)}>
+                    <div
+                      key={`${h.rawName}-${index}`}
+                      className={confirmHoldingRegistrationSurfaceClasses(h.registrationType, needsAdvisorReview)}
+                    >
                       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
                         <div className="lg:col-span-3"><p className="text-xs text-slate-500">Statement name</p><p className="font-semibold">{h.rawName}</p><p className="text-sm text-slate-500">{currency(h.value)}</p></div>
-                        <div className="lg:col-span-4"><p className="mb-1 text-xs text-slate-500">Matched holding / multiple choice</p><Select value={h.suggested} onValueChange={(value) => updateHolding(index, { suggested: value, status: value.includes("Manual") ? "review" : "confirmed", confidence: value.includes("Manual") ? Math.min(h.confidence, 74) : Math.max(h.confidence, 85) })}><SelectTrigger className="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent>{opts.map((option) => <SelectItem key={option} value={option}>{formatMatchedHoldingOptionLabel(option)}</SelectItem>)}</SelectContent></Select></div>
+                        <div className="lg:col-span-4">
+                          <p className="mb-1 text-xs text-slate-500">Matched holding / multiple choice</p>
+                          <Select
+                            value={h.suggested}
+                            onValueChange={(value) =>
+                              updateHolding(index, {
+                                suggested: value,
+                                confirmedMatchOverridesReview: false,
+                                status: value.includes("Manual") ? "review" : "confirmed",
+                                confidence: value.includes("Manual")
+                                  ? Math.min(h.confidence, 74)
+                                  : Math.max(h.confidence, 85),
+                              })
+                            }
+                          >
+                            <SelectTrigger className="rounded-2xl">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {opts.map((option) => (
+                                <SelectItem key={option} value={option}>
+                                  {formatMatchedHoldingOptionLabel(option)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
                         <div className="lg:col-span-3"><p className="mb-1 text-xs text-slate-500">Asset class</p><Select value={isCanonicalAssetClass(h.assetClass) ? h.assetClass : "Unknown"} onValueChange={(value) => updateHolding(index, { assetClass: value })}><SelectTrigger className="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent>{ASSET_CLASSES.map((asset) => <SelectItem key={asset} value={asset}>{asset}</SelectItem>)}</SelectContent></Select></div>
-                        <div className="lg:col-span-2"><p className="text-xs text-slate-500">Confidence</p><Progress value={h.confidence} className="my-2" /><div className="flex items-center gap-2">{h.confidence >= 75 ? <CheckCircle className="h-4 w-4 text-emerald-600" /> : <AlertTriangle className="h-4 w-4 text-red-600" />}<span className="text-sm font-medium">{h.confidence}%</span></div></div>
+                        <div className="lg:col-span-2">
+                          <p className="text-xs text-slate-500">Confidence</p>
+                          <Progress value={h.confidence} className="my-2" />
+                          <div className="flex items-center gap-2">
+                            {h.confidence >= 75 ? (
+                              <CheckCircle className="h-4 w-4 text-emerald-600" />
+                            ) : (
+                              <AlertTriangle className="h-4 w-4 text-red-600" />
+                            )}
+                            <span className="text-sm font-medium">{h.confidence}%</span>
+                          </div>
+                          {h.masterResolvedNote ? (
+                            <p className="mt-2 text-[11px] font-medium leading-snug text-emerald-900">{h.masterResolvedNote}</p>
+                          ) : null}
+                          {needsAdvisorReview ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="mt-3 h-10 w-full rounded-2xl border-emerald-300 bg-white/90 text-emerald-950 hover:bg-emerald-50 hover:text-emerald-950 lg:w-auto lg:min-w-[12rem]"
+                              onClick={() => updateHolding(index, { confirmedMatchOverridesReview: true })}
+                            >
+                              Confirm match as correct
+                            </Button>
+                          ) : null}
+                        </div>
                       </div>
-                      <div className={`mt-4 grid grid-cols-1 gap-3 border-t pt-4 md:grid-cols-3 ${confirmHoldingDividerClass(h.registrationType)}`}>
+                      <div
+                        className={`mt-4 grid grid-cols-1 gap-3 border-t pt-4 md:grid-cols-3 ${confirmHoldingDividerClass(h.registrationType, needsAdvisorReview)}`}
+                      >
                         <div>
                           <p className="mb-1 text-xs text-slate-500">Account # (custodian hint)</p>
                           <Input
@@ -3291,7 +3402,38 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                           />
                         </div>
                       </div>
-                      {(h.suggested.includes("Manual") || h.status === "review") && <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2"><div><p className="mb-1 text-xs text-slate-500">Manual ticker / CUSIP / corrected name</p><Input className="rounded-2xl" placeholder="Example: PIMIX or 912828XXXXX" onBlur={(e) => { if (e.target.value.trim()) updateHolding(index, { suggested: e.target.value.trim(), status: "confirmed", confidence: 85 }); }} /></div><div><p className="mb-1 text-xs text-slate-500">Value override</p><Input className="rounded-2xl" type="number" placeholder={String(h.value || 0)} onBlur={(e) => { const v = Number(e.target.value); if (!Number.isNaN(v) && e.target.value !== "") updateHolding(index, { value: v }); }} /></div></div>}
+                      {(h.suggested.includes("Manual") || h.status === "review") && (
+                        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                          <div>
+                            <p className="mb-1 text-xs text-slate-500">Manual ticker / CUSIP / corrected name</p>
+                            <Input
+                              className="rounded-2xl"
+                              placeholder="Example: PIMIX or 912828XXXXX"
+                              onBlur={(e) => {
+                                if (e.target.value.trim())
+                                  updateHolding(index, {
+                                    suggested: e.target.value.trim(),
+                                    status: "confirmed",
+                                    confidence: 85,
+                                    confirmedMatchOverridesReview: false,
+                                  });
+                              }}
+                            />
+                          </div>
+                          <div>
+                            <p className="mb-1 text-xs text-slate-500">Value override</p>
+                            <Input
+                              className="rounded-2xl"
+                              type="number"
+                              placeholder={String(h.value || 0)}
+                              onBlur={(e) => {
+                                const v = Number(e.target.value);
+                                if (!Number.isNaN(v) && e.target.value !== "") updateHolding(index, { value: v });
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

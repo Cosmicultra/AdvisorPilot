@@ -1,8 +1,47 @@
 import { NextResponse } from "next/server";
 import { Buffer } from "buffer";
 import { extractHoldingsFromFileBuffer } from "@/lib/extract-statement-holdings";
+import { isCashLikeHolding } from "@/lib/asset-classes";
+import { extractLikelySymbol } from "@/lib/holding-validation";
+import {
+  applyMasterResolutionToHolding,
+  createSupabaseAdminForSecuritiesMaster,
+  resolveFromSecuritiesMaster,
+  securitiesMasterFeatureEnabled,
+} from "@/lib/securities-master";
 
 export const runtime = "nodejs";
+
+async function enrichHoldingsWithSecuritiesMaster(
+  holders: Record<string, unknown>[]
+): Promise<Record<string, unknown>[]> {
+  if (!securitiesMasterFeatureEnabled()) return holders;
+  const sb = createSupabaseAdminForSecuritiesMaster();
+  if (!sb) {
+    console.warn("[analyze-statement] securities master enabled but Supabase admin client unavailable.");
+    return holders;
+  }
+
+  const out: Record<string, unknown>[] = [];
+  for (const row of holders) {
+    const rec = row as Record<string, unknown>;
+    const assetClass = String(rec.assetClass ?? "");
+    const suggested = String(rec.suggested ?? "");
+    const rawName = String(rec.rawName ?? "");
+    if (isCashLikeHolding(assetClass, suggested, rawName)) {
+      out.push(rec);
+      continue;
+    }
+    const sym = extractLikelySymbol(suggested, rawName);
+    const hit = await resolveFromSecuritiesMaster(sb, { inferredSymbol: sym, suggested, rawName });
+    if (!hit) {
+      out.push(rec);
+      continue;
+    }
+    out.push(applyMasterResolutionToHolding(rec, hit));
+  }
+  return out;
+}
 
 export async function POST(request: Request) {
   try {
@@ -31,13 +70,18 @@ export async function POST(request: Request) {
         clientContext: { ...client, sourceFileName: file.name, sourceFileIndex: index + 1 },
       });
       const holdings = Array.isArray(data.holdings) ? data.holdings : [];
-      allHoldings.push(
-        ...holdings.map((holding) => ({
-          ...holding,
+      const withMeta = holdings.map((holding) =>
+        ({
+          ...(holding && typeof holding === "object" && !Array.isArray(holding)
+            ? (holding as Record<string, unknown>)
+            : {}),
           sourceFileName: file.name || `statement-${index + 1}.pdf`,
           sourceFileIndex: index + 1,
-        }))
+        }) as Record<string, unknown>
       );
+
+      const tagged = await enrichHoldingsWithSecuritiesMaster(withMeta);
+      allHoldings.push(...tagged);
     }
 
     return NextResponse.json({ holdings: allHoldings });

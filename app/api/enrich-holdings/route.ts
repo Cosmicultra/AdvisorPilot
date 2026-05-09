@@ -1,6 +1,7 @@
 ﻿import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { enrichOneHolding, type EnrichmentInputHolding } from "@/lib/holding-enrichment";
+import { createSupabaseAdminForEnrichmentCache } from "@/lib/security-enrichment-cache";
 
 export const runtime = "nodejs";
 
@@ -26,6 +27,33 @@ function mergeOptions(prev: unknown, suggested: string): string[] {
   return Array.from(new Set(values));
 }
 
+type EnrichmentRequestBody = {
+  holdings?: unknown[];
+  enrichIndices?: unknown;
+};
+
+function parseSelectiveIndices(body: EnrichmentRequestBody | null): {
+  selective: boolean;
+  indicesToProcess: number[];
+} | { error: string } {
+  if (!body || !("enrichIndices" in body)) {
+    const all = typeof body?.holdings === "undefined" ? [] : (Array.isArray(body?.holdings) ? body.holdings! : []);
+    return {
+      selective: false,
+      indicesToProcess: all.map((_, i) => i),
+    };
+  }
+  const raw = body.enrichIndices;
+  if (!Array.isArray(raw)) {
+    return { error: "enrichIndices must be an array of non-negative integers when provided." };
+  }
+  const nums = raw.map((x) => Number(x)).filter((n) => Number.isInteger(n) && n >= 0);
+  return {
+    selective: true,
+    indicesToProcess: Array.from(new Set(nums)).sort((a, b) => a - b),
+  };
+}
+
 export async function POST(req: Request) {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -35,34 +63,57 @@ export async function POST(req: Request) {
       );
     }
 
-    const body = (await req.json().catch(() => null)) as { holdings?: unknown[] } | null;
+    const body = (await req.json().catch(() => null)) as EnrichmentRequestBody | null;
     const rawHoldings = Array.isArray(body?.holdings) ? body!.holdings! : [];
 
+    const parsed = parseSelectiveIndices(body);
+    if ("error" in parsed) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
+    const { selective, indicesToProcess } = parsed;
     const openfigiApiKey = process.env.OPENFIGI_API_KEY?.trim() || undefined;
-    const enriched: Record<string, unknown>[] = [];
+    const patches: { index: number; holding: Record<string, unknown>; cacheHit?: boolean }[] = [];
+    const enrichedFull: Record<string, unknown>[] = [];
 
-    for (let i = 0; i < rawHoldings.length; i++) {
-      const row = rawHoldings[i];
-      const base =
-        row && typeof row === "object" && !Array.isArray(row)
-          ? { ...(row as Record<string, unknown>) }
+    const supabaseCache = createSupabaseAdminForEnrichmentCache();
+
+    for (let step = 0; step < indicesToProcess.length; step++) {
+      const i = indicesToProcess[step];
+      const rowUnknown = rawHoldings[i];
+      const row =
+        rowUnknown && typeof rowUnknown === "object" && !Array.isArray(rowUnknown)
+          ? (rowUnknown as Record<string, unknown>)
           : {};
+      const base = { ...row };
 
-      const patch = await enrichOneHolding(openai, toInput(base), { openfigiApiKey });
+      const { patch, cacheHit } = await enrichOneHolding(openai, toInput(base), {
+        openfigiApiKey,
+        supabaseCache,
+        supabaseMaster: supabaseCache,
+      });
       const suggested = String(patch.suggested || "");
       const merged = {
         ...base,
         ...patch,
         options: mergeOptions(base.options, suggested),
       };
-      enriched.push(merged);
 
-      if (i < rawHoldings.length - 1) {
+      if (selective) {
+        patches.push({ index: i, holding: merged, cacheHit });
+      } else {
+        enrichedFull.push(merged);
+      }
+
+      if (step < indicesToProcess.length - 1) {
         await new Promise((r) => setTimeout(r, 350));
       }
     }
 
-    return NextResponse.json({ holdings: enriched });
+    if (selective) {
+      return NextResponse.json({ patches });
+    }
+
+    return NextResponse.json({ holdings: enrichedFull });
   } catch (err: unknown) {
     console.error("ENRICH HOLDINGS:", err);
     return NextResponse.json(

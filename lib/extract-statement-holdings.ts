@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { Buffer } from "buffer";
 import { ASSET_CLASSES } from "./asset-classes";
+import { extractionModel, logOpenAiPass } from "./openai-route-models";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -123,8 +124,11 @@ Rules (read carefully):
 - Do not provide trade recommendations here. Only extract and classify holdings.
 `;
 
+  const extractModel = extractionModel();
+  logOpenAiPass("analyze-statement", "extract", extractModel);
+
   const response = await openai.responses.create({
-    model: "gpt-4o",
+    model: extractModel,
     input: [
       {
         role: "user",
