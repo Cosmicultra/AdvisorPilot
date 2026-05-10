@@ -107,7 +107,7 @@ Cost basis rules:
 
 Rules (read carefully):
 - You MUST include each of these when they appear as their own line or fund (same as any stock or fund): cash balances; cash awaiting investment; sweep / bank deposit / FDIC cash; money market funds; stable value funds; GIC / capital preservation / insured interest accounts; short-term reserve or liquidity funds tied to retirement plans. Omitting them is incorrect.
-- Never skip a position because it has no ticker — still output a row with the statement name, best suggested label, and assetClass (use Cash / Money Market for true cash or core money markets; use Cash Mutual Fund when it is clearly an open-end money market mutual fund; use Bond Fund for typical stable value / fixed capital-preservation sleeves unless the statement labels them as cash).
+- Never skip a position because it has no ticker — still output a row with the statement name, best suggested label, and assetClass (use Cash / Money Market for true cash or core money markets; use Money Market Account when the line is clearly a sweep / bank cash / MMF parking title with no fund ticker; use Cash Mutual Fund when it is clearly an open-end money market mutual fund; use Bond Fund for typical stable value / fixed capital-preservation sleeves unless the statement labels them as cash).
 - If ticker is clearly visible, use it.
 - If ticker is not visible, infer likely options from the name.
 - Always provide 3-5 possible options when the name is ambiguous.

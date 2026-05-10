@@ -177,7 +177,7 @@ export default function ClientMagicUploadPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-teal-50/40 px-4 py-10">
+    <div className="ap-app-bg min-h-screen px-4 py-10">
       <div className="mx-auto max-w-lg">
         <div className="mb-8 text-center">
           <p className="font-serif text-2xl font-bold text-slate-900">AdvisorPilot</p>
@@ -190,14 +190,14 @@ export default function ClientMagicUploadPage() {
         </div>
 
         {contextLoading ? (
-          <Card className="rounded-3xl border-slate-200 shadow-lg">
+          <Card className="rounded-none border-slate-200 shadow-lg">
             <CardContent className="p-8 text-center text-slate-600">Loading your link…</CardContent>
           </Card>
         ) : contextError ? (
-          <Card className="rounded-3xl border-slate-200 shadow-lg">
+          <Card className="rounded-none border-slate-200 shadow-lg">
             <CardContent className="space-y-3 p-8">
               <p className="text-center text-red-800">{contextError}</p>
-              <Button type="button" variant="outline" className="h-11 w-full rounded-2xl" onClick={retryLoad}>
+              <Button type="button" variant="outline" className="h-11 w-full rounded-none" onClick={retryLoad}>
                 Retry
               </Button>
             </CardContent>
@@ -205,17 +205,17 @@ export default function ClientMagicUploadPage() {
         ) : (
           <>
             {phase !== "done" ? (
-              <div className="mb-6 flex rounded-full border border-slate-200 bg-white p-1 text-sm shadow-sm">
+              <div className="mb-6 flex rounded-none border border-slate-200 bg-white p-0 text-sm shadow-sm">
                 <button
                   type="button"
-                  className={`flex-1 rounded-full py-2.5 font-semibold transition ${phase === "profile" ? "bg-teal-700 text-white" : "text-slate-600"}`}
+                  className={`flex-1 rounded-none py-2.5 font-semibold transition ${phase === "profile" ? "ap-segment-active" : "text-slate-600"}`}
                   onClick={() => setPhase("profile")}
                 >
                   1 · Profile
                 </button>
                 <button
                   type="button"
-                  className={`flex-1 rounded-full py-2.5 font-semibold transition ${phase === "upload" ? "bg-teal-700 text-white" : "text-slate-600"}`}
+                  className={`flex-1 rounded-none py-2.5 font-semibold transition ${phase === "upload" ? "ap-segment-active" : "text-slate-600"}`}
                   onClick={() => goToUpload()}
                 >
                   2 · Statements
@@ -224,7 +224,7 @@ export default function ClientMagicUploadPage() {
             ) : null}
 
             {phase === "profile" ? (
-              <Card className="rounded-3xl border-slate-200 shadow-lg">
+              <Card className="rounded-none border-slate-200 shadow-lg">
                 <CardContent className="space-y-5 p-6 md:p-8">
                   <div>
                     <h1 className="font-serif text-xl font-bold text-slate-900">Your profile</h1>
@@ -236,7 +236,7 @@ export default function ClientMagicUploadPage() {
                   <ClientLinkIntakeForm value={intake} onChange={setIntake} />
 
                   {validationHint.length > 0 ? (
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                    <div className="rounded-none border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
                       <p className="font-semibold">Still needed:</p>
                       <ul className="mt-2 list-disc pl-5">
                         {validationHint.map((line) => (
@@ -248,7 +248,7 @@ export default function ClientMagicUploadPage() {
 
                   <Button
                     type="button"
-                    className="h-14 w-full rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-base touch-manipulation"
+                    className="h-14 w-full rounded-none ap-cta-solid text-base touch-manipulation"
                     onClick={() => goToUpload()}
                   >
                     Continue to statements
@@ -261,7 +261,7 @@ export default function ClientMagicUploadPage() {
             ) : null}
 
             {phase === "upload" ? (
-              <Card className="rounded-3xl border-slate-200 shadow-lg">
+              <Card className="rounded-none border-slate-200 shadow-lg">
                 <CardContent className="space-y-5 p-6 md:p-8">
                   <div>
                     <h1 className="font-serif text-xl font-bold text-slate-900">Upload your statement(s)</h1>
@@ -274,7 +274,7 @@ export default function ClientMagicUploadPage() {
                     <div>
                       <label className="text-xs font-semibold text-slate-700">Statement file(s)</label>
                       <Input
-                        className="mt-1 min-h-12 rounded-2xl file:mr-3 file:rounded-lg file:border-0 file:bg-teal-700 file:px-3 file:py-2 file:text-sm file:text-white"
+                        className="mt-1 min-h-12 rounded-none file:mr-3 file:rounded-none file:border-0 file:bg-[#0f6fde] file:px-3 file:py-2 file:text-sm file:text-white"
                         type="file"
                         accept=".pdf,image/*"
                         capture="environment"
@@ -290,10 +290,10 @@ export default function ClientMagicUploadPage() {
                     </div>
 
                     {error && (
-                      <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
+                      <div className="rounded-none border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
                     )}
                     {message ? (
-                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                      <div className="rounded-none border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
                         {message}
                       </div>
                     ) : null}
@@ -301,7 +301,7 @@ export default function ClientMagicUploadPage() {
                     <div className="flex flex-col gap-2">
                       <Button
                         type="submit"
-                        className="h-14 w-full rounded-2xl bg-gradient-to-br from-teal-700 to-blue-800 text-base touch-manipulation"
+                        className="h-14 w-full rounded-none ap-cta-solid text-base touch-manipulation"
                         disabled={busy}
                       >
                         {busy ? "Uploading and reading statement…" : "Send profile and statements to advisor"}
@@ -309,7 +309,7 @@ export default function ClientMagicUploadPage() {
                       <Button
                         type="button"
                         variant="outline"
-                        className="h-11 w-full rounded-2xl"
+                        className="h-11 w-full rounded-none"
                         onClick={() => setPhase("profile")}
                         disabled={busy}
                       >
@@ -326,7 +326,7 @@ export default function ClientMagicUploadPage() {
             ) : null}
 
             {phase === "done" ? (
-              <Card className="rounded-3xl border-slate-200 shadow-lg">
+              <Card className="rounded-none border-slate-200 shadow-lg">
                 <CardContent className="space-y-4 p-8 text-center">
                   <h2 className="font-serif text-xl font-bold text-slate-900">You&apos;re all set</h2>
                   <p className="text-sm text-slate-600">

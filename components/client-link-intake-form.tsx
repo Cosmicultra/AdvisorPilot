@@ -33,19 +33,19 @@ function SwitchRow({
   onChange: () => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+    <div className="flex items-center justify-between gap-4 rounded-none border border-slate-200 bg-white px-4 py-3">
       <span className="text-sm font-semibold text-slate-700">{label}</span>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
         onClick={onChange}
-        className={`relative h-8 w-14 shrink-0 rounded-full transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-teal-600 ${
+        className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-[#0f6fde] ${
           checked ? "bg-teal-600" : "bg-slate-200"
         }`}
       >
         <span
-          className={`absolute top-1 left-1 block h-6 w-6 rounded-full bg-white shadow transition-transform ${
+          className={`absolute top-1 left-1 block h-6 w-6 rounded-none bg-white shadow transition-transform ${
             checked ? "translate-x-6" : "translate-x-0"
           }`}
         />
@@ -104,7 +104,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
       </p>
 
       {INTAKE_STEPS.map((step) => (
-        <section key={step.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <section key={step.id} className="rounded-none border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-wide text-teal-800">{step.eyebrow}</p>
           <h3 className="mt-1 font-serif text-lg font-bold text-slate-900">{step.title}</h3>
           {step.helper ? <p className="mt-2 text-sm text-slate-600">{step.helper}</p> : null}
@@ -116,7 +116,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                   <div>
                     <label className="text-xs font-semibold text-slate-700">First name</label>
                     <Input
-                      className="mt-1 h-12 rounded-2xl"
+                      className="mt-1 h-12 rounded-none"
                       value={c.firstName}
                       onChange={(e) => patch({ firstName: e.target.value })}
                       autoComplete="given-name"
@@ -125,7 +125,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                   <div>
                     <label className="text-xs font-semibold text-slate-700">Last name</label>
                     <Input
-                      className="mt-1 h-12 rounded-2xl"
+                      className="mt-1 h-12 rounded-none"
                       value={c.lastName}
                       onChange={(e) => patch({ lastName: e.target.value })}
                       autoComplete="family-name"
@@ -135,7 +135,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                 <div>
                   <label className="text-xs font-semibold text-slate-700">Email</label>
                   <Input
-                    className="mt-1 h-12 rounded-2xl"
+                    className="mt-1 h-12 rounded-none"
                     type="email"
                     value={c.advisorEmail}
                     onChange={(e) => patch({ advisorEmail: e.target.value })}
@@ -168,7 +168,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                     <div>
                       <label className="text-xs font-semibold text-slate-700">Spouse first name</label>
                       <Input
-                        className="mt-1 h-12 rounded-2xl"
+                        className="mt-1 h-12 rounded-none"
                         value={c.spouseFirstName}
                         onChange={(e) => patch({ spouseFirstName: e.target.value })}
                       />
@@ -176,7 +176,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                     <div>
                       <label className="text-xs font-semibold text-slate-700">Spouse last name</label>
                       <Input
-                        className="mt-1 h-12 rounded-2xl"
+                        className="mt-1 h-12 rounded-none"
                         value={c.spouseLastName}
                         onChange={(e) => patch({ spouseLastName: e.target.value })}
                       />
@@ -192,7 +192,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                   <div>
                     <label className="text-xs font-semibold text-slate-700">Date of birth</label>
                     <Input
-                      className="mt-1 h-12 rounded-2xl"
+                      className="mt-1 h-12 rounded-none"
                       type="date"
                       value={c.dob}
                       onChange={(e) => patch({ dob: e.target.value })}
@@ -201,7 +201,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                   <div>
                     <label className="text-xs font-semibold text-slate-700">Or age</label>
                     <Input
-                      className="mt-1 h-12 rounded-2xl"
+                      className="mt-1 h-12 rounded-none"
                       type="number"
                       value={c.age}
                       onChange={(e) => patch({ age: e.target.value })}
@@ -216,7 +216,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                       <div>
                         <label className="text-xs font-semibold text-slate-700">Date of birth</label>
                         <Input
-                          className="mt-1 h-12 rounded-2xl"
+                          className="mt-1 h-12 rounded-none"
                           type="date"
                           value={c.spouseDob}
                           onChange={(e) => patch({ spouseDob: e.target.value })}
@@ -225,7 +225,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                       <div>
                         <label className="text-xs font-semibold text-slate-700">Or age</label>
                         <Input
-                          className="mt-1 h-12 rounded-2xl"
+                          className="mt-1 h-12 rounded-none"
                           type="number"
                           value={c.spouseAge}
                           onChange={(e) => patch({ spouseAge: e.target.value })}
@@ -242,7 +242,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
               <div>
                 <label className="text-xs font-semibold text-slate-700">Adjusted Gross Income (annual)</label>
                 <Input
-                  className="mt-1 h-12 rounded-2xl"
+                  className="mt-1 h-12 rounded-none"
                   inputMode="decimal"
                   value={c.adjustedGrossIncomeAnnual}
                   onChange={(e) => patch({ adjustedGrossIncomeAnnual: e.target.value })}
@@ -262,7 +262,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                   }
                   onValueChange={(v) => patch({ federalTaxBracket: v })}
                 >
-                  <SelectTrigger className="mt-1 h-12 rounded-2xl">
+                  <SelectTrigger className="mt-1 h-12 rounded-none">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -282,7 +282,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                 <div>
                   <label className="text-xs font-semibold text-slate-700">Expected retirement age (you)</label>
                   <Input
-                    className="mt-1 h-12 rounded-2xl"
+                    className="mt-1 h-12 rounded-none"
                     type="number"
                     value={c.retirementAge}
                     onChange={(e) => patch({ retirementAge: e.target.value })}
@@ -293,7 +293,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                   <div>
                     <label className="text-xs font-semibold text-slate-700">Expected retirement age (spouse)</label>
                     <Input
-                      className="mt-1 h-12 rounded-2xl"
+                      className="mt-1 h-12 rounded-none"
                       type="number"
                       value={c.spouseRetirementAge}
                       onChange={(e) => patch({ spouseRetirementAge: e.target.value })}
@@ -308,7 +308,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
               <div>
                 <label className="text-xs font-semibold text-slate-700">Spendable income needed in retirement (annual)</label>
                 <Input
-                  className="mt-1 h-12 rounded-2xl"
+                  className="mt-1 h-12 rounded-none"
                   inputMode="decimal"
                   value={c.retirementSpendableIncomeAnnual}
                   onChange={(e) => patch({ retirementSpendableIncomeAnnual: e.target.value })}
@@ -339,7 +339,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                     <div>
                       <label className="text-xs font-semibold text-slate-700">Your monthly benefit</label>
                       <Input
-                        className="mt-1 h-12 rounded-2xl"
+                        className="mt-1 h-12 rounded-none"
                         inputMode="decimal"
                         value={c.socialSecurityMonthlyClient}
                         onChange={(e) => patch({ socialSecurityMonthlyClient: e.target.value })}
@@ -350,7 +350,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                       <div>
                         <label className="text-xs font-semibold text-slate-700">Spouse monthly benefit</label>
                         <Input
-                          className="mt-1 h-12 rounded-2xl"
+                          className="mt-1 h-12 rounded-none"
                           inputMode="decimal"
                           value={c.socialSecurityMonthlySpouse}
                           onChange={(e) => patch({ socialSecurityMonthlySpouse: e.target.value })}
@@ -371,7 +371,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                     value={riskTierSelectValue}
                     onValueChange={(v) => setRiskFromTier(v as RiskProfileId)}
                   >
-                    <SelectTrigger className="mt-1 h-12 rounded-2xl">
+                    <SelectTrigger className="mt-1 h-12 rounded-none">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -386,7 +386,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                     Choose the tier that fits you, or use the optional questionnaire below for a suggested tier.
                   </p>
                 </div>
-                <details className="rounded-2xl border border-slate-100 bg-slate-50/80 p-3">
+                <details className="rounded-none border border-slate-100 bg-slate-50/80 p-3">
                   <summary className="cursor-pointer text-sm font-semibold text-slate-800">
                     Optional: short risk questionnaire
                   </summary>
@@ -401,7 +401,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                           {q.options.map((opt, idx) => (
                             <label
                               key={opt.label}
-                              className="flex cursor-pointer items-start gap-2 rounded-xl border border-transparent px-2 py-1.5 hover:bg-white"
+                              className="flex cursor-pointer items-start gap-2 rounded-none border border-transparent px-2 py-1.5 hover:bg-white"
                             >
                               <input
                                 type="radio"
@@ -428,7 +428,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                     key={opt.value}
                     type="button"
                     onClick={() => patch({ calibration: opt.value })}
-                    className={`rounded-2xl border p-3 text-left text-sm transition ${
+                    className={`rounded-none border p-3 text-left text-sm transition ${
                       c.calibration === opt.value
                         ? "border-teal-600 bg-teal-50"
                         : "border-slate-200 bg-white hover:border-slate-300"
@@ -445,7 +445,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
               <div>
                 <label className="text-xs font-semibold text-slate-700">Main goal for this review</label>
                 <Textarea
-                  className="mt-1 min-h-[100px] rounded-2xl"
+                  className="mt-1 min-h-[100px] rounded-none"
                   value={c.goal}
                   onChange={(e) => patch({ goal: e.target.value })}
                   placeholder="In your own words…"

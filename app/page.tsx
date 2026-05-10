@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Image from "next/image";
 import type { Session } from "next-auth";
 import { signIn, signOut } from "next-auth/react";
+import { DropdownMenu } from "radix-ui";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +37,7 @@ import {
   Link2,
   Copy,
   Check,
+  ChevronDown,
 } from "lucide-react";
 import {
   computeRiskProfileFromQuiz,
@@ -102,6 +104,36 @@ import {
 type Client = IntakeClient;
 
 type EmailAuthUser = { email?: string | null };
+
+/** Fresh intake defaults for a new review (blank slate). */
+const INITIAL_CLIENT_STATE: Client = {
+  firstName: "",
+  lastName: "",
+  dob: "",
+  age: "",
+  federalTaxBracket: "22",
+  adjustedGrossIncomeAnnual: "",
+  retirementAge: "67",
+  retirementSpendableIncomeAnnual: "",
+  socialSecurityMonthlyClient: "",
+  socialSecurityMonthlySpouse: "",
+  riskProfile: "moderate-conservative",
+  riskIntakeKnown: "unset",
+  riskIntakeScreen: "gate",
+  riskQuizAnswers: {},
+  riskQuizStepIndex: 0,
+  riskProfileSuggested: "",
+  calibration: "risk-profile",
+  goal: "Prepare for retirement income while reducing unnecessary downside risk.",
+  advisorEmail: "",
+  married: false,
+  spouseFirstName: "",
+  spouseLastName: "",
+  spouseDob: "",
+  spouseAge: "",
+  spouseRetirementAge: "",
+  takingSocialSecurity: false,
+};
 
 
 const demoHoldings: Holding[] = [
@@ -213,13 +245,13 @@ function confirmHoldingRegistrationSurfaceClasses(
   const attentive = Boolean(needsAdvisorReview);
   switch (r) {
     case "qualified":
-      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-3xl border border-emerald-200 bg-emerald-50/50 p-5 shadow-sm`;
+      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-none border border-emerald-200 bg-emerald-50/50 p-5 shadow-sm`;
     case "roth":
-      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-3xl border border-purple-200 bg-purple-50/50 p-5 shadow-sm`;
+      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-none border border-purple-200 bg-purple-50/50 p-5 shadow-sm`;
     case "non_qualified":
-      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-3xl border border-blue-200 bg-blue-50/50 p-5 shadow-sm`;
+      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-none border border-blue-200 bg-blue-50/50 p-5 shadow-sm`;
     default:
-      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-3xl border border-slate-200 bg-slate-50/70 p-5 shadow-sm`;
+      return `${attentive ? "ring-2 ring-red-400 ring-offset-2 ring-offset-white/70 shadow-[0_0_0_1px_rgba(248,113,113,0.35)] " : ""}rounded-none border border-slate-200 bg-slate-50/70 p-5 shadow-sm`;
   }
 }
 
@@ -299,7 +331,7 @@ function ScoreCard({ label, value, helper }: { label: string; value: number; hel
         ? "ap-icon-tile-amber"
         : "ap-icon-tile-red";
   return (
-    <Card className="rounded-3xl border-slate-200 bg-white/95 shadow-md shadow-blue-950/5">
+    <Card className="rounded-none border-slate-200 bg-white/95 shadow-md shadow-blue-950/5">
       <CardContent className="p-5">
         <div className="flex items-center justify-between gap-4">
           <div>
@@ -307,7 +339,7 @@ function ScoreCard({ label, value, helper }: { label: string; value: number; hel
             <p className="mt-1 text-3xl font-semibold text-slate-950 tabular-nums">{value}<span className="text-base font-medium text-slate-400">/100</span></p>
             <p className="mt-1 text-xs text-slate-500">{helper}</p>
           </div>
-          <div className={`ap-icon-tile ${toneClass} flex h-14 w-14 items-center justify-center rounded-2xl text-base font-bold tabular-nums`}>
+          <div className={`ap-icon-tile ${toneClass} flex h-14 w-14 items-center justify-center rounded-none text-base font-bold tabular-nums`}>
             {value}
           </div>
         </div>
@@ -471,17 +503,27 @@ function computePortfolioContextFromReview(
   };
 }
 
-function LogoBlock({ compact = false }: { compact?: boolean }) {
+function LogoBlock({
+  compact = false,
+  variant = "default",
+}: {
+  compact?: boolean;
+  variant?: "default" | "nav";
+}) {
   const [broken, setBroken] = useState(false);
+  const isNav = variant === "nav";
+  const titleCls = `font-serif text-2xl font-bold tracking-tight md:text-[1.7rem] ${isNav ? "text-white" : "text-slate-950"}`;
+  const tagCls = `text-sm ${isNav ? "text-slate-400" : "text-slate-500"}`;
+  const wordBreak = isNav ? "hidden md:block" : compact ? "" : "hidden sm:block";
 
   if (broken) {
     return (
       <div className="flex items-center gap-3">
-        <div className="ap-icon-tile flex h-14 w-14 items-center justify-center rounded-2xl text-lg font-bold md:h-16 md:w-16 md:text-xl">AP</div>
+        <div className="ap-icon-tile flex h-14 w-14 items-center justify-center rounded-none text-lg font-bold md:h-16 md:w-16 md:text-xl">AP</div>
         {!compact && (
-          <div>
-            <p className="font-serif text-2xl font-bold tracking-tight text-slate-950 md:text-[1.7rem]">AdvisorPilot</p>
-            <p className="text-sm text-slate-500">Portfolio review assistant</p>
+          <div className={wordBreak}>
+            <p className={titleCls}>AdvisorPilot</p>
+            <p className={tagCls}>Portfolio review assistant</p>
           </div>
         )}
       </div>
@@ -489,21 +531,197 @@ function LogoBlock({ compact = false }: { compact?: boolean }) {
   }
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex min-w-0 items-center gap-3">
       <Image
         src="/logo.png"
         alt="AdvisorPilot logo"
         width={96}
         height={96}
-        className="h-16 w-auto rounded-xl object-contain drop-shadow-[0_8px_18px_rgba(14,116,235,0.18)] md:h-[4.5rem]"
+        className={`h-12 w-auto rounded-none object-contain md:h-[4.05rem] ${isNav ? "opacity-[0.96]" : "drop-shadow-[0_8px_18px_rgba(14,116,235,0.18)]"}`}
         onError={() => setBroken(true)}
       />
       {!compact && (
-        <div className="hidden sm:block">
-          <p className="font-serif text-2xl font-bold tracking-tight text-slate-950 md:text-[1.7rem]">AdvisorPilot</p>
-          <p className="text-sm text-slate-500">Portfolio review assistant</p>
+        <div className={wordBreak}>
+          <p className={titleCls}>
+            Advisor<span className={isNav ? "text-[#7eb8f5]" : "text-[var(--ap-royal)]"}>Pilot</span>
+          </p>
+          <p className={tagCls}>Portfolio review assistant</p>
         </div>
       )}
+    </div>
+  );
+}
+
+function advisorNavInitials(signatureName: string, sessionName?: string | null, email?: string | null) {
+  const n = signatureName.trim() || String(sessionName || "").trim();
+  if (n) {
+    const parts = n.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    return n.slice(0, 2).toUpperCase();
+  }
+  const local = String(email || "").split("@")[0].trim();
+  if (local.length >= 2) return local.slice(0, 2).toUpperCase();
+  if (local.length === 1) return (local + local).toUpperCase();
+  return "AP";
+}
+
+function wizardRailLabel(item: string) {
+  if (item === "saved") return "Client Database";
+  if (item === "intake") return "Client Profile";
+  return item.charAt(0).toUpperCase() + item.slice(1);
+}
+
+function AppTopNav({
+  step,
+  intakeStep,
+  demoMode,
+  setDemoMode,
+  session,
+  emailAuthUser,
+  signatureName,
+  advisorDisplayName,
+  onNewReview,
+  setShowSignatureSetup,
+  handleEmailPasswordLogout,
+  analysisReady,
+}: {
+  step: string;
+  intakeStep: number;
+  demoMode: boolean;
+  setDemoMode: (v: boolean) => void;
+  session: Session | null;
+  emailAuthUser: EmailAuthUser | null;
+  signatureName: string;
+  advisorDisplayName: string;
+  onNewReview: () => void | Promise<void>;
+  setShowSignatureSetup: (v: boolean) => void;
+  handleEmailPasswordLogout: () => void;
+  analysisReady: boolean;
+}) {
+  const navNewReview =
+    (step === "intake" && intakeStep > 0) || ["upload", "confirm", "analysis", "meeting", "roth"].includes(step);
+
+  const initials = advisorNavInitials(
+    signatureName,
+    session?.user?.name,
+    session?.user?.email ?? emailAuthUser?.email
+  );
+  const trimmedAdvisor = advisorDisplayName.trim();
+  const profileLabel =
+    trimmedAdvisor && trimmedAdvisor.toLowerCase() !== "your advisor" ? trimmedAdvisor : "Advisor";
+
+  const accountEmail = session?.user?.email || emailAuthUser?.email;
+
+  return (
+    <header className="ap-top-nav print:hidden">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 py-3 md:px-8 md:py-3.5">
+        <div className="flex min-w-0 shrink-0 items-center">
+          <LogoBlock variant="nav" />
+        </div>
+
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-y-2 pl-2 sm:gap-x-2 sm:pl-0 md:gap-x-3">
+          <nav className="flex min-w-0 flex-wrap items-center justify-end pb-1" aria-label="Primary">
+            <button
+              type="button"
+              className={`ap-nav-link ${navNewReview ? "ap-nav-link-active" : ""}`}
+              onClick={() => void onNewReview()}
+            >
+              New review
+            </button>
+          </nav>
+          {analysisReady ? (
+            <span className="hidden rounded-none border border-white/20 bg-white/5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300 lg:inline">
+              Analysis ready
+            </span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setDemoMode(!demoMode)}
+            className={`rounded-none border px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide transition sm:px-3 ${
+              demoMode
+                ? "border-[var(--ap-royal)] bg-[var(--ap-royal)]/15 text-[#b8d9ff]"
+                : "border-white/25 text-slate-400 hover:border-white/40 hover:text-white"
+            }`}
+          >
+            Demo
+          </button>
+          <DropdownMenu.Root modal={false}>
+            <DropdownMenu.Trigger asChild>
+              <button
+                type="button"
+                className="flex max-w-[min(22rem,72vw)] items-center gap-2 rounded-none border border-white/15 bg-black/20 py-1 pr-2 pl-2 hover:bg-black/30 data-[state=open]:border-white/25 data-[state=open]:bg-black/35"
+                aria-label={accountEmail ? `Account menu, ${profileLabel}, ${accountEmail}` : `Account menu, ${profileLabel}`}
+                aria-haspopup="menu"
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center bg-[var(--ap-royal)] text-xs font-bold text-white">
+                  {initials}
+                </span>
+                <span className="hidden min-w-0 truncate text-left text-sm font-medium text-white sm:block">{profileLabel}</span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" aria-hidden />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                sideOffset={6}
+                align="end"
+                className="z-[300] min-w-[13rem] overflow-hidden rounded-none border border-[var(--ap-border-strong)] bg-white py-1 text-slate-900 shadow-lg shadow-slate-900/15"
+              >
+                <DropdownMenu.Item
+                  className="cursor-pointer px-3 py-2.5 text-sm outline-none data-[highlighted]:bg-[#f0f4fa] data-[highlighted]:text-[var(--ap-navy)]"
+                  onSelect={() => setShowSignatureSetup(true)}
+                >
+                  Email signature
+                </DropdownMenu.Item>
+                <DropdownMenu.Separator className="my-1 h-px bg-[var(--ap-border)]" />
+                <DropdownMenu.Item
+                  className="cursor-pointer px-3 py-2.5 text-sm text-slate-800 outline-none data-[highlighted]:bg-red-50 data-[highlighted]:text-red-900"
+                  onSelect={() => (session ? void signOut({ callbackUrl: "/" }) : handleEmailPasswordLogout())}
+                >
+                  Sign out
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function WizardStepRail({
+  wizardSteps,
+  step,
+  setStep,
+  loadSavedReviews,
+}: {
+  wizardSteps: readonly string[];
+  step: string;
+  setStep: (s: string) => void;
+  loadSavedReviews: () => void | Promise<void>;
+}) {
+  return (
+    <div className="ap-wizard-rail print:hidden">
+      <div className="ap-wizard-rail-inner mx-auto max-w-7xl px-4 md:px-8">
+        {wizardSteps.map((item, i) => {
+          const label = wizardRailLabel(item);
+          const active = step === item;
+          return (
+            <button
+              key={item}
+              type="button"
+              className={`ap-wizard-segment ${active ? "ap-wizard-segment-active" : ""}`}
+              aria-current={active ? "step" : undefined}
+              onClick={() => {
+                if (item === "saved") void loadSavedReviews();
+                setStep(item);
+              }}
+            >
+              <span className="ap-wizard-segment-index">{String(i + 1).padStart(2, "0")}</span>
+              {label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -514,7 +732,7 @@ function ProfessionalDonutChart({ data, title, subtitle }: { data: { label: stri
   const circumference = 2 * Math.PI * radius;
 
   return (
-    <div className="rounded-[1.5rem] border border-slate-200 bg-white p-6 shadow-sm print:break-inside-avoid print:border-slate-300 print:shadow-none">
+    <div className="rounded-none border border-slate-200 bg-white p-6 shadow-sm print:break-inside-avoid print:border-slate-300 print:shadow-none">
       <div className="mb-5">
         <h3 className="font-serif text-2xl font-bold text-slate-950">{title}</h3>
         {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
@@ -547,9 +765,9 @@ function ProfessionalDonutChart({ data, title, subtitle }: { data: { label: stri
         </svg>
         <div className="w-full space-y-3">
           {data.map((item) => (
-            <div key={item.label} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 print:bg-white">
+            <div key={item.label} className="flex items-center justify-between rounded-none border border-slate-100 bg-slate-50 px-4 py-3 print:bg-white">
               <div className="flex items-center gap-3">
-                <span className="h-3.5 w-3.5 rounded-full" style={{ backgroundColor: item.color }} />
+                <span className="h-3.5 w-3.5 rounded-none" style={{ backgroundColor: item.color }} />
                 <span className="text-sm font-medium text-slate-700">{item.label}</span>
               </div>
               <span className="font-semibold text-slate-950">{item.value}%</span>
@@ -561,25 +779,9 @@ function ProfessionalDonutChart({ data, title, subtitle }: { data: { label: stri
   );
 }
 
-function StepButton({ label, active, index, onClick }: { label: string; active: boolean; index: number; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-current={active ? "step" : undefined}
-      className={`ap-step-btn min-h-[3rem] touch-manipulation rounded-2xl px-3 py-3.5 text-sm font-medium capitalize md:min-h-0 md:py-3 ${
-        active ? "ap-step-btn-active" : ""
-      }`}
-    >
-      <span className={`mr-1 text-xs ${active ? "text-sky-100/80" : "text-slate-400"}`}>{index}.</span>
-      {label}
-    </button>
-  );
-}
-
 function MetricCard({ icon, label, value, helper }: { icon: React.ReactNode; label: string; value: string; helper?: string }) {
   return (
-    <Card className="rounded-3xl border-slate-200 bg-white/95 shadow-md shadow-blue-950/5">
+    <Card className="rounded-none border-slate-200 bg-white/95 shadow-md shadow-blue-950/5">
       <CardContent className="p-5">
         <div className="flex items-center justify-between gap-4">
           <div>
@@ -587,7 +789,7 @@ function MetricCard({ icon, label, value, helper }: { icon: React.ReactNode; lab
             <p className="mt-1 text-2xl font-semibold capitalize text-slate-950">{value}</p>
             {helper && <p className="mt-1 text-xs text-slate-500">{helper}</p>}
           </div>
-          <div className="flex ap-icon-tile h-11 w-11 items-center justify-center rounded-2xl">{icon}</div>
+          <div className="flex ap-icon-tile h-11 w-11 items-center justify-center rounded-none">{icon}</div>
         </div>
       </CardContent>
     </Card>
@@ -596,6 +798,8 @@ function MetricCard({ icon, label, value, helper }: { icon: React.ReactNode; lab
 
 function IntakeShell({
   progress,
+  portfolioStepCurrent,
+  portfolioStepTotal,
   eyebrow,
   title,
   helper,
@@ -608,6 +812,8 @@ function IntakeShell({
   footerCenter,
 }: {
   progress: number;
+  portfolioStepCurrent?: number;
+  portfolioStepTotal?: number;
   eyebrow: string;
   title: string;
   helper: string;
@@ -619,44 +825,65 @@ function IntakeShell({
   nextDisabled?: boolean;
   footerCenter?: React.ReactNode;
 }) {
+  const showPortfolioMeta =
+    portfolioStepCurrent != null &&
+    portfolioStepTotal != null &&
+    portfolioStepCurrent > 0 &&
+    portfolioStepTotal > 0;
+
   return (
-    <Card className="rounded-[2rem] ap-glass border-0">
-      <CardContent className="p-6 md:p-10">
-        <div className="mx-auto max-w-3xl space-y-7">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-4">
-              <Badge variant="outline" className="rounded-full border-sky-200 bg-sky-50 text-blue-700">{eyebrow}</Badge>
-              <span className="text-sm text-slate-500">{progress}% complete</span>
+    <Card className="ap-intake-shell-card ap-glass rounded-b-xl rounded-t-none border-0 bg-white py-0 ring-0">
+      <CardContent className="p-0">
+        <div className="ap-intake-shell-accent">
+          <div className="p-6 md:p-10">
+            <div className="mx-auto max-w-3xl space-y-7">
+              <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between lg:gap-10">
+                <div className="min-w-0 flex-1 space-y-3 md:space-y-4">
+                  {showPortfolioMeta ? (
+                    <p className="text-[0.68rem] font-semibold tracking-[0.18em] text-[var(--ap-navy-mid)] uppercase">
+                      Portfolio review · Step {portfolioStepCurrent} of {portfolioStepTotal}
+                    </p>
+                  ) : null}
+                  <p className="font-serif text-lg italic text-[var(--ap-royal)] md:text-xl">{eyebrow}</p>
+                  <h2 className="font-serif text-3xl font-bold tracking-tight text-slate-950 md:text-[2.35rem] md:leading-[1.1]">{title}</h2>
+                  {helper ? <p className="text-lg text-slate-600">{helper}</p> : null}
+                </div>
+                <div className="flex shrink-0 flex-col items-start gap-1 lg:items-end lg:pt-0.5">
+                  <p className="text-5xl font-semibold tabular-nums tracking-tight text-slate-950 md:text-6xl">{progress}%</p>
+                  <p className="text-[0.65rem] font-semibold tracking-[0.28em] text-slate-400 uppercase">Complete</p>
+                  <Progress
+                    value={progress}
+                    className="mt-2 h-2.5 w-full min-w-[12rem] max-w-[15rem] rounded-full bg-slate-200 [&_[data-slot=progress-indicator]]:rounded-none"
+                  />
+                </div>
+              </div>
+              <div className="ap-soft-panel rounded-lg p-5 md:p-7">{children}</div>
+              {footerCenter ? (
+                <div className="grid grid-cols-1 items-center gap-3 sm:grid-cols-[1fr_auto_1fr]">
+                  <div className="flex justify-start">
+                    <Button variant="outline" className="h-14 rounded-none px-5 md:h-12" onClick={onBack} disabled={backDisabled}>
+                      <ArrowLeft className="mr-2 h-4 w-4" /> Back
+                    </Button>
+                  </div>
+                  <div className="order-first flex justify-center px-1 sm:order-none">{footerCenter}</div>
+                  <div className="flex justify-end">
+                    <Button className="h-14 rounded-none ap-cta-solid px-6 md:h-12" onClick={onNext} disabled={nextDisabled}>
+                      {nextLabel} <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-3">
+                  <Button variant="outline" className="h-14 rounded-none px-5 md:h-12" onClick={onBack} disabled={backDisabled}>
+                    <ArrowLeft className="mr-2 h-4 w-4" /> Back
+                  </Button>
+                  <Button className="h-14 rounded-none ap-cta-solid px-6 md:h-12" onClick={onNext} disabled={nextDisabled}>
+                    {nextLabel} <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </div>
+              )}
             </div>
-            <Progress value={progress} />
-            <h2 className="font-serif text-3xl font-bold tracking-tight text-slate-950 md:text-5xl">{title}</h2>
-            {helper ? <p className="text-lg text-slate-600">{helper}</p> : null}
           </div>
-          <div className="ap-soft-panel rounded-3xl p-5 md:p-7">{children}</div>
-          {footerCenter ? (
-            <div className="grid grid-cols-1 items-center gap-3 sm:grid-cols-[1fr_auto_1fr]">
-              <div className="flex justify-start">
-                <Button variant="outline" className="h-14 rounded-2xl px-5 md:h-12" onClick={onBack} disabled={backDisabled}>
-                  <ArrowLeft className="mr-2 h-4 w-4" /> Back
-                </Button>
-              </div>
-              <div className="order-first flex justify-center px-1 sm:order-none">{footerCenter}</div>
-              <div className="flex justify-end">
-                <Button className="h-14 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-6 md:h-12" onClick={onNext} disabled={nextDisabled}>
-                  {nextLabel} <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between gap-3">
-              <Button variant="outline" className="h-14 rounded-2xl px-5 md:h-12" onClick={onBack} disabled={backDisabled}>
-                <ArrowLeft className="mr-2 h-4 w-4" /> Back
-              </Button>
-              <Button className="h-14 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-6 md:h-12" onClick={onNext} disabled={nextDisabled}>
-                  {nextLabel} <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-            </div>
-          )}
         </div>
       </CardContent>
     </Card>
@@ -686,34 +913,10 @@ export default function AdvisorPilotPage() {
     return () => cancelAnimationFrame(frame);
   }, [step, uploadSectionFocus]);
 
-  const [client, setClient] = useState<Client>({
-    firstName: "",
-    lastName: "",
-    dob: "",
-    age: "",
-    federalTaxBracket: "22",
-    adjustedGrossIncomeAnnual: "",
-    retirementAge: "67",
-    retirementSpendableIncomeAnnual: "",
-    socialSecurityMonthlyClient: "",
-    socialSecurityMonthlySpouse: "",
-    riskProfile: "moderate-conservative",
-    riskIntakeKnown: "unset",
-    riskIntakeScreen: "gate",
-    riskQuizAnswers: {},
-    riskQuizStepIndex: 0,
-    riskProfileSuggested: "",
-    calibration: "risk-profile",
-    goal: "Prepare for retirement income while reducing unnecessary downside risk.",
-    advisorEmail: "",
-    married: false,
-    spouseFirstName: "",
-    spouseLastName: "",
-    spouseDob: "",
-    spouseAge: "",
-    spouseRetirementAge: "",
-    takingSocialSecurity: false,
-  });
+  const [client, setClient] = useState<Client>(() => ({
+    ...INITIAL_CLIENT_STATE,
+    riskQuizAnswers: { ...INITIAL_CLIENT_STATE.riskQuizAnswers },
+  }));
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>(demoHoldings);
   const [meetingNotes, setMeetingNotes] = useState("");
@@ -790,6 +993,48 @@ export default function AdvisorPilotPage() {
       ? ([...core, "roth", "saved"] as const)
       : ([...core, "saved"] as const);
   }, [showRothOptionReport]);
+
+  /** True when starting a new review could discard advisor work (prompt before reset). */
+  const reviewHasUnsavedWork = useMemo(() => {
+    const hasIdentity =
+      client.firstName.trim() ||
+      client.lastName.trim() ||
+      client.advisorEmail.trim() ||
+      client.dob.trim();
+    const progressedWorkflow = step !== "intake" || intakeStep > 0;
+    const hasAnalysis = analysis != null;
+    const hasNotes = meetingNotes.trim().length > 0;
+    const hasUploads = uploadedFiles.length > 0;
+    const onlyDefaultDemoPlayground =
+      demoMode &&
+      step === "intake" &&
+      intakeStep === 0 &&
+      !hasIdentity &&
+      !hasAnalysis &&
+      !hasNotes &&
+      !hasUploads;
+    if (onlyDefaultDemoPlayground) return false;
+    return (
+      hasIdentity ||
+      progressedWorkflow ||
+      hasAnalysis ||
+      hasNotes ||
+      hasUploads ||
+      holdings.length > 0
+    );
+  }, [
+    client.firstName,
+    client.lastName,
+    client.advisorEmail,
+    client.dob,
+    step,
+    intakeStep,
+    analysis,
+    meetingNotes,
+    uploadedFiles.length,
+    demoMode,
+    holdings.length,
+  ]);
 
   const totalValue = useMemo(() => holdings.reduce((sum, h) => sum + Number(h.value || 0), 0), [holdings]);
   const traditionalQualifiedTotal = useMemo(() => sumTraditionalQualifiedValue(holdings), [holdings]);
@@ -1160,17 +1405,17 @@ export default function AdvisorPilotPage() {
       : "The portfolio has a stronger income-readiness foundation, but the advisor should still confirm liquidity, tax impact, and retirement withdrawal needs.",
   ];
   const displayTalkingPoints = analysis?.talkingPoints?.length ? analysis.talkingPoints : [
-    "Confirm the client’s retirement timeline and income need.",
-    "Explain current allocation versus the age/risk-profile proposed allocation.",
-    "Identify holdings that may create concentration, overlap, or unnecessary volatility.",
-    "Discuss potential rebalancing as a planning conversation, not a rushed trading decision.",
+    "Ground the conversation: confirm statement period, approximate total portfolio value, and any major accounts missing from uploads.",
+    "Walk registration (tax wrappers) before debating allocation so the household sees where dollars live versus what they own.",
+    "Use synopsis and holdings context from Portfolio Review—then sleeves (current versus proposed)—before leaning on numeric scores.",
+    "Close with illustrative stress and advisor concerns after the client understands roles, overlap versus red flags, and plain-language impact.",
   ];
 
   const meetingQuestions = [
-    "Are you still targeting retirement around the age currently listed in the profile?",
+    "Before we unpack the holdings: any major liquidity needs, tax events, or income changes we should plan around in the next year or two?",
+    "Are you still targeting retirement around the age listed in your profile?",
     "How important is stable income versus continued growth at this stage?",
-    "If the portfolio dropped 15% to 20%, would that change your retirement plans or comfort level?",
-    "Are there any major liquidity needs, tax concerns, or income needs we should plan around before making changes?",
+    "If the portfolio dropped roughly 15% to 20%, would that affect your timeline or peace of mind?",
   ];
 
   const whatToListenFor = [
@@ -1178,18 +1423,30 @@ export default function AdvisorPilotPage() {
     "If the client is focused on growth, frame rebalancing as reducing unnecessary concentration rather than abandoning growth.",
     "If the client wants income, connect the gap in fixed exposure, income readiness score, and potential income-oriented strategies.",
     "If the client is hesitant to make changes, position the next step as a review and stress-test, not an immediate trading decision.",
+    "If the client confuses taxable versus IRA buckets, pause and re-map registration before proposing moves.",
   ];
+
+  const registrationMeetingLine = demoMode
+    ? `Orient on tax registration from confirmed holdings (demo: illustrative treatment; traditional tax-deferred ≈ ${currency(traditionalQualifiedTotal)}).`
+    : `Orient on tax registration from confirmed holdings: traditional tax-deferred ≈ ${currency(registrationTotals.traditionalQualifiedValue)}; taxable ≈ ${currency(registrationTotals.nonQualifiedValue)}; Roth IRA ≈ ${currency(registrationTotals.rothValue)}${
+        registrationTotals.unknownValue ? `; unknown wrappers ≈ ${currency(registrationTotals.unknownValue)}` : ""
+      }. Call out any custodians or accounts not on this statement.`;
 
   const meetingWalkthrough = [
-    `Start with the portfolio scores: risk alignment ${scores.riskAlignment}/100, diversification ${scores.diversification}/100, and income readiness ${scores.incomeReadiness}/100.`,
-    "Show the allocation chart and compare current positioning against the proposed allocation.",
-    "Walk through Hypothetical Allocation Stress (three decade CAGR windows plus the modeled 2008 calendar-year biggest drawdown) compared with the standardized proposed sleeve.",
-    "Walk through the red flags first so the client understands the main concerns before hearing solutions.",
-    "Use the overlap section to explain hidden concentration that may not be obvious from the number of holdings.",
-    "Translate the analysis with the What This Means for You section before moving into strategy.",
+    "Open with purpose and pace: no decisions required today unless the client wants them; you are building a shared picture of what they own and where.",
+    `Confirm facts: total portfolio is roughly ${currency(totalValue)} on the confirmed holdings; note statement as-of date and whether anything important is missing from uploads.`,
+    registrationMeetingLine,
+    "Use the Synopsis on Portfolio Review (or your own one-minute narrative) so the client hears a plain-English headline of positioning before charts and scores.",
+    "Show the allocation chart: current versus proposed sleeves, and what each sleeve is trying to do (growth, ballast, liquidity).",
+    `Then layer in portfolio scores as supporting context—risk alignment ${scores.riskAlignment}/100, diversification ${scores.diversification}/100, income readiness ${scores.incomeReadiness}/100—not as the opening headline.`,
+    "Walk Hypothetical Allocation Stress on Portfolio Review verbally: illustrative only, not a forecast; three decade-window CAGRs plus the modeled 2008 calendar-year drawdown row.",
+    "Review Advisor Red Flags as the primary concern list—specific portfolio issues to watch, distinct from fund-level overlap.",
+    "Use Overlap & Concentration for duplicated exposure (multiple holdings, similar underlying bets)—not the same as “many positions equal diversification.”",
+    "Before strategy and recommendations, use What This Means for You to translate into outcomes the client can feel.",
   ];
 
-  const closingScript = "The goal is not to make changes just for the sake of change. The next step is to review which adjustments may better align the portfolio with the client’s risk profile, retirement timeline, income needs, liquidity needs, and tax picture before making any final recommendation.";
+  const closingScript =
+    "The goal is not to change things for the sake of change. The next step is to review which adjustments—if any—better align the portfolio with your risk comfort, timeline, income needs, liquidity, and tax picture before any final recommendation.";
 
 
   const positioningImpact = [
@@ -1221,9 +1478,11 @@ export default function AdvisorPilotPage() {
         ]),
   ];
 
-  function normalizeOptions(h: Holding) {
+  function normalizeOptions(h: Holding, includeSyntheticCashTicker?: boolean) {
     const base = Array.isArray(h.options) ? h.options.filter(Boolean) : [];
-    const values = [h.suggested, ...base, "Manual ticker / CUSIP entry"].filter(Boolean);
+    const manual = "Manual ticker / CUSIP entry";
+    const tail = includeSyntheticCashTicker ? [SYNTHETIC_CASH_TICKER, manual] : [manual];
+    const values = [h.suggested, ...base, ...tail].filter(Boolean);
     return Array.from(new Set(values));
   }
 
@@ -1574,7 +1833,7 @@ export default function AdvisorPilotPage() {
         type="button"
         aria-label="Profile AutoPilot"
         onClick={() => setLiveIntakeOpen(true)}
-        className="group inline-flex flex-col items-center gap-2 rounded-2xl bg-transparent px-2 py-1 text-center transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2"
+        className="group inline-flex flex-col items-center gap-2 rounded-none bg-transparent px-2 py-1 text-center transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2"
       >
         <Image
           src="/logo.png"
@@ -1582,7 +1841,7 @@ export default function AdvisorPilotPage() {
           aria-hidden
           width={96}
           height={96}
-          className="h-16 w-auto rounded-xl object-contain drop-shadow-[0_8px_18px_rgba(14,116,235,0.18)] transition group-hover:drop-shadow-[0_12px_24px_rgba(14,116,235,0.32)] md:h-[4.5rem]"
+          className="h-16 w-auto rounded-none object-contain drop-shadow-[0_8px_18px_rgba(14,116,235,0.18)] transition group-hover:drop-shadow-[0_12px_24px_rgba(14,116,235,0.32)] md:h-[4.5rem]"
         />
         <span className="font-serif text-sm font-semibold leading-tight tracking-tight text-blue-900 transition group-hover:text-blue-950">
           Profile AutoPilot
@@ -1625,12 +1884,12 @@ export default function AdvisorPilotPage() {
     }
   }
 
-  async function saveCurrentReview() {
+  async function saveCurrentReview(): Promise<boolean> {
     const ownerEmail = getCurrentOwnerEmail();
 
     if (!ownerEmail) {
       setSaveMessage("Please log in before saving a client profile.");
-      return;
+      return false;
     }
 
     try {
@@ -1656,16 +1915,65 @@ export default function AdvisorPilotPage() {
 
       if (!res.ok) {
         setSaveMessage(data.error || "Could not save client profile.");
-        return;
+        return false;
       }
 
       if (data?.client?.id) setActiveReviewId(data.client.id);
       setSaveMessage(`Saved ${clientDisplayName(client) || "Client"} client profile.`);
       setTimeout(() => setSaveMessage(""), 2500);
       await loadSavedReviews();
+      return true;
     } catch {
       setSaveMessage("Could not save client profile.");
+      return false;
     }
+  }
+
+  const startBlankReview = useCallback(() => {
+    activeEnrichmentControllerRef.current?.abort();
+    activeEnrichmentControllerRef.current = null;
+    setClient({ ...INITIAL_CLIENT_STATE, riskQuizAnswers: {} });
+    setHoldings([]);
+    setDemoMode(false);
+    setMeetingNotes("");
+    setAnalysis(null);
+    setUploadedFiles([]);
+    setActiveReviewId(null);
+    setRothWorksheet(emptyRothWorksheet());
+    setFollowUpEmail("");
+    setEmailCopied(false);
+    setDuplicatesAcknowledged(false);
+    setIntakeStep(0);
+    setStep("intake");
+    setExtractError("");
+    setAnalysisError("");
+    setExtractProgressIndex(0);
+    setAnalysisProgressIndex(0);
+    setIsExtracting(false);
+    setIsAnalyzing(false);
+    setMagicLinkUrl("");
+    setMagicLinkExpiresAt("");
+    setMagicLinkErr("");
+    setMagicLinkCopied(false);
+    setLiveIntakeOpen(false);
+    setUploadSectionFocus(null);
+    setIsEnriching(false);
+    setEnrichError("");
+  }, []);
+
+  async function handleNewReviewIntent() {
+    if (!reviewHasUnsavedWork) {
+      startBlankReview();
+      return;
+    }
+    const shouldSave = window.confirm(
+      "Save this client to your database before starting a new review?\n\nClick OK to save, or Cancel to continue without saving."
+    );
+    if (shouldSave) {
+      const ok = await saveCurrentReview();
+      if (!ok) return;
+    }
+    startBlankReview();
   }
 
   function openSavedReview(review: SavedReview) {
@@ -2536,7 +2844,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         <div aria-hidden className="ap-orb ap-orb-1" />
         <div aria-hidden className="ap-orb ap-orb-2" />
         <div className="mx-auto flex min-h-[80vh] max-w-3xl items-center justify-center">
-          <Card className="ap-glass ap-step-enter w-full rounded-[2rem] border-0">
+          <Card className="ap-glass ap-step-enter w-full rounded-none border-0">
             <CardContent className="p-8 text-center">
               <LogoBlock />
               <p className="mt-6 text-slate-600">Loading AdvisorPilot...</p>
@@ -2553,7 +2861,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         <div aria-hidden className="ap-orb ap-orb-1" />
         <div aria-hidden className="ap-orb ap-orb-2" />
         <div className="mx-auto flex min-h-[88vh] max-w-5xl items-center justify-center">
-          <Card className="ap-glass ap-step-enter w-full rounded-[2rem] border-0">
+          <Card className="ap-glass ap-step-enter w-full rounded-none border-0">
             <CardContent className="grid gap-8 p-6 md:grid-cols-[1fr_1.1fr] md:p-10">
               <div className="flex flex-col justify-center">
                 <LogoBlock />
@@ -2563,14 +2871,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <p className="mt-4 text-lg leading-8 text-slate-600">
                   Analyze client statements, generate polished portfolio reports, and manage client reviews from one advisor workspace.
                 </p>
-                <div className="mt-6 rounded-3xl border border-blue-100 bg-blue-50 p-5 text-sm leading-6 text-blue-950">
+                <div className="mt-6 rounded-none border border-blue-100 bg-blue-50 p-5 text-sm leading-6 text-blue-950">
                   Google sign-in enables direct Gmail sending. Email/password accounts can still use the app, download reports, and copy generated follow-up emails manually.
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+              <div className="rounded-none border border-slate-200 bg-white p-5 shadow-sm md:p-6">
                 <Button
-                  className="h-12 w-full rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400"
+                  className="h-12 w-full rounded-none ap-cta-solid"
                   onClick={() => signIn("google", { callbackUrl: "/" })}
                 >
                   Continue with Google
@@ -2586,7 +2894,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <Input
                     type="email"
                     placeholder="Email"
-                    className="h-12 rounded-2xl"
+                    className="h-12 rounded-none"
                     value={authEmail}
                     onChange={(e) => setAuthEmail(e.target.value)}
                   />
@@ -2594,23 +2902,23 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <Input
                     type="password"
                     placeholder="Password"
-                    className="h-12 rounded-2xl"
+                    className="h-12 rounded-none"
                     value={authPassword}
                     onChange={(e) => setAuthPassword(e.target.value)}
                   />
 
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <Button variant="outline" className="h-12 rounded-2xl" onClick={handleEmailLogin}>
+                    <Button variant="outline" className="h-12 rounded-none" onClick={handleEmailLogin}>
                       Login
                     </Button>
 
-                    <Button className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400" onClick={handleEmailSignup}>
+                    <Button className="h-12 rounded-none ap-cta-solid" onClick={handleEmailSignup}>
                       Create Account
                     </Button>
                   </div>
 
                   {authMessage && (
-                    <p className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                    <p className="rounded-none border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
                       {authMessage}
                     </p>
                   )}
@@ -2624,85 +2932,42 @@ async function downloadPDFReport(mode: "client" | "advisor") {
   }
 
   return (
-    <div className="ap-app-bg min-h-screen p-4 text-slate-950 md:p-8 print:bg-white print:p-0">
-      <div aria-hidden className="ap-orb ap-orb-1 print:hidden" />
-      <div aria-hidden className="ap-orb ap-orb-2 print:hidden" />
+    <div className="ap-app-bg min-h-screen text-slate-950 print:bg-white">
       <style jsx global>{`
         @media print {
           body { background: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-          header, .app-nav, .no-print { display: none !important; }
+          .ap-top-nav, .ap-wizard-rail, .no-print { display: none !important; }
           .print-card { border: none !important; box-shadow: none !important; padding: 0 !important; }
           .report-paper { border: none !important; box-shadow: none !important; padding: 24px !important; }
           svg, img { break-inside: avoid; page-break-inside: avoid; }
         }
       `}</style>
 
-      <div className="mx-auto max-w-7xl space-y-6 print:max-w-none print:space-y-0">
-        <header className="ap-glass-strong flex items-center justify-between rounded-[2rem] border-0 px-5 py-4 md:px-7">
-          <LogoBlock />
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {demoMode && <Badge variant="outline" className="hidden rounded-full border-amber-200 bg-amber-50 text-amber-800 sm:inline-flex">Demo data</Badge>}
-            {analysis && <Badge variant="outline" className="hidden rounded-full border-blue-200 bg-blue-50 text-blue-800 sm:inline-flex">Analysis ready</Badge>}
-            {session && (
-              <>
-                <Badge variant="outline" className="rounded-full border-emerald-200 bg-emerald-50 text-emerald-800">
-                  Google: {session.user?.email}
-                </Badge>
-                <Button variant="outline" className="rounded-2xl" onClick={() => setShowSignatureSetup(true)}>
-                  Email Signature
-                </Button>
-                <Button variant="outline" className="rounded-2xl" onClick={() => signOut({ callbackUrl: "/" })}>
-                  Sign out Google
-                </Button>
-              </>
-            )}
-            {!session && emailAuthUser && (
-              <>
-                <Badge variant="outline" className="rounded-full border-blue-200 bg-blue-50 text-blue-800">
-                  Email: {emailAuthUser.email}
-                </Badge>
-                <Button variant="outline" className="rounded-2xl" onClick={() => setShowSignatureSetup(true)}>
-                  Email Signature
-                </Button>
-                <Button variant="outline" className="rounded-2xl" onClick={handleEmailPasswordLogout}>
-                  Sign out
-                </Button>
-              </>
-            )}
-          </div>
-        </header>
+      <AppTopNav
+        step={step}
+        intakeStep={intakeStep}
+        demoMode={demoMode}
+        setDemoMode={setDemoMode}
+        session={session}
+        emailAuthUser={emailAuthUser}
+        signatureName={signatureName}
+        advisorDisplayName={advisorVoiceName}
+        onNewReview={handleNewReviewIntent}
+        setShowSignatureSetup={setShowSignatureSetup}
+        handleEmailPasswordLogout={handleEmailPasswordLogout}
+        analysisReady={Boolean(analysis)}
+      />
+      <WizardStepRail wizardSteps={wizardSteps} step={step} setStep={setStep} loadSavedReviews={loadSavedReviews} />
 
-        <div
-          className={`app-nav grid grid-cols-2 gap-2 ${showRothOptionReport ? "md:grid-cols-4 lg:grid-cols-8" : "md:grid-cols-4 lg:grid-cols-7"}`}
-        >
-          {wizardSteps.map((item, i) => (
-            <StepButton
-              key={item}
-              label={
-                item === "saved"
-                  ? "Client Database"
-                  : item === "intake"
-                    ? "Client Profile"
-                    : item
-              }
-              index={i + 1}
-              active={step === item}
-              onClick={() => {
-                if (item === "saved") loadSavedReviews();
-                setStep(item);
-              }}
-            />
-          ))}
-        </div>
-
+      <div className="mx-auto max-w-7xl space-y-6 px-4 pt-0 pb-6 md:px-8 md:pb-8 print:max-w-none print:space-y-0 print:p-0">
         {saveMessage && (
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-800">
+          <div className="rounded-none border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-800">
             {saveMessage}
           </div>
         )}
 
         {showSignatureSetup && (
-          <Card className="rounded-[2rem] ap-glass border-0">
+          <Card className="rounded-none ap-glass border-0">
             <CardContent className="space-y-5 p-6 md:p-8">
               <div>
                 <h2 className="font-serif text-2xl font-bold text-slate-950">Set up your email signature</h2>
@@ -2714,57 +2979,57 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
                   <label className="text-sm font-semibold text-slate-700">Advisor name</label>
-                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureName} onChange={(e) => setSignatureName(e.target.value)} placeholder="Christopher Perussina" />
+                  <Input className="mt-2 h-12 rounded-none bg-white" value={signatureName} onChange={(e) => setSignatureName(e.target.value)} placeholder="Christopher Perussina" />
                 </div>
 
                 <div>
                   <label className="text-sm font-semibold text-slate-700">Title</label>
-                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureTitle} onChange={(e) => setSignatureTitle(e.target.value)} placeholder="President" />
+                  <Input className="mt-2 h-12 rounded-none bg-white" value={signatureTitle} onChange={(e) => setSignatureTitle(e.target.value)} placeholder="President" />
                 </div>
 
                 <div>
                   <label className="text-sm font-semibold text-slate-700">License line</label>
-                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureLicense} onChange={(e) => setSignatureLicense(e.target.value)} placeholder="License #0H38298" />
+                  <Input className="mt-2 h-12 rounded-none bg-white" value={signatureLicense} onChange={(e) => setSignatureLicense(e.target.value)} placeholder="License #0H38298" />
                 </div>
 
                 <div>
                   <label className="text-sm font-semibold text-slate-700">Calendar booking link</label>
-                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureCalendarLink} onChange={(e) => setSignatureCalendarLink(e.target.value)} placeholder="https://calendly.com/your-link" />
+                  <Input className="mt-2 h-12 rounded-none bg-white" value={signatureCalendarLink} onChange={(e) => setSignatureCalendarLink(e.target.value)} placeholder="https://calendly.com/your-link" />
                   <p className="mt-1 text-xs text-slate-500">Clients will see this as “Book a time on my calendar.”</p>
                 </div>
 
                 <div className="md:col-span-2">
                   <label className="text-sm font-semibold text-slate-700">Office address</label>
-                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureAddress} onChange={(e) => setSignatureAddress(e.target.value)} placeholder="1255 Treat Blvd Suite 300 Floor 3, Walnut Creek, CA 94597" />
+                  <Input className="mt-2 h-12 rounded-none bg-white" value={signatureAddress} onChange={(e) => setSignatureAddress(e.target.value)} placeholder="1255 Treat Blvd Suite 300 Floor 3, Walnut Creek, CA 94597" />
                 </div>
 
                 <div>
                   <label className="text-sm font-semibold text-slate-700">Office phone</label>
-                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureOfficePhone} onChange={(e) => setSignatureOfficePhone(e.target.value)} placeholder="(415) 991-2800 X102" />
+                  <Input className="mt-2 h-12 rounded-none bg-white" value={signatureOfficePhone} onChange={(e) => setSignatureOfficePhone(e.target.value)} placeholder="(415) 991-2800 X102" />
                 </div>
 
                 <div>
                   <label className="text-sm font-semibold text-slate-700">Cell phone</label>
-                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureCellPhone} onChange={(e) => setSignatureCellPhone(e.target.value)} placeholder="(925) 413-8100" />
+                  <Input className="mt-2 h-12 rounded-none bg-white" value={signatureCellPhone} onChange={(e) => setSignatureCellPhone(e.target.value)} placeholder="(925) 413-8100" />
                 </div>
 
                 <div className="md:col-span-2">
                   <label className="text-sm font-semibold text-slate-700">Website</label>
-                  <Input className="mt-2 h-12 rounded-2xl bg-white" value={signatureWebsite} onChange={(e) => setSignatureWebsite(e.target.value)} placeholder="www.AssuredWealthAdvisors.com" />
+                  <Input className="mt-2 h-12 rounded-none bg-white" value={signatureWebsite} onChange={(e) => setSignatureWebsite(e.target.value)} placeholder="www.AssuredWealthAdvisors.com" />
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+              <div className="rounded-none border border-slate-200 bg-slate-50 p-5">
                 <p className="text-sm font-semibold text-slate-700">Signature preview</p>
-                <pre className="mt-3 whitespace-pre-wrap rounded-2xl bg-white p-4 text-sm leading-6 text-slate-700">{composeEmailSignature() || "Your signature preview will appear here."}</pre>
+                <pre className="mt-3 whitespace-pre-wrap rounded-none bg-white p-4 text-sm leading-6 text-slate-700">{composeEmailSignature() || "Your signature preview will appear here."}</pre>
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <Button className="rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400" onClick={saveAdvisorProfile}>
+                <Button className="rounded-none ap-cta-solid" onClick={saveAdvisorProfile}>
                   Save Signature
                 </Button>
 
-                <Button variant="outline" className="rounded-2xl" onClick={() => setShowSignatureSetup(false)}>
+                <Button variant="outline" className="rounded-none" onClick={() => setShowSignatureSetup(false)}>
                   Skip for now
                 </Button>
               </div>
@@ -2784,22 +3049,22 @@ async function downloadPDFReport(mode: "client" | "advisor") {
           />
         )}
         <div key={`${step}-${step === "intake" ? intakeStep : "main"}`} className="ap-step-enter">
-        {step === "intake" && intakeStep === 0 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[0].eyebrow} title={INTAKE_STEPS[0].title} helper={INTAKE_STEPS[0].helper} onBack={backIntake} backDisabled onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4">
+        {step === "intake" && intakeStep === 0 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[0].eyebrow} title={INTAKE_STEPS[0].title} helper={INTAKE_STEPS[0].helper} onBack={backIntake} backDisabled onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4">
   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
     <div>
       <label className="text-sm font-semibold text-slate-700">First name</label>
-      <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.firstName} onChange={(e) => setClient({ ...client, firstName: e.target.value })} placeholder="Jane" autoFocus />
+      <Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.firstName} onChange={(e) => setClient({ ...client, firstName: e.target.value })} placeholder="Jane" autoFocus />
     </div>
     <div>
       <label className="text-sm font-semibold text-slate-700">Last name</label>
-      <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.lastName} onChange={(e) => setClient({ ...client, lastName: e.target.value })} placeholder="Smith" />
+      <Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.lastName} onChange={(e) => setClient({ ...client, lastName: e.target.value })} placeholder="Smith" />
     </div>
   </div>
   <div>
     <label className="text-sm font-semibold text-slate-700">Client email</label>
-    <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="email" value={client.advisorEmail} onChange={(e) => setClient({ ...client, advisorEmail: e.target.value })} placeholder="client@email.com" />
+    <Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="email" value={client.advisorEmail} onChange={(e) => setClient({ ...client, advisorEmail: e.target.value })} placeholder="client@email.com" />
   </div>
-  <div className="flex items-center justify-between gap-4 rounded-2xl border border-blue-100 bg-white px-4 py-3">
+  <div className="flex items-center justify-between gap-4 rounded-none border border-blue-100 bg-white px-4 py-3">
     <span className="text-sm font-semibold text-slate-700">Married?</span>
     <button
       type="button"
@@ -2821,25 +3086,25 @@ async function downloadPDFReport(mode: "client" | "advisor") {
             : { ...c, married: true }
         )
       }
-      className={`relative h-8 w-14 shrink-0 rounded-full transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${client.married ? "bg-sky-500" : "bg-slate-200"}`}
+      className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${client.married ? "bg-sky-500" : "bg-slate-200"}`}
     >
-      <span className={`absolute top-1 left-1 block h-6 w-6 rounded-full bg-white shadow transition-transform ${client.married ? "translate-x-6" : "translate-x-0"}`} />
+      <span className={`absolute top-1 left-1 block h-6 w-6 rounded-none bg-white shadow transition-transform ${client.married ? "translate-x-6" : "translate-x-0"}`} />
     </button>
   </div>
   {client.married ? (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       <div>
         <label className="text-sm font-semibold text-slate-700">Spouse first name</label>
-        <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.spouseFirstName} onChange={(e) => setClient({ ...client, spouseFirstName: e.target.value })} placeholder="Alex" />
+        <Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.spouseFirstName} onChange={(e) => setClient({ ...client, spouseFirstName: e.target.value })} placeholder="Alex" />
       </div>
       <div>
         <label className="text-sm font-semibold text-slate-700">Spouse last name</label>
-        <Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.spouseLastName} onChange={(e) => setClient({ ...client, spouseLastName: e.target.value })} placeholder="Smith" />
+        <Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.spouseLastName} onChange={(e) => setClient({ ...client, spouseLastName: e.target.value })} placeholder="Smith" />
       </div>
     </div>
   ) : null}
 </div></IntakeShell>}
-        {step === "intake" && intakeStep === 1 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[1].eyebrow} title={INTAKE_STEPS[1].title} helper={INTAKE_STEPS[1].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-6"><div><p className="text-sm font-semibold text-slate-800">Client</p><div className="mt-2 grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Date of birth</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="date" value={client.dob} onChange={(e) => {
+        {step === "intake" && intakeStep === 1 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[1].eyebrow} title={INTAKE_STEPS[1].title} helper={INTAKE_STEPS[1].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-6"><div><p className="text-sm font-semibold text-slate-800">Client</p><div className="mt-2 grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Date of birth</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="date" value={client.dob} onChange={(e) => {
   const dob = e.target.value;
   const calculatedAge = getAgeFromDob(dob);
   setClient({
@@ -2847,7 +3112,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
     dob,
     age: calculatedAge !== null ? String(calculatedAge) : client.age,
   });
-}} /></div><div><label className="text-sm font-semibold text-slate-700">Or age</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.age} onChange={(e) => setClient({ ...client, age: e.target.value })} placeholder="62" /></div></div></div>{client.married ? (<div><p className="text-sm font-semibold text-slate-800">Spouse</p><div className="mt-2 grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Date of birth</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="date" value={client.spouseDob} onChange={(e) => {
+}} /></div><div><label className="text-sm font-semibold text-slate-700">Or age</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.age} onChange={(e) => setClient({ ...client, age: e.target.value })} placeholder="62" /></div></div></div>{client.married ? (<div><p className="text-sm font-semibold text-slate-800">Spouse</p><div className="mt-2 grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Date of birth</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="date" value={client.spouseDob} onChange={(e) => {
   const spouseDob = e.target.value;
   const calculatedAge = getAgeFromDob(spouseDob);
   setClient({
@@ -2855,14 +3120,16 @@ async function downloadPDFReport(mode: "client" | "advisor") {
     spouseDob,
     spouseAge: calculatedAge !== null ? String(calculatedAge) : client.spouseAge,
   });
-}} /></div><div><label className="text-sm font-semibold text-slate-700">Or age</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.spouseAge} onChange={(e) => setClient({ ...client, spouseAge: e.target.value })} placeholder="60" /></div></div></div>) : null}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 2 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[2].eyebrow} title={INTAKE_STEPS[2].title} helper={INTAKE_STEPS[2].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Adjusted Gross Income (AGI), most recent federal return</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.adjustedGrossIncomeAnnual} onChange={(e) => setClient({ ...client, adjustedGrossIncomeAnnual: e.target.value })} placeholder="165432" /></div><p className="mt-2 text-sm text-slate-500">Use Form 1040 AGI for the latest filed year—for illustration only, not a tax determination.</p></div></IntakeShell>}
-        {step === "intake" && intakeStep === 3 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[3].eyebrow} title={INTAKE_STEPS[3].title} helper={INTAKE_STEPS[3].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Marginal federal tax bracket</label><Select value={FEDERAL_TAX_BRACKET_IDS.includes(client.federalTaxBracket as (typeof FEDERAL_TAX_BRACKET_IDS)[number]) ? client.federalTaxBracket : "22"} onValueChange={(value) => setClient({ ...client, federalTaxBracket: value })}><SelectTrigger className="mt-2 h-14 rounded-2xl"><SelectValue /></SelectTrigger><SelectContent>{FEDERAL_TAX_BRACKET_IDS.map((id) => <SelectItem key={id} value={id}>{id}% bracket</SelectItem>)}</SelectContent></Select><p className="mt-2 text-sm text-slate-500">Used for illustrative tax math in reports (not a tax determination).</p></div></IntakeShell>}
-        {step === "intake" && intakeStep === 4 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[4].eyebrow} title={INTAKE_STEPS[4].title} helper={INTAKE_STEPS[4].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4"><div><label className="text-sm font-semibold text-slate-700">Expected retirement age (client)</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.retirementAge} onChange={(e) => setClient({ ...client, retirementAge: e.target.value })} placeholder="67" /></div>{client.married ? (<div><label className="text-sm font-semibold text-slate-700">Expected retirement age (spouse)</label><Input className="mt-2 h-14 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.spouseRetirementAge} onChange={(e) => setClient({ ...client, spouseRetirementAge: e.target.value })} placeholder="67" /></div>) : null}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 5 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[5].eyebrow} title={INTAKE_STEPS[5].title} helper={INTAKE_STEPS[5].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Annual spendable income in retirement</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.retirementSpendableIncomeAnnual} onChange={(e) => setClient({ ...client, retirementSpendableIncomeAnnual: e.target.value })} placeholder="85000" /></div></div></IntakeShell>}
-        {step === "intake" && intakeStep === 6 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[6].eyebrow} title={INTAKE_STEPS[6].title} helper={INTAKE_STEPS[6].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4"><div className="flex items-center justify-between gap-4 rounded-2xl border border-blue-100 bg-white px-4 py-3"><span className="text-sm font-semibold text-slate-700">Taking Social Security?</span><button type="button" role="switch" aria-checked={client.takingSocialSecurity} onClick={() => setClient((c) => (c.takingSocialSecurity ? { ...c, takingSocialSecurity: false, socialSecurityMonthlyClient: "", socialSecurityMonthlySpouse: "" } : { ...c, takingSocialSecurity: true }))} className={`relative h-8 w-14 shrink-0 rounded-full transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${client.takingSocialSecurity ? "bg-sky-500" : "bg-slate-200"}`}><span className={`absolute top-1 left-1 block h-6 w-6 rounded-full bg-white shadow transition-transform ${client.takingSocialSecurity ? "translate-x-6" : "translate-x-0"}`} /></button></div>{client.takingSocialSecurity ? (<div className="space-y-4">{client.married ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Client monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div><div><label className="text-sm font-semibold text-slate-700">Spouse monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlySpouse} onChange={(e) => setClient({ ...client, socialSecurityMonthlySpouse: e.target.value })} placeholder="1800" /></div></div></div> : <div><label className="text-sm font-semibold text-slate-700">Monthly Social Security amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div>}</div>) : <p className="text-sm text-slate-500">Leave this off if the household is not receiving benefits yet. You can continue without entering amounts.</p>}</div></IntakeShell>}
+}} /></div><div><label className="text-sm font-semibold text-slate-700">Or age</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.spouseAge} onChange={(e) => setClient({ ...client, spouseAge: e.target.value })} placeholder="60" /></div></div></div>) : null}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 2 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[2].eyebrow} title={INTAKE_STEPS[2].title} helper={INTAKE_STEPS[2].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Adjusted Gross Income (AGI), most recent federal return</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.adjustedGrossIncomeAnnual} onChange={(e) => setClient({ ...client, adjustedGrossIncomeAnnual: e.target.value })} placeholder="165432" /></div><p className="mt-2 text-sm text-slate-500">Use Form 1040 AGI for the latest filed year—for illustration only, not a tax determination.</p></div></IntakeShell>}
+        {step === "intake" && intakeStep === 3 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[3].eyebrow} title={INTAKE_STEPS[3].title} helper={INTAKE_STEPS[3].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Marginal federal tax bracket</label><Select value={FEDERAL_TAX_BRACKET_IDS.includes(client.federalTaxBracket as (typeof FEDERAL_TAX_BRACKET_IDS)[number]) ? client.federalTaxBracket : "22"} onValueChange={(value) => setClient({ ...client, federalTaxBracket: value })}><SelectTrigger className="mt-2 h-14 rounded-none"><SelectValue /></SelectTrigger><SelectContent>{FEDERAL_TAX_BRACKET_IDS.map((id) => <SelectItem key={id} value={id}>{id}% bracket</SelectItem>)}</SelectContent></Select><p className="mt-2 text-sm text-slate-500">Used for illustrative tax math in reports (not a tax determination).</p></div></IntakeShell>}
+        {step === "intake" && intakeStep === 4 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[4].eyebrow} title={INTAKE_STEPS[4].title} helper={INTAKE_STEPS[4].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4"><div><label className="text-sm font-semibold text-slate-700">Expected retirement age (client)</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.retirementAge} onChange={(e) => setClient({ ...client, retirementAge: e.target.value })} placeholder="67" /></div>{client.married ? (<div><label className="text-sm font-semibold text-slate-700">Expected retirement age (spouse)</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.spouseRetirementAge} onChange={(e) => setClient({ ...client, spouseRetirementAge: e.target.value })} placeholder="67" /></div>) : null}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 5 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[5].eyebrow} title={INTAKE_STEPS[5].title} helper={INTAKE_STEPS[5].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Annual spendable income in retirement</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.retirementSpendableIncomeAnnual} onChange={(e) => setClient({ ...client, retirementSpendableIncomeAnnual: e.target.value })} placeholder="85000" /></div></div></IntakeShell>}
+        {step === "intake" && intakeStep === 6 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[6].eyebrow} title={INTAKE_STEPS[6].title} helper={INTAKE_STEPS[6].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4"><div className="flex items-center justify-between gap-4 rounded-none border border-blue-100 bg-white px-4 py-3"><span className="text-sm font-semibold text-slate-700">Taking Social Security?</span><button type="button" role="switch" aria-checked={client.takingSocialSecurity} onClick={() => setClient((c) => (c.takingSocialSecurity ? { ...c, takingSocialSecurity: false, socialSecurityMonthlyClient: "", socialSecurityMonthlySpouse: "" } : { ...c, takingSocialSecurity: true }))} className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${client.takingSocialSecurity ? "bg-sky-500" : "bg-slate-200"}`}><span className={`absolute top-1 left-1 block h-6 w-6 rounded-none bg-white shadow transition-transform ${client.takingSocialSecurity ? "translate-x-6" : "translate-x-0"}`} /></button></div>{client.takingSocialSecurity ? (<div className="space-y-4">{client.married ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Client monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div><div><label className="text-sm font-semibold text-slate-700">Spouse monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlySpouse} onChange={(e) => setClient({ ...client, socialSecurityMonthlySpouse: e.target.value })} placeholder="1800" /></div></div></div> : <div><label className="text-sm font-semibold text-slate-700">Monthly Social Security amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div>}</div>) : <p className="text-sm text-slate-500">Leave this off if the household is not receiving benefits yet. You can continue without entering amounts.</p>}</div></IntakeShell>}
         {step === "intake" && intakeStep === 7 && (
           <IntakeShell
+            portfolioStepCurrent={intakeStep + 1}
+            portfolioStepTotal={INTAKE_STEP_COUNT}
             progress={progress}
             eyebrow={INTAKE_STEPS[7].eyebrow}
             title={INTAKE_STEPS[7].title}
@@ -2890,7 +3157,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         riskProfileSuggested: "",
                       }))
                     }
-                    className="rounded-2xl border border-slate-200 bg-white p-4 text-left font-semibold transition hover:bg-sky-50"
+                    className="rounded-none border border-slate-200 bg-white p-4 text-left font-semibold transition hover:bg-sky-50"
                   >
                     Yes — we know their profile
                   </button>
@@ -2906,7 +3173,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         riskProfileSuggested: "",
                       }))
                     }
-                    className="rounded-2xl border border-slate-200 bg-white p-4 text-left font-semibold transition hover:bg-sky-50"
+                    className="rounded-none border border-slate-200 bg-white p-4 text-left font-semibold transition hover:bg-sky-50"
                   >
                     No — use the short assessment
                   </button>
@@ -2925,9 +3192,9 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       key={tier.id}
                       type="button"
                       onClick={() => setClient((c) => ({ ...c, riskProfile: tier.id }))}
-                      className={`rounded-2xl border p-4 text-left transition ${
+                      className={`rounded-none border p-4 text-left transition ${
                         sel
-                          ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 text-white shadow-lg hover:from-blue-950 hover:via-blue-800 hover:to-sky-400"
+                          ? "ap-choice-selected shadow-lg"
                           : "border-slate-200 bg-white hover:bg-sky-50"
                       }`}
                     >
@@ -2971,7 +3238,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                                 return { ...c, riskQuizAnswers: answers, riskQuizStepIndex: i + 1 };
                               })
                             }
-                            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm transition hover:border-sky-300 hover:bg-sky-50"
+                            className="rounded-none border border-slate-200 bg-white px-4 py-3 text-left text-sm transition hover:border-sky-300 hover:bg-sky-50"
                           >
                             {opt.label}
                           </button>
@@ -2987,7 +3254,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   const sugLabel = RISK_PROFILE_DESCRIPTORS.find((t) => t.id === suggested)?.label ?? suggested;
                   return (
                     <div className="space-y-4">
-                      <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-4">
+                      <div className="rounded-none border border-blue-100 bg-blue-50/50 p-4">
                         <p className="text-sm font-semibold text-slate-800">Suggested profile</p>
                         <p className="mt-1 text-lg font-semibold text-slate-900">{sugLabel}</p>
                         {capNotes.length > 0 ? (
@@ -3011,9 +3278,9 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                               key={id}
                               type="button"
                               onClick={() => setClient((c) => ({ ...c, riskProfile: id }))}
-                              className={`rounded-2xl border p-4 text-left transition ${
+                              className={`rounded-none border p-4 text-left transition ${
                                 sel
-                                  ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 text-white shadow-lg"
+                                  ? "ap-choice-selected shadow-lg"
                                   : "border-slate-200 bg-white hover:bg-sky-50"
                               }`}
                             >
@@ -3036,17 +3303,17 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               : null}
           </IntakeShell>
         )}
-        {step === "intake" && intakeStep === 8 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[8].eyebrow} title={INTAKE_STEPS[8].title} helper={INTAKE_STEPS[8].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3">{[["risk-profile", "Use stated risk profile", "Best default for advisor-reviewed recommendations."], ["age-default", "Run default based on age", "Uses age only—ignores the tier from Question 8. Consider if you want a pure age glidepath."], ["income-goal", "Retirement income goal", "Best for near-retirees who need income and lower volatility."], ["custom", "Custom advisor model", "Use your own allocation model later."]].map(([value, title, desc]) => <button key={value} onClick={() => setClient({ ...client, calibration: value })} className={`rounded-2xl border p-4 text-left transition ${client.calibration === value ? "border-sky-500 bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 text-white shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}><div className="font-semibold">{title}</div><div className={`mt-1 text-sm ${client.calibration === value ? "text-blue-100" : "text-slate-500"}`}>{desc}</div></button>)}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 9 && <IntakeShell progress={progress} eyebrow={INTAKE_STEPS[9].eyebrow} title={INTAKE_STEPS[9].title} helper={INTAKE_STEPS[9].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><Textarea className="min-h-40 rounded-2xl border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.goal} onChange={(e) => setClient({ ...client, goal: e.target.value })} placeholder="Example: Wants retirement income, less market risk, and tax-efficient withdrawals." /></IntakeShell>}
+        {step === "intake" && intakeStep === 8 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[8].eyebrow} title={INTAKE_STEPS[8].title} helper={INTAKE_STEPS[8].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3">{[["risk-profile", "Use stated risk profile", "Best default for advisor-reviewed recommendations."], ["age-default", "Run default based on age", "Uses age only—ignores the tier from Question 8. Consider if you want a pure age glidepath."], ["income-goal", "Retirement income goal", "Best for near-retirees who need income and lower volatility."], ["custom", "Custom advisor model", "Use your own allocation model later."]].map(([value, title, desc]) => <button key={value} onClick={() => setClient({ ...client, calibration: value })} className={`rounded-none border p-4 text-left transition ${client.calibration === value ? "ap-choice-selected shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}><div className="font-semibold">{title}</div><div className={`mt-1 text-sm ${client.calibration === value ? "text-blue-100" : "text-slate-500"}`}>{desc}</div></button>)}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 9 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[9].eyebrow} title={INTAKE_STEPS[9].title} helper={INTAKE_STEPS[9].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><Textarea className="min-h-40 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.goal} onChange={(e) => setClient({ ...client, goal: e.target.value })} placeholder="Example: Wants retirement income, less market risk, and tax-efficient withdrawals." /></IntakeShell>}
 
         {step === "upload" && (
-          <Card className="rounded-[2rem] ap-glass border-0">
+          <Card className="rounded-none ap-glass border-0">
             <CardContent className="space-y-6 p-6 pb-28 md:p-8 md:pb-8">
-              <div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><Upload className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Statement Capture</h2><p className="text-sm text-slate-500">Upload a statement or take a picture from your phone.</p></div></div>
+              <div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none"><Upload className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Statement Capture</h2><p className="text-sm text-slate-500">Upload a statement or take a picture from your phone.</p></div></div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-3"><MetricCard icon={<User className="h-5 w-5" />} label="Client" value={clientDisplayName(client) || "Unnamed"} helper={derivedAge ? `Age ${derivedAge}` : "Age not set"} /><MetricCard icon={<Target className="h-5 w-5" />} label="Risk profile" value={client.riskProfile.replace("-", " ")} helper="Used for calibration" /><MetricCard icon={<BriefcaseBusiness className="h-5 w-5" />} label="Retirement age" value={client.retirementAge || "N/A"} helper="Timeline input" /></div>
               <div
                 id="upload-section-client-link"
-                className="ap-callout rounded-3xl p-5 md:p-6 scroll-mt-24"
+                className="ap-callout rounded-none p-5 md:p-6 scroll-mt-24"
               >
                 <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                   <div className="space-y-2">
@@ -3062,29 +3329,29 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     ) : null}
                     {magicLinkErr ? <p className="text-sm text-red-700">{magicLinkErr}</p> : null}
                     <div className="flex flex-wrap gap-2">
-                      <Button type="button" variant="outline" className="h-11 rounded-2xl touch-manipulation" onClick={createClientUploadLink} disabled={magicLinkBusy}>
+                      <Button type="button" variant="outline" className="h-11 rounded-none touch-manipulation" onClick={createClientUploadLink} disabled={magicLinkBusy}>
                         <Link2 className="mr-2 h-4 w-4" />
                         {magicLinkBusy ? "Creating…" : magicLinkUrl ? "New link" : "Create link"}
                       </Button>
                       {magicLinkUrl ? (
-                        <Button type="button" className="h-11 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 touch-manipulation hover:from-blue-950 hover:via-blue-800 hover:to-sky-400" onClick={copyMagicLink}>
+                        <Button type="button" className="h-11 rounded-none ap-cta-solid touch-manipulation" onClick={copyMagicLink}>
                           {magicLinkCopied ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
                           {magicLinkCopied ? "Copied" : "Copy link"}
                         </Button>
                       ) : null}
                     </div>
                     {magicLinkUrl ? (
-                      <Input readOnly className="mt-2 h-11 rounded-2xl bg-white font-mono text-xs" value={magicLinkUrl} onFocus={(e) => e.target.select()} />
+                      <Input readOnly className="mt-2 h-11 rounded-none bg-white font-mono text-xs" value={magicLinkUrl} onFocus={(e) => e.target.select()} />
                     ) : null}
                   </div>
                   {magicLinkUrl ? (
-                    <div className="flex shrink-0 flex-col items-center gap-2 rounded-2xl border border-slate-200 bg-white p-3">
+                    <div className="flex shrink-0 flex-col items-center gap-2 rounded-none border border-slate-200 bg-white p-3">
                       <p className="text-xs font-medium text-slate-600">Optional QR (same link)</p>
                       <Image
                         alt=""
                         width={200}
                         height={200}
-                        className="rounded-lg"
+                        className="rounded-none"
                         src={`/api/qr?text=${encodeURIComponent(magicLinkUrl)}`}
                         unoptimized
                       />
@@ -3099,32 +3366,32 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               >
                 <p className="ap-eyebrow">Option B — Upload directly</p>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <label className="cursor-pointer rounded-3xl border border-sky-200/60 bg-white/80 p-6 transition hover:-translate-y-1 hover:border-sky-400 hover:shadow-[0_18px_40px_-22px_rgba(14,165,233,0.45)] md:p-7"><div className="ap-icon-tile mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl"><FileText className="h-6 w-6" /></div><h3 className="text-lg font-semibold">Upload emailed or texted statement</h3><p className="mb-4 text-sm text-slate-500">PDF, JPG, PNG, screenshot, or multiple statement pages.</p><Input className="min-h-11" type="file" accept=".pdf,image/*" multiple onChange={(e) => setUploadedFiles(Array.from(e.target.files || []))} /></label>
-                  <label className="cursor-pointer rounded-3xl border border-sky-200/60 bg-white/80 p-6 transition hover:-translate-y-1 hover:border-sky-400 hover:shadow-[0_18px_40px_-22px_rgba(14,165,233,0.45)] md:p-7"><div className="ap-icon-tile mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl"><Camera className="h-6 w-6" /></div><h3 className="text-lg font-semibold">Take a picture on phone</h3><p className="mb-4 text-sm text-slate-500">Uses your mobile camera when opened from a phone. Add more pages if your browser supports multi-select.</p><Input className="min-h-11" type="file" accept="image/*" capture="environment" multiple onChange={(e) => setUploadedFiles(Array.from(e.target.files || []))} /></label>
+                  <label className="cursor-pointer rounded-none border border-sky-200/60 bg-white/80 p-6 transition hover:-translate-y-1 hover:border-sky-400 hover:shadow-[0_18px_40px_-22px_rgba(14,165,233,0.45)] md:p-7"><div className="ap-icon-tile mb-4 inline-flex h-12 w-12 items-center justify-center rounded-none"><FileText className="h-6 w-6" /></div><h3 className="text-lg font-semibold">Upload emailed or texted statement</h3><p className="mb-4 text-sm text-slate-500">PDF, JPG, PNG, screenshot, or multiple statement pages.</p><Input className="min-h-11" type="file" accept=".pdf,image/*" multiple onChange={(e) => setUploadedFiles(Array.from(e.target.files || []))} /></label>
+                  <label className="cursor-pointer rounded-none border border-sky-200/60 bg-white/80 p-6 transition hover:-translate-y-1 hover:border-sky-400 hover:shadow-[0_18px_40px_-22px_rgba(14,165,233,0.45)] md:p-7"><div className="ap-icon-tile mb-4 inline-flex h-12 w-12 items-center justify-center rounded-none"><Camera className="h-6 w-6" /></div><h3 className="text-lg font-semibold">Take a picture on phone</h3><p className="mb-4 text-sm text-slate-500">Uses your mobile camera when opened from a phone. Add more pages if your browser supports multi-select.</p><Input className="min-h-11" type="file" accept="image/*" capture="environment" multiple onChange={(e) => setUploadedFiles(Array.from(e.target.files || []))} /></label>
                 </div>
               </div>
               {uploadedFiles.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-sky-200 bg-sky-50/70 px-4 py-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2 rounded-none border border-sky-200 bg-sky-50/70 px-4 py-3 text-sm">
                   <CheckCircle className="h-4 w-4 text-sky-600" />
                   <span className="font-medium text-blue-950">Selected files:</span>
                   <span className="truncate text-slate-700">{uploadedFiles.map((file) => file.name).join(", ")}</span>
                 </div>
               )}
-              <div className="rounded-3xl border border-blue-100 bg-blue-50/80 p-5 text-sm text-blue-950"><Wand2 className="mb-2 h-5 w-5" />Extraction sends your file to AI and builds a holdings table for you to confirm. Expect roughly <strong>20–60 seconds</strong> on a typical connection; large PDFs or slow Wi‑Fi can take longer.</div>
-              {extractError && <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">{extractError}</div>}
+              <div className="rounded-none border border-blue-100 bg-blue-50/80 p-5 text-sm text-blue-950"><Wand2 className="mb-2 h-5 w-5" />Extraction sends your file to AI and builds a holdings table for you to confirm. Expect roughly <strong>20–60 seconds</strong> on a typical connection; large PDFs or slow Wi‑Fi can take longer.</div>
+              {extractError && <div className="rounded-none border border-red-200 bg-red-50 p-5 text-sm text-red-800">{extractError}</div>}
               {isExtracting && (
                 <p className="text-sm font-medium text-slate-700" aria-live="polite">
                   {EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length]}
                 </p>
               )}
               <div className="hidden items-center gap-3 border-t border-sky-100/60 pt-5 md:flex">
-                <Button variant="outline" className="h-12 rounded-2xl px-5" onClick={() => setStep("intake")}><ArrowLeft className="mr-2 h-4 w-4" />Back</Button>
-                <Button className="ml-auto h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-6" onClick={handleExtractHoldings} disabled={isExtracting}>{isExtracting ? EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length] : "Extract holdings"}<ArrowRight className="ml-2 h-4 w-4" /></Button>
+                <Button variant="outline" className="h-12 rounded-none px-5" onClick={() => setStep("intake")}><ArrowLeft className="mr-2 h-4 w-4" />Back</Button>
+                <Button className="ml-auto h-12 rounded-none ap-cta-solid px-6" onClick={handleExtractHoldings} disabled={isExtracting}>{isExtracting ? EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length] : "Extract holdings"}<ArrowRight className="ml-2 h-4 w-4" /></Button>
               </div>
               <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-sky-200/50 bg-white/85 p-4 shadow-[0_-8px_32px_rgba(15,58,122,0.12)] backdrop-blur-xl md:hidden">
                 <div className="mx-auto flex max-w-3xl gap-3">
-                  <Button variant="outline" className="h-14 flex-1 rounded-2xl touch-manipulation" onClick={() => setStep("intake")}>Back</Button>
-                  <Button className="h-14 flex-[2] rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 touch-manipulation" onClick={handleExtractHoldings} disabled={isExtracting}>{isExtracting ? EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length] : "Extract holdings"}</Button>
+                  <Button variant="outline" className="h-14 flex-1 rounded-none touch-manipulation" onClick={() => setStep("intake")}>Back</Button>
+                  <Button className="h-14 flex-[2] rounded-none ap-cta-solid touch-manipulation" onClick={handleExtractHoldings} disabled={isExtracting}>{isExtracting ? EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length] : "Extract holdings"}</Button>
                 </div>
               </div>
             </CardContent>
@@ -3132,11 +3399,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         )}
 
         {step === "confirm" && (
-          <Card className="rounded-[2rem] ap-glass border-0">
+          <Card className="rounded-none ap-glass border-0">
             <CardContent className="space-y-6 p-6 pb-28 md:p-8 md:pb-8">
-              <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><ShieldCheck className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Confirm Holdings</h2><p className="text-sm text-slate-500">Review matches, choose alternate matches, enter manual tickers, and select asset classes.</p><p className="mt-1 max-w-2xl text-xs text-slate-500">Broker cash and sweep lines without a visible ticker are labeled <code className="rounded bg-slate-100 px-1 font-mono text-[0.85rem]">{SYNTHETIC_CASH_TICKER}</code> (placeholder, not listed). Allocation uses the cash sleeve; scenario models use a Treasury-bill–style proxy for cash returns.</p></div></div><Badge className={`rounded-full ${reviewCount ? "bg-red-600" : "bg-emerald-600"}`}>{reviewCount} need review</Badge></div>
+              <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none"><ShieldCheck className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Confirm Holdings</h2><p className="text-sm text-slate-500">Review matches, choose alternate matches, enter manual tickers, and select asset classes.</p><p className="mt-1 max-w-2xl text-xs text-slate-500">Broker cash and sweep lines without a visible ticker are labeled <code className="rounded bg-slate-100 px-1 font-mono text-[0.85rem]">{SYNTHETIC_CASH_TICKER}</code> (placeholder, not listed). Allocation uses the cash sleeve; scenario models use a Treasury-bill–style proxy for cash returns.</p></div></div><Badge className={`rounded-none ${reviewCount ? "bg-red-600" : "bg-emerald-600"}`}>{reviewCount} need review</Badge></div>
               {!demoMode && !String(session?.user?.email || emailAuthUser?.email || "").trim() && (
-                <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">Sign in to auto-save this confirmation as a <strong>Draft</strong> in your Client Database (helps if the tab closes mid-meeting).</p>
+                <p className="rounded-none border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">Sign in to auto-save this confirmation as a <strong>Draft</strong> in your Client Database (helps if the tab closes mid-meeting).</p>
               )}
               {!demoMode && String(session?.user?.email || emailAuthUser?.email || "").trim() && draftAutosaveStatus !== "idle" && (
                 <p className="text-xs text-slate-500" aria-live="polite">
@@ -3146,12 +3413,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </p>
               )}
               {!canRunDeepAnalysis && !demoMode && (
-                <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+                <div className="rounded-none border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
                   Clear every row that still needs review before running the deep analysis ({reviewCount} remaining). This keeps AI output aligned with what you&apos;ve verified in the room.
                 </div>
               )}
               {duplicateCount > 0 && (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 space-y-2">
+                <div className="rounded-none border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 space-y-2">
                   <p>
                     Advisor check: {duplicateCount} possible duplicate holding{duplicateCount === 1 ? "" : "s"} appeared across uploaded files/pages. Confirm whether these are repeated pages or separate accounts before relying on totals.
                   </p>
@@ -3170,7 +3437,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 (isEnriching ||
                   eligibleAiVerificationIndices.length > 0 ||
                   Boolean(enrichError)) && (
-                  <div className="rounded-2xl border border-sky-200 bg-sky-50/80 px-4 py-3 text-sm text-blue-950 space-y-3">
+                  <div className="rounded-none border border-sky-200 bg-sky-50/80 px-4 py-3 text-sm text-blue-950 space-y-3">
                     {isEnriching ? (
                       <p className="font-semibold">
                         Verifying {eligibleAiVerificationIndices.length} uncertain position
@@ -3185,7 +3452,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         <Button
                           type="button"
                           variant="outline"
-                          className="h-11 rounded-2xl border-blue-300 bg-white/90 text-blue-950 hover:bg-white"
+                          className="h-11 rounded-none border-blue-300 bg-white/90 text-blue-950 hover:bg-white"
                           onClick={() => void runHoldingsVerificationForIndices(eligibleAiVerificationIndices)}
                         >
                           Verify uncertain holdings (AI){" "}
@@ -3197,7 +3464,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   </div>
                 )}
               {!demoMode && reviewCount > 0 && !enrichmentSatisfied && !isEnriching && (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                <div className="rounded-none border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
                   Rows still marked for advisor review keep the Qualified / Roth / Taxable tint and gain a{" "}
                   <strong className="font-semibold">red outline</strong> until fixed. Resolve each flagged line manually
                   {eligibleAiVerificationIndices.length > 0 ? (
@@ -3209,25 +3476,25 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   )}
                 </div>
               )}
-              <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-5">
+              <div className="rounded-none border border-slate-200 bg-slate-50/90 p-5">
                 <p className="text-sm font-semibold text-slate-900">Accounts & tax registration</p>
                 <p className="mt-1 text-xs text-slate-600">
                   AI tags qualified (tax-deferred), Roth IRA, or taxable wrappers from statement headers. Tune each holding — Roth worksheets only sweep qualified balances ({currency(registrationTotals.traditionalQualifiedValue)} detected so far).
                 </p>
                 <dl className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 px-3 py-2">
+                  <div className="rounded-none border border-emerald-200 bg-emerald-50/40 px-3 py-2">
                     <dt className="text-xs text-emerald-900/80">Qualified</dt>
                     <dd className="text-lg font-semibold tabular-nums text-emerald-950">{currency(registrationTotals.traditionalQualifiedValue)}</dd>
                   </div>
-                  <div className="rounded-xl border border-blue-200 bg-blue-50/40 px-3 py-2">
+                  <div className="rounded-none border border-blue-200 bg-blue-50/40 px-3 py-2">
                     <dt className="text-xs text-blue-900/80">Non-qualified taxable</dt>
                     <dd className="text-lg font-semibold tabular-nums text-blue-950">{currency(registrationTotals.nonQualifiedValue)}</dd>
                   </div>
-                  <div className="rounded-xl border border-purple-200 bg-purple-50/40 px-3 py-2">
+                  <div className="rounded-none border border-purple-200 bg-purple-50/40 px-3 py-2">
                     <dt className="text-xs text-purple-900/80">Roth IRA</dt>
                     <dd className="text-lg font-semibold tabular-nums text-purple-950">{currency(registrationTotals.rothValue)}</dd>
                   </div>
-                  <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+                  <div className="rounded-none border border-slate-200 bg-white px-3 py-2">
                     <dt className="text-xs text-slate-500">Unknown wrapper</dt>
                     <dd className="text-lg font-semibold tabular-nums text-slate-900">{currency(registrationTotals.unknownValue)}</dd>
                   </div>
@@ -3265,7 +3532,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                                     applyRegistrationForAccountKey(row.key, normalizeRegistrationType(value))
                                   }
                                 >
-                                  <SelectTrigger className="w-full max-w-xs rounded-2xl">
+                                  <SelectTrigger className="w-full max-w-xs rounded-none">
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
@@ -3287,8 +3554,8 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               </div>
               <div className="space-y-4">
                 {holdings.map((h, index) => {
-                  const opts = normalizeOptions(h);
                   const needsAdvisorReview = holdingAdvisorReviewBlocking(h);
+                  const opts = normalizeOptions(h, needsAdvisorReview);
                   return (
                     <div
                       key={`${h.rawName}-${index}`}
@@ -3311,7 +3578,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                               })
                             }
                           >
-                            <SelectTrigger className="rounded-2xl">
+                            <SelectTrigger className="rounded-none">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -3323,7 +3590,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                             </SelectContent>
                           </Select>
                         </div>
-                        <div className="lg:col-span-3"><p className="mb-1 text-xs text-slate-500">Asset class</p><Select value={isCanonicalAssetClass(h.assetClass) ? h.assetClass : "Unknown"} onValueChange={(value) => updateHolding(index, { assetClass: value })}><SelectTrigger className="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent>{ASSET_CLASSES.map((asset) => <SelectItem key={asset} value={asset}>{asset}</SelectItem>)}</SelectContent></Select></div>
+                        <div className="lg:col-span-3"><p className="mb-1 text-xs text-slate-500">Asset class</p><Select value={isCanonicalAssetClass(h.assetClass) ? h.assetClass : "Unknown"} onValueChange={(value) => updateHolding(index, { assetClass: value })}><SelectTrigger className="rounded-none"><SelectValue /></SelectTrigger><SelectContent>{ASSET_CLASSES.map((asset) => <SelectItem key={asset} value={asset}>{asset}</SelectItem>)}</SelectContent></Select></div>
                         <div className="lg:col-span-2">
                           <p className="text-xs text-slate-500">Confidence</p>
                           <Progress value={h.confidence} className="my-2" />
@@ -3342,7 +3609,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                             <Button
                               type="button"
                               variant="outline"
-                              className="mt-3 h-10 w-full rounded-2xl border-emerald-300 bg-white/90 text-emerald-950 hover:bg-emerald-50 hover:text-emerald-950 lg:w-auto lg:min-w-[12rem]"
+                              className="mt-3 h-10 w-full rounded-none border-emerald-300 bg-white/90 text-emerald-950 hover:bg-emerald-50 hover:text-emerald-950 lg:w-auto lg:min-w-[12rem]"
                               onClick={() => updateHolding(index, { confirmedMatchOverridesReview: true })}
                             >
                               Confirm match as correct
@@ -3357,7 +3624,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                           <p className="mb-1 text-xs text-slate-500">Account # (custodian hint)</p>
                           <Input
                             key={`acct-${index}-${h.accountNumber ?? ""}`}
-                            className="rounded-2xl"
+                            className="rounded-none"
                             placeholder="Masked / last digits"
                             defaultValue={h.accountNumber ?? ""}
                             onBlur={(e) => updateHolding(index, { accountNumber: e.target.value.trim() || undefined })}
@@ -3371,7 +3638,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                               updateHolding(index, { registrationType: value as RegistrationBucket })
                             }
                           >
-                            <SelectTrigger className="rounded-2xl">
+                            <SelectTrigger className="rounded-none">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -3387,7 +3654,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                           <p className="mb-1 text-xs text-slate-500">Cost basis (taxable-only if shown)</p>
                           <Input
                             key={`basis-${index}-${h.costBasis ?? ""}`}
-                            className="rounded-2xl"
+                            className="rounded-none"
                             type="number"
                             defaultValue={h.costBasis != null ? String(h.costBasis) : ""}
                             onBlur={(e) => {
@@ -3407,7 +3674,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                           <div>
                             <p className="mb-1 text-xs text-slate-500">Manual ticker / CUSIP / corrected name</p>
                             <Input
-                              className="rounded-2xl"
+                              className="rounded-none"
                               placeholder="Example: PIMIX or 912828XXXXX"
                               onBlur={(e) => {
                                 if (e.target.value.trim())
@@ -3423,7 +3690,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                           <div>
                             <p className="mb-1 text-xs text-slate-500">Value override</p>
                             <Input
-                              className="rounded-2xl"
+                              className="rounded-none"
                               type="number"
                               placeholder={String(h.value || 0)}
                               onBlur={(e) => {
@@ -3439,12 +3706,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 })}
               </div>
               <div className="hidden items-center gap-3 border-t border-sky-100/60 pt-5 md:flex">
-                <Button variant="outline" className="h-12 rounded-2xl px-5" onClick={() => setStep("upload")}>
+                <Button variant="outline" className="h-12 rounded-none px-5" onClick={() => setStep("upload")}>
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back
                 </Button>
                 <Button
-                  className="ml-auto h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-6"
+                  className="ml-auto h-12 rounded-none ap-cta-solid px-6"
                   onClick={runAIAnalysis}
                   disabled={isAnalyzing || !canRunDeepAnalysis}
                 >
@@ -3465,9 +3732,9 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     </p>
                   )}
                   <div className="flex gap-3">
-                    <Button variant="outline" className="h-14 flex-1 rounded-2xl touch-manipulation" onClick={() => setStep("upload")} disabled={isAnalyzing}>Back</Button>
+                    <Button variant="outline" className="h-14 flex-1 rounded-none touch-manipulation" onClick={() => setStep("upload")} disabled={isAnalyzing}>Back</Button>
                     <Button
-                      className="h-14 flex-[2] rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 touch-manipulation"
+                      className="h-14 flex-[2] rounded-none ap-cta-solid touch-manipulation"
                       onClick={runAIAnalysis}
                       disabled={isAnalyzing || !canRunDeepAnalysis}
                     >
@@ -3483,14 +3750,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         {step === "analysis" && (
           <div className="space-y-4 pb-24 md:space-y-5 md:pb-5">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3"><MetricCard icon={<TrendingUp className="h-5 w-5" />} label="Total value" value={currency(totalValue)} /><MetricCard icon={<User className="h-5 w-5" />} label="Client age" value={derivedAge ? String(derivedAge) : "Not set"} /><MetricCard icon={<ShieldCheck className="h-5 w-5" />} label="Risk profile" value={client.riskProfile.replace("-", " ")} /></div>
-            <Card className="rounded-[2rem] ap-glass border-0"><CardContent className="space-y-6 p-6 pb-8 md:p-8"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><BarChart3 className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Portfolio Review</h2><p className="text-sm text-slate-500">Advisor-facing analysis based on confirmed holdings and selected calibration.</p></div></div>{analysisError && <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-800">{analysisError}</div>}<div className="ap-callout rounded-3xl p-5 md:flex md:items-center md:justify-between md:gap-4"><div><p className="ap-eyebrow">Next up</p><p className="mt-1 font-serif text-xl font-semibold text-blue-950">Sit with the client</p><p className="mt-1 text-sm text-slate-600">Meeting Guide is the default path from here. PDFs and email are easiest as a wrap-up after the conversation.</p></div><Button className="mt-4 h-12 w-full rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 md:mt-0 md:w-auto md:shrink-0 md:px-8" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Start Meeting Guide<ArrowRight className="ml-2 h-4 w-4" /></Button></div><div className="grid grid-cols-1 gap-5 md:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Based on confirmed holdings" data={currentPie} /><ProfessionalDonutChart title="Proposed Allocation" subtitle="Age and risk-profile calibration" data={targetPie} /></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Scores</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-3"><ScoreCard label="Risk Alignment" value={scores.riskAlignment} helper="How closely risk matches the proposed allocation" /><ScoreCard label="Diversification" value={scores.diversification} helper="Balance across major asset groups" /><ScoreCard label="Income Readiness" value={scores.incomeReadiness} helper="Support for retirement income stability" /></div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Synopsis</h3><div className="rounded-2xl border bg-white p-5 text-sm leading-7 text-slate-700">{displaySynopsis}</div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Hypothetical Allocation Stress</h3><p className="mb-4 text-sm text-slate-600"><strong className="font-semibold text-slate-800">Annualized geometric return (CAGR):</strong> each window chains the sleeve’s calendar-year % returns across 10 years, then applies the tenth root—not a straight sum or a cumulative decade total %. Static sleeve weights approximate annual rebalancing; illustrative only, not a forecast. Current mix weights each confirmed holding into equity (S&P calibration when no ticker history row), bonds (Bloomberg US Aggregate / AGG proxy), or cash / MM (annual-average Treasury-bill proxy); unclassified sleeves use a 50/50 equity/bond-index blend. The <strong className="font-semibold text-slate-800">biggest drawdown</strong> row is <strong className="font-semibold text-slate-800">2008 only</strong> — a single calendar-year blend using the −36.55% equity calibration alongside bond and cash proxies; not a multi-year CAGR.</p><div className="overflow-x-auto rounded-3xl border border-slate-200 bg-white"><table className="min-w-full text-sm"><thead><tr className="border-b border-slate-200 bg-slate-50"><th className="px-4 py-3 text-left font-semibold text-slate-700">Stress window</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Current</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Proposed</th></tr></thead><tbody>{portfolioStressScenarioRows.map(({ rowKey, title, subtitle, currentLabel, proposedLabel }) => (<tr key={rowKey} className="border-b border-slate-100 last:border-0"><td className="px-4 py-3 align-top"><p className="font-semibold text-slate-900">{title}</p><p className="text-xs text-slate-500">{subtitle}</p></td><td className="px-4 py-3 text-right font-semibold tabular-nums">{currentLabel}</td><td className="px-4 py-3 text-right font-semibold tabular-nums text-blue-900">{proposedLabel}</td></tr>))}</tbody></table></div><p className="mt-3 text-xs leading-relaxed text-slate-500">Ticker-specific equity histories can be added in code later; untouched tickers still assume the firm’s S&P calibration in each year. Bond roles use the Aggregate proxy; cash/MM uses the T-bill average proxy. Proposed path is the same index sleeves at target weights. First three rows: one CAGR each (10-year windows), read as “≈ % per year.” Biggest drawdown: modeled 2008 calendar-year blend only—not averaged over years.</p></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Retirement Success Model</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-3xl border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{currentSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(currentSuccessRate)} estimated success</p><Progress value={currentSuccessRate} className="mt-4" /></div><div className="rounded-3xl border border-sky-200 bg-sky-50/60 p-5"><p className="text-sm font-semibold text-blue-700">Proposed Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{proposedSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p><Progress value={proposedSuccessRate} className="mt-4" /></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Highlights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-3">{displayPortfolioHighlights.slice(0, 3).map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-2xl border border-red-200 bg-red-50/60 p-4 text-sm leading-6 text-slate-700">{flag}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-4 text-sm leading-6 text-slate-700">{insight}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-emerald-900">What This Means for You</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Strategic Considerations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4 text-sm leading-6 text-slate-700">{idea}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Advisor Example Recommendations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-2xl border border-amber-100 bg-amber-50/60 p-4 text-sm leading-6 text-slate-700">{rec}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Key findings</h3><ul className="space-y-2 text-sm">{findings.map((f) => <li key={f} className="rounded-2xl border bg-white p-4">{f}</li>)}</ul></div><div className="hidden border-t border-sky-100/60 pt-5 md:flex md:flex-wrap md:items-center md:gap-3"><Button variant="outline" className="h-12 rounded-2xl" onClick={() => setStep("confirm")}><ArrowLeft className="mr-2 h-4 w-4" />Back</Button><Button variant="outline" className="h-12 rounded-2xl" onClick={runAIAnalysis} disabled={isAnalyzing || isEnriching || !canRunDeepAnalysis}><BrainCircuit className="mr-2 h-4 w-4" />{isAnalyzing ? ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length] : "Regenerate analysis"}</Button><Button className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-5 md:ml-auto" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Meeting Guide<ArrowRight className="ml-2 h-4 w-4" /></Button></div>{isAnalyzing && <p className="hidden text-sm text-slate-600 md:block" aria-live="polite">{ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]} Often 30–90 seconds.</p>}</CardContent></Card>
+            <Card className="rounded-none ap-glass border-0"><CardContent className="space-y-6 p-6 pb-8 md:p-8"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none"><BarChart3 className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Portfolio Review</h2><p className="text-sm text-slate-500">Advisor-facing analysis based on confirmed holdings and selected calibration.</p></div></div>{analysisError && <div className="rounded-none border border-red-200 bg-red-50 p-5 text-sm text-red-800">{analysisError}</div>}<div className="ap-callout rounded-none p-5 md:flex md:items-center md:justify-between md:gap-4"><div><p className="ap-eyebrow">Next up</p><p className="mt-1 font-serif text-xl font-semibold text-blue-950">Sit with the client</p><p className="mt-1 text-sm text-slate-600">Meeting Guide is the default path from here. PDFs and email are easiest as a wrap-up after the conversation.</p></div><Button className="mt-4 h-12 w-full rounded-none ap-cta-solid md:mt-0 md:w-auto md:shrink-0 md:px-8" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Start Meeting Guide<ArrowRight className="ml-2 h-4 w-4" /></Button></div><div className="grid grid-cols-1 gap-5 md:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Based on confirmed holdings" data={currentPie} /><ProfessionalDonutChart title="Proposed Allocation" subtitle="Age and risk-profile calibration" data={targetPie} /></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Scores</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-3"><ScoreCard label="Risk Alignment" value={scores.riskAlignment} helper="How closely risk matches the proposed allocation" /><ScoreCard label="Diversification" value={scores.diversification} helper="Balance across major asset groups" /><ScoreCard label="Income Readiness" value={scores.incomeReadiness} helper="Support for retirement income stability" /></div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Synopsis</h3><div className="rounded-none border bg-white p-5 text-sm leading-7 text-slate-700">{displaySynopsis}</div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Hypothetical Allocation Stress</h3><p className="mb-4 text-sm text-slate-600"><strong className="font-semibold text-slate-800">Annualized geometric return (CAGR):</strong> each window chains the sleeve’s calendar-year % returns across 10 years, then applies the tenth root—not a straight sum or a cumulative decade total %. Static sleeve weights approximate annual rebalancing; illustrative only, not a forecast. Current mix weights each confirmed holding into equity (S&P calibration when no ticker history row), bonds (Bloomberg US Aggregate / AGG proxy), or cash / MM (annual-average Treasury-bill proxy); unclassified sleeves use a 50/50 equity/bond-index blend. The <strong className="font-semibold text-slate-800">biggest drawdown</strong> row is <strong className="font-semibold text-slate-800">2008 only</strong> — a single calendar-year blend using the −36.55% equity calibration alongside bond and cash proxies; not a multi-year CAGR.</p><div className="overflow-x-auto rounded-none border border-slate-200 bg-white"><table className="min-w-full text-sm"><thead><tr className="border-b border-slate-200 bg-slate-50"><th className="px-4 py-3 text-left font-semibold text-slate-700">Stress window</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Current</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Proposed</th></tr></thead><tbody>{portfolioStressScenarioRows.map(({ rowKey, title, subtitle, currentLabel, proposedLabel }) => (<tr key={rowKey} className="border-b border-slate-100 last:border-0"><td className="px-4 py-3 align-top"><p className="font-semibold text-slate-900">{title}</p><p className="text-xs text-slate-500">{subtitle}</p></td><td className="px-4 py-3 text-right font-semibold tabular-nums">{currentLabel}</td><td className="px-4 py-3 text-right font-semibold tabular-nums text-blue-900">{proposedLabel}</td></tr>))}</tbody></table></div><p className="mt-3 text-xs leading-relaxed text-slate-500">Ticker-specific equity histories can be added in code later; untouched tickers still assume the firm’s S&P calibration in each year. Bond roles use the Aggregate proxy; cash/MM uses the T-bill average proxy. Proposed path is the same index sleeves at target weights. First three rows: one CAGR each (10-year windows), read as “≈ % per year.” Biggest drawdown: modeled 2008 calendar-year blend only—not averaged over years.</p></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Retirement Success Model</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-none border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{currentSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(currentSuccessRate)} estimated success</p><Progress value={currentSuccessRate} className="mt-4" /></div><div className="rounded-none border border-sky-200 bg-sky-50/60 p-5"><p className="text-sm font-semibold text-blue-700">Proposed Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{proposedSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p><Progress value={proposedSuccessRate} className="mt-4" /></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-none border border-emerald-100 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Highlights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-3">{displayPortfolioHighlights.slice(0, 3).map((item) => <li key={item} className="rounded-none border border-slate-200 bg-slate-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-none border border-red-200 bg-red-50/60 p-4 text-sm leading-6 text-slate-700">{flag}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-none border border-indigo-200 bg-indigo-50/60 p-4 text-sm leading-6 text-slate-700">{insight}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-emerald-900">What This Means for You</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-none border border-emerald-200 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Strategic Considerations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-none border border-blue-100 bg-blue-50/60 p-4 text-sm leading-6 text-slate-700">{idea}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Advisor Example Recommendations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-none border border-amber-100 bg-amber-50/60 p-4 text-sm leading-6 text-slate-700">{rec}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Key findings</h3><ul className="space-y-2 text-sm">{findings.map((f) => <li key={f} className="rounded-none border bg-white p-4">{f}</li>)}</ul></div><div className="hidden border-t border-sky-100/60 pt-5 md:flex md:flex-wrap md:items-center md:gap-3"><Button variant="outline" className="h-12 rounded-none" onClick={() => setStep("confirm")}><ArrowLeft className="mr-2 h-4 w-4" />Back</Button><Button variant="outline" className="h-12 rounded-none" onClick={runAIAnalysis} disabled={isAnalyzing || isEnriching || !canRunDeepAnalysis}><BrainCircuit className="mr-2 h-4 w-4" />{isAnalyzing ? ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length] : "Regenerate analysis"}</Button><Button className="h-12 rounded-none ap-cta-solid px-5 md:ml-auto" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Meeting Guide<ArrowRight className="ml-2 h-4 w-4" /></Button></div>{isAnalyzing && <p className="hidden text-sm text-slate-600 md:block" aria-live="polite">{ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]} Often 30–90 seconds.</p>}</CardContent></Card>
           <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-sky-200/50 bg-white/85 p-4 shadow-[0_-8px_32px_rgba(15,58,122,0.12)] backdrop-blur-xl md:hidden">
             <div className="mx-auto flex max-w-3xl flex-col gap-2">
               {isAnalyzing && <p className="text-center text-xs text-slate-600" aria-live="polite">{ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]}</p>}
-              <Button className="h-14 w-full rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 touch-manipulation" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Meeting Guide</Button>
+              <Button className="h-14 w-full rounded-none ap-cta-solid touch-manipulation" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Meeting Guide</Button>
               <div className="flex gap-2">
-                <Button variant="outline" className="h-12 flex-1 rounded-2xl text-sm touch-manipulation" onClick={() => setStep("confirm")}>Back</Button>
-                <Button variant="outline" className="h-12 flex-1 rounded-2xl text-sm touch-manipulation" onClick={runAIAnalysis} disabled={isAnalyzing || !canRunDeepAnalysis}>Regenerate</Button>
+                <Button variant="outline" className="h-12 flex-1 rounded-none text-sm touch-manipulation" onClick={() => setStep("confirm")}>Back</Button>
+                <Button variant="outline" className="h-12 flex-1 rounded-none text-sm touch-manipulation" onClick={runAIAnalysis} disabled={isAnalyzing || !canRunDeepAnalysis}>Regenerate</Button>
               </div>
             </div>
           </div>
@@ -3499,20 +3766,20 @@ async function downloadPDFReport(mode: "client" | "advisor") {
 
 
         {step === "meeting" && (
-          <Card className="rounded-[2rem] ap-glass border-0">
+          <Card className="rounded-none ap-glass border-0">
             <CardContent className="space-y-6 p-6 md:p-8">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl"><MessageSquareText className="h-6 w-6" /></div>
+                  <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none"><MessageSquareText className="h-6 w-6" /></div>
                   <div>
                     <h2 className="font-serif text-3xl font-bold">Meeting Guide</h2>
                     <p className="text-sm text-slate-500">A live advisor guide for walking through the analysis with the client.</p>
                   </div>
                 </div>
-                <Badge variant="outline" className="rounded-full border-blue-200 bg-blue-50 text-blue-800">Advisor-facing guide</Badge>
+                <Badge variant="outline" className="rounded-none border-blue-200 bg-blue-50 text-blue-800">Advisor-facing guide</Badge>
               </div>
 
-              <div className="rounded-3xl border border-sky-100 bg-sky-50/60 p-5 leading-7 text-slate-700">
+              <div className="rounded-none border border-sky-100 bg-sky-50/60 p-5 leading-7 text-slate-700">
                 <h3 className="mb-2 font-serif text-2xl font-bold text-slate-950">Opening Script</h3>
                 <p>{analysis?.advisorOpeningScript || `Thanks for taking the time today. What I want to do is walk through how the portfolio is currently positioned, what risks or opportunities are showing up, and whether the current allocation still fits the retirement timeline, income goals, and comfort with market volatility.`}</p>
               </div>
@@ -3521,8 +3788,8 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <h3 className="mb-3 font-serif text-2xl font-bold text-slate-950">Meeting Walkthrough</h3>
                 <ol className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {meetingWalkthrough.map((item, index) => (
-                    <li key={item} className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4 text-sm leading-6 text-slate-700">
-                      <span className="ap-icon-tile mb-2 inline-flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold">{index + 1}</span>
+                    <li key={item} className="rounded-none border border-blue-100 bg-blue-50/60 p-4 text-sm leading-6 text-slate-700">
+                      <span className="ap-icon-tile mb-2 inline-flex h-7 w-7 items-center justify-center rounded-none text-xs font-bold">{index + 1}</span>
                       <p>{item}</p>
                     </li>
                   ))}
@@ -3532,22 +3799,22 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               <div>
                 <h3 className="mb-3 font-serif text-2xl font-bold text-red-900">Key Items to Explain</h3>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {displayRedFlags.slice(0, 4).map((flag) => <div key={flag} className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-slate-700">{flag}</div>)}
-                  {displayWhatThisMeans.slice(0, 2).map((item) => <div key={item} className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-slate-700">{item}</div>)}
+                  {displayRedFlags.slice(0, 4).map((flag) => <div key={flag} className="rounded-none border border-red-200 bg-red-50 p-4 text-sm leading-6 text-slate-700">{flag}</div>)}
+                  {displayWhatThisMeans.slice(0, 2).map((item) => <div key={item} className="rounded-none border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-slate-700">{item}</div>)}
                 </div>
               </div>
 
               <div>
                 <h3 className="mb-3 font-serif text-2xl font-bold text-slate-950">Ask These Questions</h3>
                 <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {meetingQuestions.map((question) => <li key={question} className="rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700">{question}</li>)}
+                  {meetingQuestions.map((question) => <li key={question} className="rounded-none border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700">{question}</li>)}
                 </ul>
               </div>
 
               <div>
                 <h3 className="mb-3 font-serif text-2xl font-bold text-slate-950">What to Listen For</h3>
                 <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {whatToListenFor.map((item) => <li key={item} className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}
+                  {whatToListenFor.map((item) => <li key={item} className="rounded-none border border-amber-100 bg-amber-50 p-4 text-sm leading-6 text-slate-700">{item}</li>)}
                 </ul>
               </div>
 
@@ -3558,23 +3825,23 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     "If the client asks why reduce stocks now: The goal is not to abandon growth, but to reduce unnecessary concentration and make sure the risk still fits the retirement timeline.",
                     "If the client asks why add fixed: Holding more in fixed can help create more stability and may reduce the impact of market downturns as retirement approaches.",
                     "If the client wants to wait: Waiting is an option, but we should still stress-test whether the current portfolio could handle a meaningful downturn.",
-                  ]).map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700">{item}</li>)}
+                  ]).map((item) => <li key={item} className="rounded-none border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-700">{item}</li>)}
                 </ul>
               </div>
 
-              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5 leading-7 text-slate-700">
+              <div className="rounded-none border border-slate-200 bg-slate-50 p-5 leading-7 text-slate-700">
                 <h3 className="mb-2 font-serif text-2xl font-bold text-slate-950">Closing Script</h3>
                 <p>{closingScript}</p>
               </div>
 
               <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:items-center sm:justify-between">
-                <Button variant="outline" className="h-12 rounded-2xl touch-manipulation" onClick={() => setStep("analysis")}>
+                <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => setStep("analysis")}>
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to analysis
                 </Button>
                 <p className="hidden text-center text-xs text-slate-500 sm:block">After the conversation, open Wrap-up for the Client Snapshot PDF, Gmail send, and follow-up copy.</p>
                 <Button
-                  className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-5 touch-manipulation"
+                  className="h-12 rounded-none ap-cta-solid px-5 touch-manipulation"
                   onClick={() => setStep("report")}
                 >
                   Wrap-up: PDFs and email
@@ -3588,11 +3855,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
 
 
         {step === "roth" && showRothOptionReport && (
-          <Card className="rounded-[2rem] ap-glass border-0">
+          <Card className="rounded-none ap-glass border-0">
             <CardContent className="space-y-8 p-6 md:p-8">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
-                  <div className="ap-icon-tile ap-icon-tile-amber flex h-12 w-12 items-center justify-center rounded-2xl">
+                  <div className="ap-icon-tile ap-icon-tile-amber flex h-12 w-12 items-center justify-center rounded-none">
                     <Target className="h-6 w-6" />
                   </div>
                   <div>
@@ -3604,13 +3871,13 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               </div>
 
-              <div className="space-y-5 rounded-3xl border border-slate-200 bg-slate-50/80 p-5 md:p-6">
+              <div className="space-y-5 rounded-none border border-slate-200 bg-slate-50/80 p-5 md:p-6">
                 <p className="text-sm font-semibold text-slate-800">Household</p>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Client first name</label>
                     <Input
-                      className="mt-2 h-12 rounded-2xl bg-white"
+                      className="mt-2 h-12 rounded-none bg-white"
                       value={client.firstName}
                       onChange={(e) => setClient({ ...client, firstName: e.target.value })}
                     />
@@ -3618,7 +3885,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Client last name</label>
                     <Input
-                      className="mt-2 h-12 rounded-2xl bg-white"
+                      className="mt-2 h-12 rounded-none bg-white"
                       value={client.lastName}
                       onChange={(e) => setClient({ ...client, lastName: e.target.value })}
                     />
@@ -3626,7 +3893,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Client current age</label>
                     <Input
-                      className="mt-2 h-12 rounded-2xl bg-white"
+                      className="mt-2 h-12 rounded-none bg-white"
                       type="number"
                       value={client.age}
                       onChange={(e) => setClient({ ...client, age: e.target.value })}
@@ -3638,7 +3905,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       <div>
                         <label className="text-sm font-semibold text-slate-700">Spouse first name</label>
                         <Input
-                          className="mt-2 h-12 rounded-2xl bg-white"
+                          className="mt-2 h-12 rounded-none bg-white"
                           value={client.spouseFirstName}
                           onChange={(e) => setClient({ ...client, spouseFirstName: e.target.value })}
                         />
@@ -3646,7 +3913,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       <div>
                         <label className="text-sm font-semibold text-slate-700">Spouse last name</label>
                         <Input
-                          className="mt-2 h-12 rounded-2xl bg-white"
+                          className="mt-2 h-12 rounded-none bg-white"
                           value={client.spouseLastName}
                           onChange={(e) => setClient({ ...client, spouseLastName: e.target.value })}
                         />
@@ -3654,7 +3921,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       <div>
                         <label className="text-sm font-semibold text-slate-700">Spouse current age</label>
                         <Input
-                          className="mt-2 h-12 rounded-2xl bg-white"
+                          className="mt-2 h-12 rounded-none bg-white"
                           type="number"
                           value={client.spouseAge}
                           onChange={(e) => setClient({ ...client, spouseAge: e.target.value })}
@@ -3666,7 +3933,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <p className="text-xs text-slate-500">Married status is set during intake (Question 1).</p>
               </div>
 
-              <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+              <div className="space-y-4 rounded-none border border-slate-200 bg-white p-5 md:p-6">
                 <p className="text-sm font-semibold text-slate-800">Qualified balance for conversion</p>
                 <p className="text-sm text-slate-600">
                   “Qualified” here means traditional tax-deferred balances (Confirm step). Roth IRAs and taxable accounts never flow into this cap automatically.
@@ -3676,7 +3943,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <Button
                     type="button"
                     variant={rothWorksheet.useEntireQualifiedBalance === true ? "default" : "outline"}
-                    className={`h-11 rounded-2xl ${rothWorksheet.useEntireQualifiedBalance === true ? "bg-blue-800 hover:bg-blue-900" : ""}`}
+                    className="h-11 rounded-none"
                     onClick={() =>
                       setRothWorksheet((w) => {
                         const next = { ...w, useEntireQualifiedBalance: true as const };
@@ -3693,7 +3960,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <Button
                     type="button"
                     variant={rothWorksheet.useEntireQualifiedBalance === false ? "default" : "outline"}
-                    className={`h-11 rounded-2xl ${rothWorksheet.useEntireQualifiedBalance === false ? "bg-blue-800 hover:bg-blue-900" : ""}`}
+                    className="h-11 rounded-none"
                     onClick={() => setRothWorksheet((w) => ({ ...w, useEntireQualifiedBalance: false }))}
                   >
                     No
@@ -3702,7 +3969,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 {rothWorksheet.useEntireQualifiedBalance === true ? (
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Qualified asset value</label>
-                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
                       <span className="pl-4 text-lg font-medium text-slate-600">$</span>
                       <Input
                         className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
@@ -3718,7 +3985,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 {rothWorksheet.useEntireQualifiedBalance === false ? (
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Specific dollar amount</label>
-                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
                       <span className="pl-4 text-lg font-medium text-slate-600">$</span>
                       <Input
                         className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
@@ -3740,7 +4007,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     ? " — choose Yes/No above and enter an amount so the PDF can run."
                     : ". Taxable and Roth IRA balances stay out of the conversion cap."}
                 </p>
-                <div className="flex items-center justify-between gap-4 rounded-2xl border border-blue-100 bg-slate-50 px-4 py-3">
+                <div className="flex items-center justify-between gap-4 rounded-none border border-blue-100 bg-slate-50 px-4 py-3">
                   <span className="text-sm font-semibold text-slate-700">Protect initial investment</span>
                   <button
                     type="button"
@@ -3752,13 +4019,13 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         fic: { ...w.fic, protectInitialInvestment: !w.fic.protectInitialInvestment },
                       }))
                     }
-                    className={`relative h-8 w-14 shrink-0 rounded-full transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                    className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${
                       rothWorksheet.fic.protectInitialInvestment ? "bg-sky-500" : "bg-slate-200"
                     }`}
                   >
                     <span className="sr-only">Protect initial investment</span>
                     <span
-                      className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow transition-[left] ${
+                      className={`absolute top-1 h-6 w-6 rounded-none bg-white shadow transition-[left] ${
                         rothWorksheet.fic.protectInitialInvestment ? "left-7" : "left-1"
                       }`}
                     />
@@ -3767,13 +4034,13 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               </div>
 
               {client.takingSocialSecurity ? (
-                <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+                <div className="space-y-4 rounded-none border border-slate-200 bg-white p-5 md:p-6">
                   <p className="text-sm font-semibold text-slate-800">Social Security (monthly)</p>
                   <p className="text-xs text-slate-500">From intake (&quot;taking Social Security&quot;). Updates here sync to the client profile.</p>
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div>
                       <label className="text-sm font-semibold text-slate-700">Client</label>
-                      <div className="mt-2 flex h-12 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                      <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
                         <span className="pl-4 text-lg font-medium text-slate-600">$</span>
                         <Input
                           className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
@@ -3787,7 +4054,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     {client.married ? (
                       <div>
                         <label className="text-sm font-semibold text-slate-700">Spouse</label>
-                        <div className="mt-2 flex h-12 items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                        <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
                           <span className="pl-4 text-lg font-medium text-slate-600">$</span>
                           <Input
                             className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
@@ -3803,12 +4070,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               ) : null}
 
-              <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+              <div className="space-y-3 rounded-none border border-slate-200 bg-white p-5 md:p-6">
                 <p className="text-sm font-semibold text-slate-800">Adjusted taxable income</p>
                 <p className="text-xs text-slate-500">
                   Pulled from intake as AGI (Form 1040, line 11 on recent-year returns).
                 </p>
-                <div className="flex h-12 max-w-md items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                <div className="flex h-12 max-w-md items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
                   <span className="pl-4 text-lg font-medium text-slate-600">$</span>
                   <Input
                     className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
@@ -3821,12 +4088,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               </div>
 
-              <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+              <div className="space-y-3 rounded-none border border-slate-200 bg-white p-5 md:p-6">
                 <p className="text-sm font-semibold text-slate-800">Estimated retirement income</p>
                 <p className="text-xs text-slate-500">
                   From intake: how much spendable income the client needs in retirement annually. Edits here update the client profile.
                 </p>
-                <div className="flex h-12 max-w-md items-center overflow-hidden rounded-2xl border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                <div className="flex h-12 max-w-md items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
                   <span className="pl-4 text-lg font-medium text-slate-600">$</span>
                   <Input
                     className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
@@ -3841,11 +4108,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               </div>
 
-              <div className="space-y-3 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+              <div className="space-y-3 rounded-none border border-slate-200 bg-white p-5 md:p-6">
                 <p className="text-sm font-semibold text-slate-800">Max tax rate %</p>
                 <p className="text-xs text-slate-500">Illustrative max tax rate percentage for this Roth worksheet.</p>
                 <Input
-                  className="h-12 max-w-md rounded-2xl border border-blue-100 bg-white focus-visible:ring-sky-500"
+                  className="h-12 max-w-md rounded-none border border-blue-100 bg-white focus-visible:ring-sky-500"
                   type="text"
                   inputMode="decimal"
                   value={rothWorksheet.fic.maxTaxRatePct}
@@ -3856,14 +4123,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 />
               </div>
 
-              <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-5 md:p-6">
+              <div className="space-y-4 rounded-none border border-slate-200 bg-white p-5 md:p-6">
                 <p className="text-sm font-semibold text-slate-800">Fixed indexed contract</p>
                 <p className="text-sm text-slate-600">Are you using a fixed index contract to perform the conversion?</p>
                 <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"
                     variant={rothWorksheet.useFixedIndexContract === true ? "default" : "outline"}
-                    className={`h-11 rounded-2xl ${rothWorksheet.useFixedIndexContract === true ? "bg-blue-800 hover:bg-blue-900" : ""}`}
+                    className="h-11 rounded-none"
                     onClick={() => setRothWorksheet((w) => ({ ...w, useFixedIndexContract: true }))}
                   >
                     Yes
@@ -3871,7 +4138,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <Button
                     type="button"
                     variant={rothWorksheet.useFixedIndexContract === false ? "default" : "outline"}
-                    className={`h-11 rounded-2xl ${rothWorksheet.useFixedIndexContract === false ? "bg-blue-800 hover:bg-blue-900" : ""}`}
+                    className="h-11 rounded-none"
                     onClick={() => setRothWorksheet((w) => ({ ...w, useFixedIndexContract: false }))}
                   >
                     No
@@ -3882,7 +4149,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <div className="md:col-span-2">
                       <label className="text-sm font-semibold text-slate-700">Carrier name</label>
                       <Input
-                        className="mt-2 h-12 rounded-2xl bg-white"
+                        className="mt-2 h-12 rounded-none bg-white"
                         value={rothWorksheet.fic.carrierName}
                         onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, carrierName: e.target.value } }))}
                       />
@@ -3890,7 +4157,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <div className="md:col-span-2">
                       <label className="text-sm font-semibold text-slate-700">Product name</label>
                       <Input
-                        className="mt-2 h-12 rounded-2xl bg-white"
+                        className="mt-2 h-12 rounded-none bg-white"
                         value={rothWorksheet.fic.productName}
                         onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, productName: e.target.value } }))}
                       />
@@ -3898,7 +4165,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <div>
                       <label className="text-sm font-semibold text-slate-700">Premium bonus %</label>
                       <Input
-                        className="mt-2 h-12 rounded-2xl bg-white"
+                        className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="decimal"
                         value={rothWorksheet.fic.premiumBonusPct}
@@ -3908,7 +4175,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <div>
                       <label className="text-sm font-semibold text-slate-700">Trailing bonus %</label>
                       <Input
-                        className="mt-2 h-12 rounded-2xl bg-white"
+                        className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="decimal"
                         value={rothWorksheet.fic.trailingBonusPct}
@@ -3918,7 +4185,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <div>
                       <label className="text-sm font-semibold text-slate-700">Trail bonus years</label>
                       <Input
-                        className="mt-2 h-12 rounded-2xl bg-white"
+                        className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="numeric"
                         value={rothWorksheet.fic.trailBonusYears}
@@ -3929,7 +4196,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <div>
                       <label className="text-sm font-semibold text-slate-700">Contract estimated rate of return %</label>
                       <Input
-                        className="mt-2 h-12 rounded-2xl bg-white"
+                        className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="decimal"
                         value={rothWorksheet.fic.contractEstimatedRateOfReturnPct}
@@ -3944,7 +4211,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <div>
                       <label className="text-sm font-semibold text-slate-700">Penalty-free withdrawal amount from contract %</label>
                       <Input
-                        className="mt-2 h-12 rounded-2xl bg-white"
+                        className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="decimal"
                         value={rothWorksheet.fic.penaltyFreeWithdrawalPct}
@@ -3954,7 +4221,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <div>
                       <label className="text-sm font-semibold text-slate-700">Surrender years of contract</label>
                       <Input
-                        className="mt-2 h-12 rounded-2xl bg-white"
+                        className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="decimal"
                         value={rothWorksheet.fic.surrenderYears}
@@ -3966,17 +4233,17 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               </div>
 
               <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-                <Button variant="outline" className="h-12 rounded-2xl touch-manipulation" onClick={() => setStep("report")}>
+                <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => setStep("report")}>
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to report
                 </Button>
                 <div className="flex flex-wrap gap-2 sm:justify-end">
-                  <Button variant="outline" className="h-12 rounded-2xl touch-manipulation" onClick={saveCurrentReview}>
+                  <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={saveCurrentReview}>
                     <Save className="mr-2 h-4 w-4" />
                     Save client profile
                   </Button>
                   <Button
-                    className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 touch-manipulation"
+                    className="h-12 rounded-none ap-cta-solid touch-manipulation"
                     onClick={() => void downloadRothOptionPdf()}
                   >
                     <Download className="mr-2 h-4 w-4" />
@@ -3984,7 +4251,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   </Button>
                   <Button
                     variant="outline"
-                    className="h-12 rounded-2xl border-slate-300 touch-manipulation"
+                    className="h-12 rounded-none border-slate-300 touch-manipulation"
                     onClick={() => {
                       void loadSavedReviews();
                       setStep("saved");
@@ -3995,7 +4262,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   </Button>
                   <Button
                     variant="outline"
-                    className="h-12 rounded-2xl border-amber-200 bg-amber-50/90 touch-manipulation hover:bg-amber-100/90"
+                    className="h-12 rounded-none border-amber-200 bg-amber-50/90 touch-manipulation hover:bg-amber-100/90"
                     onClick={() => void runRothAnalysisWithTaxPrecheck()}
                   >
                     <BrainCircuit className="mr-2 h-4 w-4" />
@@ -4008,11 +4275,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         )}
 
         {step === "saved" && (
-          <Card className="rounded-[2rem] ap-glass border-0">
+          <Card className="rounded-none ap-glass border-0">
             <CardContent className="space-y-6 p-6 md:p-8">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl">
+                  <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none">
                     <FolderOpen className="h-6 w-6" />
                   </div>
                   <div>
@@ -4020,15 +4287,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <p className="text-sm text-slate-500">Search and manage client profiles saved to your AdvisorPilot account.</p>
                   </div>
                 </div>
-                <Button variant="outline" className="h-11 rounded-2xl" onClick={loadSavedReviews}>
+                <Button variant="outline" className="h-11 rounded-none" onClick={loadSavedReviews}>
                   Refresh List
                 </Button>
               </div>
 
-              <div className="ap-callout rounded-3xl p-4">
+              <div className="ap-callout rounded-none p-4">
                 <label className="ap-eyebrow">Search</label>
                 <Input
-                  className="mt-2 h-12 rounded-2xl border-sky-200 bg-white/90"
+                  className="mt-2 h-12 rounded-none border-sky-200 bg-white/90"
                   placeholder="Search by client name or email"
                   value={clientSearch}
                   onChange={(e) => setClientSearch(e.target.value)}
@@ -4036,12 +4303,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               </div>
 
               {savedReviews.length === 0 ? (
-                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-8 text-center">
+                <div className="rounded-none border border-slate-200 bg-slate-50 p-8 text-center">
                   <p className="font-semibold text-slate-800">No client database yet.</p>
                   <p className="mt-2 text-sm text-slate-500">Run an analysis, then click Save Client Profile from the Analysis or Report screen.</p>
                 </div>
               ) : filteredSavedReviews.length === 0 ? (
-                <div className="rounded-3xl border border-slate-200 bg-slate-50 p-8 text-center">
+                <div className="rounded-none border border-slate-200 bg-slate-50 p-8 text-center">
                   <p className="font-semibold text-slate-800">No matching clients found.</p>
                   <p className="mt-2 text-sm text-slate-500">Try searching by a different name or email.</p>
                 </div>
@@ -4052,7 +4319,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     const reviewAge = review.client.age || (review.client.dob ? String(getAgeFromDob(review.client.dob) || "N/A") : "N/A");
 
                     return (
-                      <div key={review.id} className="ap-glass rounded-3xl p-5 transition-shadow hover:shadow-[0_28px_60px_-22px_rgba(15,58,122,0.32),0_0_0_1px_rgba(125,184,245,0.45)]">
+                      <div key={review.id} className="ap-glass rounded-none p-5 transition-shadow hover:shadow-[0_28px_60px_-22px_rgba(15,58,122,0.32),0_0_0_1px_rgba(125,184,245,0.45)]">
                         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between md:gap-6">
                           <div className="min-w-0 space-y-1.5">
                             <h3 className="font-serif text-2xl font-bold text-slate-950">
@@ -4087,7 +4354,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                             )}
                           </div>
                           <Button
-                            className="h-11 shrink-0 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-5"
+                            className="h-11 shrink-0 rounded-none ap-cta-solid px-5"
                             onClick={() => openSavedReview(review)}
                           >
                             Open Profile
@@ -4097,20 +4364,20 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-sky-100/60 pt-4">
                           <Button
                             variant="outline"
-                            className="h-10 rounded-2xl bg-white/80"
+                            className="h-10 rounded-none bg-white/80"
                             disabled={followUpEmailSendingId === review.id}
                             onClick={() => void sendFollowUpFromDatabase(review)}
                           >
                             <Mail className="mr-2 h-4 w-4" />
                             {followUpEmailSendingId === review.id ? "Sending…" : "Send Follow-Up Email"}
                           </Button>
-                          <Button variant="outline" className="h-10 rounded-2xl bg-white/80" onClick={() => updateAnalysisFromDatabase(review)}>
+                          <Button variant="outline" className="h-10 rounded-none bg-white/80" onClick={() => updateAnalysisFromDatabase(review)}>
                             <Upload className="mr-2 h-4 w-4" />
                             Update Analysis
                           </Button>
                           <Button
                             variant="outline"
-                            className="ml-auto h-10 rounded-2xl border-red-200 bg-white/80 text-red-700 hover:bg-red-50"
+                            className="ml-auto h-10 rounded-none border-red-200 bg-white/80 text-red-700 hover:bg-red-50"
                             onClick={() => deleteSavedReview(review.id)}
                           >
                             <Trash2 className="mr-2 h-4 w-4" />
@@ -4127,12 +4394,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         )}
 
         {step === "report" && (
-          <Card className="print-card rounded-[2rem] ap-glass border-0">
+          <Card className="print-card rounded-none ap-glass border-0">
             <CardContent className="space-y-6 p-6 md:p-8 print:p-0">
               <div className="no-print space-y-5">
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
-                    <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-2xl">
+                    <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none">
                       <Download className="h-6 w-6" />
                     </div>
                     <div>
@@ -4141,7 +4408,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     </div>
                   </div>
                   <Button
-                    className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-5 touch-manipulation"
+                    className="h-12 rounded-none ap-cta-solid px-5 touch-manipulation"
                     onClick={() => setStep("meeting")}
                   >
                     <MessageSquareText className="mr-2 h-4 w-4" />
@@ -4149,22 +4416,22 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   </Button>
                 </div>
 
-                <div className="ap-callout rounded-3xl p-5">
+                <div className="ap-callout rounded-none p-5">
                   <p className="ap-eyebrow">Wrap-up actions</p>
                   <p className="mt-1 text-xs text-slate-500">Download, copy, or save once the conversation is done.</p>
                   <div className={`mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 ${showRothOptionReport ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
-                    <Button variant="outline" className="h-12 justify-start rounded-2xl bg-white/85 touch-manipulation" onClick={() => downloadPDFReport("client")}>
+                    <Button variant="outline" className="h-12 justify-start rounded-none bg-white/85 touch-manipulation" onClick={() => downloadPDFReport("client")}>
                       <Download className="mr-2 h-4 w-4" />
                       Client Snapshot PDF
                     </Button>
-                    <Button variant="outline" className="h-12 justify-start rounded-2xl bg-white/85 touch-manipulation" onClick={() => downloadPDFReport("advisor")}>
+                    <Button variant="outline" className="h-12 justify-start rounded-none bg-white/85 touch-manipulation" onClick={() => downloadPDFReport("advisor")}>
                       <Download className="mr-2 h-4 w-4" />
                       Advisor Deep Dive PDF
                     </Button>
                     {showRothOptionReport ? (
                       <Button
                         variant="outline"
-                        className="h-12 justify-start rounded-2xl border-amber-200 bg-amber-50/90 touch-manipulation hover:bg-amber-100/90"
+                        className="h-12 justify-start rounded-none border-amber-200 bg-amber-50/90 touch-manipulation hover:bg-amber-100/90"
                         onClick={() => setStep("roth")}
                       >
                         <Target className="mr-2 h-4 w-4" />
@@ -4172,18 +4439,18 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         <ArrowRight className="ml-2 h-4 w-4" />
                       </Button>
                     ) : null}
-                    <Button variant="outline" className="h-12 justify-start rounded-2xl bg-white/85 touch-manipulation" onClick={buildFollowUpEmail}>
+                    <Button variant="outline" className="h-12 justify-start rounded-none bg-white/85 touch-manipulation" onClick={buildFollowUpEmail}>
                       <Mail className="mr-2 h-4 w-4" />
                       Follow-up email (copy)
                     </Button>
-                    <Button variant="outline" className="h-12 justify-start rounded-2xl bg-white/85 touch-manipulation" onClick={saveCurrentReview}>
+                    <Button variant="outline" className="h-12 justify-start rounded-none bg-white/85 touch-manipulation" onClick={saveCurrentReview}>
                       <Save className="mr-2 h-4 w-4" />
                       Save Client Profile
                     </Button>
                   </div>
                 </div>
 
-                <div className="rounded-3xl border border-blue-100 bg-blue-50 p-4">
+                <div className="rounded-none border border-blue-100 bg-blue-50 p-4">
                   <p className="text-sm font-semibold text-slate-800">Send Client Snapshot (Gmail)</p>
                   <p className="mt-1 text-xs text-slate-600">The address below is the <strong>client&apos;s inbox</strong> (To:). You send from your connected Google account — not from this field.</p>
                   <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-end">
@@ -4191,7 +4458,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       <label className="text-xs font-medium text-slate-600">Client email — snapshot recipient</label>
                       <Input
                         placeholder="client@email.com"
-                        className="mt-1 h-12 rounded-2xl bg-white"
+                        className="mt-1 h-12 rounded-none bg-white"
                         type="email"
                         value={client.advisorEmail}
                         onChange={(e) => setClient({ ...client, advisorEmail: e.target.value })}
@@ -4200,7 +4467,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
 
                     {session ? (
                       <Button
-                        className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 touch-manipulation md:shrink-0"
+                        className="h-12 rounded-none ap-cta-solid touch-manipulation md:shrink-0"
                         onClick={sendClientSnapshotEmail}
                       >
                         <Mail className="mr-2 h-4 w-4" />
@@ -4209,7 +4476,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     ) : (
                       <Button
                         variant="outline"
-                        className="h-12 rounded-2xl bg-white touch-manipulation md:shrink-0"
+                        className="h-12 rounded-none bg-white touch-manipulation md:shrink-0"
                         onClick={() => signIn("google", { callbackUrl: "/" })}
                       >
                         Connect Google to send
@@ -4225,19 +4492,19 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               </div>
               {followUpEmail && (
-                <div className="no-print rounded-3xl border border-blue-100 bg-blue-50 p-5">
+                <div className="no-print rounded-none border border-blue-100 bg-blue-50 p-5">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <h3 className="font-serif text-2xl font-bold text-slate-950">Generated Follow-Up Email</h3>
                       <p className="text-sm text-slate-600">Copy this into Gmail, then manually attach the Client Snapshot PDF.</p>
                     </div>
-                    <Button className="rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400" onClick={copyFollowUpEmail}>
+                    <Button className="rounded-none ap-cta-solid" onClick={copyFollowUpEmail}>
                       <Mail className="mr-2 h-4 w-4" />
                       {emailCopied ? "Copied" : "Copy Email"}
                     </Button>
                   </div>
                   <Textarea
-                    className="min-h-80 rounded-2xl bg-white font-mono text-sm leading-6"
+                    className="min-h-80 rounded-none bg-white font-mono text-sm leading-6"
                     value={followUpEmail}
                     onChange={(e) => {
                       setFollowUpEmail(e.target.value);
@@ -4246,34 +4513,29 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   />
                 </div>
               )}
-              <div className="report-paper space-y-6 rounded-3xl border bg-white p-8 text-black shadow-sm print:rounded-none">
+              <div className="report-paper space-y-6 rounded-none border bg-white p-8 text-black shadow-sm print:rounded-none">
                 <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-5"><div><h1 className="font-serif text-4xl font-bold text-slate-950">Portfolio Review Snapshot</h1><p className="mt-2 text-sm text-slate-600">Prepared for {clientDisplayName(client) || "Client"} | Age {derivedAge || "N/A"} | Risk Profile: {client.riskProfile.replace("-", " ")}</p></div><LogoBlock compact /></div>
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2 print:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Current statement" data={currentPie} /><ProfessionalDonutChart title="Proposed Allocation" subtitle="Calibration mix for discussion" data={targetPie} /></div>
-                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Portfolio Scores</h2><div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3 print:grid-cols-3"><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Risk Alignment</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.riskAlignment}/100</p><p className="mt-1 text-xs text-slate-500">Risk vs proposed allocation</p></div><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Diversification</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.diversification}/100</p><p className="mt-1 text-xs text-slate-500">Asset balance</p></div><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Income Readiness</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.incomeReadiness}/100</p><p className="mt-1 text-xs text-slate-500">Income stability</p></div></div></div>
+                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Portfolio Scores</h2><div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3 print:grid-cols-3"><div className="rounded-none border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Risk Alignment</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.riskAlignment}/100</p><p className="mt-1 text-xs text-slate-500">Risk vs proposed allocation</p></div><div className="rounded-none border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Diversification</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.diversification}/100</p><p className="mt-1 text-xs text-slate-500">Asset balance</p></div><div className="rounded-none border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-xs text-slate-500">Income Readiness</p><p className="mt-1 text-2xl font-bold text-slate-950">{scores.incomeReadiness}/100</p><p className="mt-1 text-xs text-slate-500">Income stability</p></div></div></div>
                 <div><h2 className="font-serif text-2xl font-bold text-slate-950">Synopsis</h2><p className="mt-2 text-sm leading-7 text-slate-700">{displaySynopsis}</p></div>
-                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Retirement Success Model</h2><div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 print:grid-cols-2"><div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-sm font-semibold text-slate-700">Current Allocation</p><p className="mt-1 text-3xl font-bold text-slate-950">{currentSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(currentSuccessRate)} estimated success</p></div><div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 print:bg-white"><p className="text-sm font-semibold text-blue-700">Proposed Allocation</p><p className="mt-1 text-3xl font-bold text-slate-950">{proposedSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p></div></div><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div>
-                <div><h2 className="font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-2xl border border-red-200 bg-red-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{flag}</li>)}</ul></div>
-                <div><h2 className="font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-2xl border border-indigo-200 bg-indigo-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{insight}</li>)}</ul></div>
-                <div><h2 className="font-serif text-2xl font-bold text-emerald-900">What This Means for You</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div>
-                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Strategic Considerations</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{idea}</li>)}</ul></div>
-                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Advisor Example Recommendations</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{rec}</li>)}</ul></div>
+                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Retirement Success Model</h2><div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 print:grid-cols-2"><div className="rounded-none border border-slate-200 bg-slate-50 p-4 print:bg-white"><p className="text-sm font-semibold text-slate-700">Current Allocation</p><p className="mt-1 text-3xl font-bold text-slate-950">{currentSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(currentSuccessRate)} estimated success</p></div><div className="rounded-none border border-sky-200 bg-sky-50 p-4 print:bg-white"><p className="text-sm font-semibold text-blue-700">Proposed Allocation</p><p className="mt-1 text-3xl font-bold text-slate-950">{proposedSuccessRate}/100</p><p className="mt-1 text-xs text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p></div></div><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-none border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div>
+                <div><h2 className="font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-none border border-red-200 bg-red-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{flag}</li>)}</ul></div>
+                <div><h2 className="font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-none border border-indigo-200 bg-indigo-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{insight}</li>)}</ul></div>
+                <div><h2 className="font-serif text-2xl font-bold text-emerald-900">What This Means for You</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-none border border-emerald-200 bg-emerald-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{item}</li>)}</ul></div>
+                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Strategic Considerations</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-none border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{idea}</li>)}</ul></div>
+                <div><h2 className="font-serif text-2xl font-bold text-slate-950">Advisor Example Recommendations</h2><ul className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 print:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-none border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700 print:bg-white">{rec}</li>)}</ul></div>
                 <div><h2 className="font-serif text-2xl font-bold text-slate-950">Potential Next Steps</h2><ul className="mt-2 list-disc pl-5 text-sm leading-7 text-slate-700">{clientNextSteps.map((step) => <li key={step}>{step}</li>)}</ul></div>
                 {meetingNotes && <div><h2 className="font-serif text-2xl font-bold text-slate-950">Meeting Notes</h2><p className="mt-2 text-sm leading-7 text-slate-700">{meetingNotes}</p></div>}
                 <p className="border-t border-slate-200 pt-3 text-xs text-gray-600">For discussion purposes only. This report is not a trade instruction and must be reviewed by a licensed financial professional before implementation. Investment recommendations should consider the client’s full financial situation, risk tolerance, time horizon, tax status, and objectives.</p>
               </div>
               <div className="no-print flex flex-wrap items-center justify-between gap-3 border-t border-sky-100/60 pt-5">
-                <Button variant="outline" className="h-12 rounded-2xl touch-manipulation" onClick={() => setStep("meeting")}>
+                <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => setStep("meeting")}>
                   <ArrowLeft className="mr-2 h-4 w-4" />
                   Back to Meeting Guide
                 </Button>
                 <Button
-                  className="h-12 rounded-2xl bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500 hover:from-blue-950 hover:via-blue-800 hover:to-sky-400 px-5 touch-manipulation"
-                  onClick={() => {
-                    setIntakeStep(0);
-                    setActiveReviewId(null);
-                    setRothWorksheet(emptyRothWorksheet());
-                    setStep("intake");
-                  }}
+                  className="h-12 rounded-none ap-cta-solid px-5 touch-manipulation"
+                  onClick={() => void handleNewReviewIntent()}
                 >
                   Start new review
                   <ArrowRight className="ml-2 h-4 w-4" />

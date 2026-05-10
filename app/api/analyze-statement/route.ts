@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import { Buffer } from "buffer";
 import { extractHoldingsFromFileBuffer } from "@/lib/extract-statement-holdings";
 import { isCashLikeHolding } from "@/lib/asset-classes";
+import {
+  buildCashParkingSyntheticHolding,
+  cashParkingTitleMatches,
+} from "@/lib/cash-parking-title-heuristics";
 import { extractLikelySymbol } from "@/lib/holding-validation";
+import { SYNTHETIC_CASH_TICKER } from "@/lib/cash-holding-constants";
 import {
   applyMasterResolutionToHolding,
   createSupabaseAdminForSecuritiesMaster,
@@ -15,11 +20,10 @@ export const runtime = "nodejs";
 async function enrichHoldingsWithSecuritiesMaster(
   holders: Record<string, unknown>[]
 ): Promise<Record<string, unknown>[]> {
-  if (!securitiesMasterFeatureEnabled()) return holders;
-  const sb = createSupabaseAdminForSecuritiesMaster();
-  if (!sb) {
+  const masterOn = securitiesMasterFeatureEnabled();
+  const sb = masterOn ? createSupabaseAdminForSecuritiesMaster() : null;
+  if (masterOn && !sb) {
     console.warn("[analyze-statement] securities master enabled but Supabase admin client unavailable.");
-    return holders;
   }
 
   const out: Record<string, unknown>[] = [];
@@ -28,10 +32,34 @@ async function enrichHoldingsWithSecuritiesMaster(
     const assetClass = String(rec.assetClass ?? "");
     const suggested = String(rec.suggested ?? "");
     const rawName = String(rec.rawName ?? "");
+
+    if (cashParkingTitleMatches(rawName)) {
+      const sym = extractLikelySymbol(suggested, rawName);
+      if (sb && sym && sym !== SYNTHETIC_CASH_TICKER) {
+        const hit = await resolveFromSecuritiesMaster(sb, {
+          inferredSymbol: sym,
+          suggested,
+          rawName,
+        });
+        if (hit) {
+          out.push(applyMasterResolutionToHolding(rec, hit));
+          continue;
+        }
+      }
+      out.push(buildCashParkingSyntheticHolding(rec));
+      continue;
+    }
+
     if (isCashLikeHolding(assetClass, suggested, rawName)) {
       out.push(rec);
       continue;
     }
+
+    if (!sb) {
+      out.push(rec);
+      continue;
+    }
+
     const sym = extractLikelySymbol(suggested, rawName);
     const hit = await resolveFromSecuritiesMaster(sb, { inferredSymbol: sym, suggested, rawName });
     if (!hit) {

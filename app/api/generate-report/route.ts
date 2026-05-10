@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { PDFDocument, StandardFonts, rgb, type PDFImage, type PDFPage } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { Buffer } from "buffer";
 import fs from "fs/promises";
 import path from "path";
@@ -403,6 +403,18 @@ export async function POST(req: Request) {
 
     const MARGIN = 44;
     const CONTENT_W = 612 - MARGIN * 2;
+    /** Typography: prose right edge aligns with section title rule (x = MARGIN + CONTENT_W). */
+    const synopsisTextX = MARGIN + 12;
+    const synopsisWrapWidthPt = MARGIN + CONTENT_W - synopsisTextX;
+    /** Gold-bar synopsis runs slightly larger than appendix body (appendix sizing unchanged). */
+    const synopsisFontSize = 8.2;
+    const synopsisLineGap = 3.55;
+    const boxedTextInsetX = MARGIN + 14;
+    const boxedTextWrapWidthPt = CONTENT_W - 28;
+    const cardListTextX = MARGIN + 22;
+    const cardListWrapWidthPt = MARGIN + CONTENT_W - cardListTextX;
+    const appendixWrapWidthPt = CONTENT_W;
+
     let exhibitCounter = 0;
 
     /** Minimum y for body content (points above page bottom); keeps text clear of footer rule and disclaimer. */
@@ -557,28 +569,27 @@ export async function POST(req: Request) {
 
     /** Page 1 only: synopsis must not push content past floorY (stays above footer band). */
     function drawSynopsisOnPageOne(text: unknown, floorY: number) {
-      const maxChars = 100;
-      const size = 7.6;
-      const gap = 3.2;
+      const size = synopsisFontSize;
+      const gap = synopsisLineGap;
       const lineH = size + gap;
       let t = cleanText(text) || "No analysis available.";
       const maxLines = Math.max(3, Math.floor((y - floorY - 6) / lineH));
 
       const truncateToMaxLines = (s: string): string => {
         let cur = s;
-        while (wrapLines(cur, maxChars).length > maxLines && cur.length > 40) {
+        while (wrapLinesToWidth(cur, regular, size, synopsisWrapWidthPt).length > maxLines && cur.length > 40) {
           cur = cur.slice(0, cur.length - 6).trim();
           const cut = cur.replace(/\s+\S*$/, "");
           cur = cut + "...";
         }
-        const lines = wrapLines(cur, maxChars);
-        if (lines.length <= maxLines) return cur;
-        const joined = lines.slice(0, maxLines).join(" ");
+        const truncatedLines = wrapLinesToWidth(cur, regular, size, synopsisWrapWidthPt);
+        if (truncatedLines.length <= maxLines) return cur;
+        const joined = truncatedLines.slice(0, maxLines).join(" ");
         return joined.slice(0, Math.max(20, joined.length - 12)).replace(/\s+\S*$/, "") + "...";
       };
 
       t = truncateToMaxLines(t);
-      const lines = wrapLines(t, maxChars);
+      const lines = wrapLinesToWidth(t, regular, size, synopsisWrapWidthPt);
       const barH = Math.max(lines.length * lineH + 4, lineH + 4);
       page.drawRectangle({
         x: MARGIN,
@@ -587,45 +598,73 @@ export async function POST(req: Request) {
         height: barH,
         color: goldAccent,
       });
-      y = drawWrappedText(t, MARGIN + 12, y, maxChars, size, ink, regular, gap) - 5;
+      y = drawWrappedTextToWidth(t, synopsisTextX, y, synopsisWrapWidthPt, size, ink, regular, gap) - 5;
     }
 
-    function estimateLines(text: unknown, maxChars = 92) {
-      const words = cleanText(text).split(" ");
-      let lines = 0;
-      let line = "";
-      for (const word of words) {
-        if ((line + word).length > maxChars) {
-          lines += 1;
-          line = word + " ";
-        } else {
-          line += word + " ";
+    function wrapLinesToWidth(text: unknown, font: PDFFont, fontSize: number, maxWidthPt: number): string[] {
+      const raw = cleanText(text);
+      const words = raw.split(/\s+/).filter(Boolean);
+      if (!words.length) return [""];
+
+      const linesOut: string[] = [];
+      let current = "";
+      const widthOf = (s: string) => font.widthOfTextAtSize(s, fontSize);
+
+      const flush = () => {
+        if (current) {
+          linesOut.push(current);
+          current = "";
         }
-      }
-      if (line.trim()) lines += 1;
-      return Math.max(lines, 1);
-    }
+      };
 
-    function wrapLines(text: unknown, maxChars = 92) {
-      const words = cleanText(text).split(" ");
-      const lines: string[] = [];
-      let line = "";
       for (const word of words) {
-        if ((line + word).length > maxChars) {
-          lines.push(line.trim());
-          line = word + " ";
-        } else {
-          line += word + " ";
+        const trial = current ? `${current} ${word}` : word;
+        if (widthOf(trial) <= maxWidthPt) {
+          current = trial;
+          continue;
         }
+
+        flush();
+
+        if (widthOf(word) <= maxWidthPt) {
+          current = word;
+          continue;
+        }
+
+        let piece = "";
+        for (let i = 0; i < word.length; i++) {
+          const ch = word[i]!;
+          const nextPiece = piece + ch;
+          if (widthOf(nextPiece) <= maxWidthPt) piece = nextPiece;
+          else {
+            if (piece) linesOut.push(piece);
+            piece = ch;
+          }
+        }
+        current = piece;
       }
-      if (line.trim()) lines.push(line.trim());
-      return lines.length ? lines : [""];
+
+      flush();
+      return linesOut.length ? linesOut : [""];
     }
 
-    function drawWrappedText(text: unknown, x: number, startY: number, maxChars: number, size: number, color: RGB, font = regular, lineGap = 5.2) {
-      const lines = wrapLines(text, maxChars);
+    function estimateLinesToWidth(text: unknown, font: PDFFont, fontSize: number, maxWidthPt: number): number {
+      return Math.max(1, wrapLinesToWidth(text, font, fontSize, maxWidthPt).length);
+    }
+
+    function drawWrappedTextToWidth(
+      text: unknown,
+      x: number,
+      startY: number,
+      maxWidthPt: number,
+      size: number,
+      color: RGB,
+      font = regular,
+      lineGap = 5.2,
+    ) {
+      const linesOut = wrapLinesToWidth(text, font, size, maxWidthPt);
       let yy = startY;
-      for (const line of lines) {
+      for (const line of linesOut) {
         page.drawText(line, { x, y: yy, size, font, color });
         yy -= size + lineGap;
       }
@@ -640,9 +679,7 @@ export async function POST(req: Request) {
       let total = header;
 
       for (const item of items) {
-        // Use a smaller wrap width than the renderer to intentionally over-estimate height.
-        // This prevents ugly orphan cards and section splits.
-        const lines = estimateLines(item, 72);
+        const lines = estimateLinesToWidth(item, regular, 8.4, cardListWrapWidthPt);
         total += Math.max(54, 34 + lines * 13.2) + rowGap;
       }
 
@@ -650,7 +687,7 @@ export async function POST(req: Request) {
     }
 
     function paragraphBlockHeight(text: unknown, subtitle = "") {
-      const lines = estimateLines(text, 118);
+      const lines = estimateLinesToWidth(text, regular, 8.6, boxedTextWrapWidthPt);
       return (subtitle ? 50 : 38) + lines * 14.2 + 26;
     }
 
@@ -692,12 +729,11 @@ export async function POST(req: Request) {
     }
 
     function drawTextSection(title: string, subtitle: string, text: unknown) {
-      const maxW = 98;
       const fs = 8.6;
       const lineGap = 5;
       const padT = 10;
       const padB = 11;
-      const lines = wrapLines(text, maxW);
+      const lines = wrapLinesToWidth(text, regular, fs, boxedTextWrapWidthPt);
       const textBodyH = lines.length * (fs + lineGap) - lineGap + padT + padB;
       const h = paragraphBlockHeight(text, subtitle);
       ensureBlock(Math.max(h, textBodyH + 80));
@@ -722,7 +758,7 @@ export async function POST(req: Request) {
         height: textBodyH,
         color: goldAccent,
       });
-      y = drawWrappedText(text, MARGIN + 14, boxTop - padT, maxW, fs, ink, regular, lineGap);
+      y = drawWrappedTextToWidth(text, boxedTextInsetX, boxTop - padT, boxedTextWrapWidthPt, fs, ink, regular, lineGap);
       y = y - padB - 8;
     }
 
@@ -736,7 +772,7 @@ export async function POST(req: Request) {
       const lineGap = 4.4;
       for (let idx = 1; idx <= items.length; idx++) {
         const item = items[idx - 1]!;
-        const lines = estimateLines(item, 88);
+        const lines = estimateLinesToWidth(item, regular, 8.4, cardListWrapWidthPt);
         const blockH = Math.max(28, lines * (8.4 + lineGap) + 20);
         if (blockH + 40 > availableHeight()) newPage();
 
@@ -748,7 +784,16 @@ export async function POST(req: Request) {
           font: bold,
           color: stayBar,
         });
-        const textBottom = drawWrappedText(item, MARGIN + 22, itemTop, 88, 8.4, ink, regular, lineGap);
+        const textBottom = drawWrappedTextToWidth(
+          item,
+          cardListTextX,
+          itemTop,
+          cardListWrapWidthPt,
+          8.4,
+          ink,
+          regular,
+          lineGap,
+        );
         const dividerY = textBottom - 5;
         page.drawLine({
           start: { x: MARGIN, y: dividerY },
@@ -1043,51 +1088,146 @@ export async function POST(req: Request) {
       y = boxBottom - 10;
     }
 
-
-    function drawMonteCarloExplanation() {
-      const methodologyAddendum =
-        "Illustrative Monte Carlo sustainability scores (not a guarantee). Vertical line: 85+ illustrative target band. Not a performance guarantee.";
-      const explanation =
+    /** Short cross-reference after the retirement exhibit; full methodology moves to appendix. */
+    function drawRetirementSuccessMethodologyCue() {
+      const lineA =
         mode === "client"
-          ? `This model estimates how the portfolio may hold up under many different market environments. It uses 5,000 simulated scenarios that include market returns, fixed performance, cash reserves, inflation, withdrawals, sequence-of-return risk, and a retirement horizon to age 95. ${methodologyAddendum}`
-          : `This Retirement Success Model is based on a Monte Carlo simulation designed to evaluate the long-term sustainability of a portfolio under a wide range of market conditions. The analysis runs 5,000 simulated scenarios incorporating equity returns, fixed performance, cash reserves, inflation, retirement withdrawals, sequence-of-return risk, and a retirement horizon to age 95. ${methodologyAddendum}`;
+          ? "These scores illustrate sustainability under modeled scenarios only. They are not predictions of outcomes or suitability."
+          : "Illustrative sustainability scores based on seeded Monte Carlo simulations. Not suitability, not predictive. Full methodology follows in Important information about this report.";
+      const lineB = "Details on assumptions, hypothetical stress paths, narrative sources, and limitations appear at the end of this document.";
+      const fs = 6.5;
+      const lineGap = 3.8;
+      const cueH = 36;
+      ensureBlock(cueH);
+      y = drawWrappedTextToWidth(lineA, MARGIN, y, appendixWrapWidthPt, fs, muted, regular, lineGap);
+      y = drawWrappedTextToWidth(lineB, MARGIN, y, appendixWrapWidthPt, fs, muted, regular, lineGap);
+      y -= 8;
+    }
 
-      const maxW = 98;
-      const fs = 8.3;
-      const lineGap = 4.8;
-      const padT = 10;
-      const padB = 10;
-      const lines = wrapLines(explanation, maxW);
-      const textBodyH = lines.length * (fs + lineGap) - lineGap + padT + padB;
-      const sectionHeight = paragraphBlockHeight(explanation, "Methodology summary.");
-      ensureBlock(Math.max(sectionHeight, textBodyH + 80));
+    /** Terminal appendix with client vs advisor depth; renders after holdings table (if any). */
+    function drawImportantInformationAppendix() {
+      newPage();
+      drawSectionEyebrow("Appendix");
+      sectionTitle("Important information about this report", "Methodology, data, limitations, and supervisory context.");
 
-      sectionTitle("How this analysis works", "Methodology summary.");
+      const riskKey = String(client?.riskProfile || "moderate").toLowerCase();
+      const withdrawalRule =
+        riskKey === "conservative" || riskKey === "moderate-conservative"
+          ? "approximately 3.8% of the starting portfolio value per year (illustrative modeled input, not a spending recommendation)"
+          : riskKey === "aggressive"
+            ? "approximately 4.5% of the starting portfolio value per year (illustrative modeled input, not a spending recommendation)"
+            : "approximately 4.1% of the starting portfolio value per year (illustrative modeled input, not a spending recommendation)";
 
-      const gapBelowTitle = 5;
-      const boxTop = y - gapBelowTitle;
-      const boxBottom = boxTop - textBodyH;
+      const clientName = clientDisplayName(client) || "Client";
+      const clientAge = String(client?.age ?? "N/A");
+      const retAge = String(client?.retirementAge ?? "N/A");
 
-      page.drawRectangle({
-        x: MARGIN,
-        y: boxBottom,
-        width: CONTENT_W,
-        height: textBodyH,
-        color: surface,
-        borderColor: rule,
-        borderWidth: 0.4,
-      });
+      type AppendixChunk = { title: string; paragraphs: string[] };
+      const commonChunks: AppendixChunk[] = [
+        {
+          title: "Purpose and limits of this document",
+          paragraphs: [
+            "This report is for discussion and education only. It is not an offer, solicitation, or instruction to buy or sell securities, insurance, or other products.",
+            "It does not cover your full financial picture (for example: other accounts not on the statement, employer plans, real estate, business interests, estate planning, health care, or legal matters).",
+            mode === "advisor"
+              ? "This advisor working-paper version may include internal notes and illustrative ideas for review. It is not a client deliverable without your supervision and any required firm approval."
+              : "Any next steps should be reviewed with a licensed professional who knows your complete situation.",
+          ],
+        },
+        {
+          title: "Data used in this report",
+          paragraphs: [
+            `Prepared ${reportDateStr}. Portfolio value shown in the header reflects confirmed holdings in this review${totalValue > 0 ? ` (${money(totalValue)})` : ""}.`,
+            `Household context on file: ${clientName}, age ${clientAge}, targeted retirement age ${retAge}, risk profile ${String(client?.riskProfile || "N/A").replace("-", " ")}.`,
+            "Values, registrations, and classifications come from uploaded or entered statement data and advisor edits. Errors in source data flow into this output.",
+          ],
+        },
+        {
+          title: "Portfolio scores (alignment, diversification, income readiness)",
+          paragraphs: [
+            "The three scores summarize how the current allocation compares to the illustrative proposed mix and simple heuristics. They are directional indicators for conversation, not grades, ranks, or guarantees of future results.",
+            mode === "advisor"
+              ? "Scores may be supplied from the application or derived from allocation gaps in this engine. They should not be presented to clients as regulated risk scores or sole evidence of suitability."
+              : "Your advisor can explain what each score is trying to reflect in plain language.",
+          ],
+        },
+        {
+          title: "Retirement success illustration (Monte Carlo-style)",
+          paragraphs:
+            mode === "client"
+              ? [
+                  "This section uses many computer-generated scenarios to stress-test whether a portfolio might still have assets left late in life under simplified rules. It includes random returns for stocks, fixed, and cash, inflation, withdrawals for living expenses, and the idea that bad markets early in retirement can be especially painful.",
+                  "The vertical reference line on the chart is an illustrative band for discussion, not a promise that any result is likely or appropriate for you.",
+                  "This is not a forecast of your retirement. Actual markets, taxes, spending, health events, and behavior will differ.",
+                ]
+              : [
+                  "The Retirement Success Model runs 5,000 simulated paths per score using a deterministic seed derived from client age, retirement age, allocation weights, and risk profile label (reproducible for the same inputs).",
+                  "Pre-retirement: each year applies random normal shocks to equity, fixed, and cash using illustrative means and volatilities. At retirement, an initial annual withdrawal is set as a percentage of the starting portfolio per risk bucket: conservative and moderate-conservative use a 3.8% starting rate, aggressive 4.5%, other profiles 4.1%. Withdrawals grow with simulated inflation. Withdrawals are modeled at the start of each retirement year to stress sequence risk.",
+                  "Retirement phase length is modeled through age 95 from the stated retirement age. Additional modeled pressure may apply in early retirement years for equity-heavy allocations (sequence-of-return stress heuristic).",
+                  "Illustrative capital market parameters in code: equity mean 6.8% annualized, fixed 4.0%, cash 2.3%; volatilities equity 16.5%, fixed 6.0%, cash 1.2%; inflation mean 2.6% with 1.2% volatility. These are simplified and not firm-specific capital market assumptions unless you replace them.",
+                  `For this run, the withdrawal rule-of-thumb described above maps to: ${withdrawalRule}.`,
+                  "The bar chart reference marker near 85 is an internal discussion band only, not a regulatory threshold. Results are not performance guarantees.",
+                ],
+        },
+        {
+          title: "Hypothetical allocation stress (historical windows)",
+          paragraphs:
+            mode === "client"
+              ? [
+                  "The decade rows show an approximate average annual return (CAGR) if the same broad mix had been held through that ten calendar year window, using firm index history for large-cap U.S. stocks, a broad bond index proxy, and Treasury-bill averages for cash. The last row is a single tough calendar year blend to show stress, not an average over many years.",
+                  "These paths are backward-looking math on standardized proxies. They are not what your funds will earn next year or over the next decade.",
+                ]
+              : [
+                  "Decade rows: ten-year geometric mean (CAGR) based on calendar-year returns. Current portfolio paths map each holding to equity (S&P 500 total return calibration when no resolved ticker history), fixed (Bloomberg US Aggregate / AGG proxy), or cash (annual-average 3-month T-bill proxy); unclassified sleeves use a 50/50 equity/bond blend in the scenario engine unless refined.",
+                  "Proposed portfolio uses the same index proxies at target sleeve weights with static rebalancing logic as implemented in code.",
+                  `The single-year drawdown row uses ${BIGGEST_DRAWDOWN_SCENARIO_YEAR} with the firm S&P equity calibration (-36.55% for that year on the equity sleeve) blended with bond and cash proxies for that year—one calendar year only, not a multi-year drawdown path.`,
+                  "Limitation: actual funds, active management, fees, taxes, and timing differ from these mechanical blends.",
+                ],
+        },
+        {
+          title: "AI-assisted narrative and research",
+          paragraphs: [
+            "Synopsis, highlights, overlap notes, strategies, and related bullet sections may be generated or assisted by large language models. Market context may incorporate web-assisted research signals when enabled in the analysis pipeline.",
+            "Generative text can be incorrect, generic, or misaligned with the statement. Narrative sections require human advisor review before client reliance.",
+          ],
+        },
+        {
+          title: "Hypothetical performance and supervisory note",
+          paragraphs: [
+            "Where this report illustrates hypothetical allocations, simulations, back-tests, or stress paths, outcomes depend on modeled assumptions rather than realized client-specific results.",
+            "Illustrative output must be supervised under your firm's policies—including how hypothetical performance may be communicated and documented.",
+          ],
+        },
+      ];
 
-      page.drawRectangle({
-        x: MARGIN,
-        y: boxBottom,
-        width: 2,
-        height: textBodyH,
-        color: goldAccent,
-      });
+      const titleFs = 8.9;
+      const bodyFs = 7.05;
+      const bodyGap = 4.35;
+      const titleBottomMargin = 7;
+      const paraGapBelow = 9;
 
-      y = drawWrappedText(explanation, MARGIN + 14, boxTop - padT, maxW, fs, ink, regular, lineGap);
-      y = y - padB - 6;
+      for (const chunk of commonChunks) {
+        const titleLines = wrapLinesToWidth(chunk.title, bold, titleFs, appendixWrapWidthPt);
+        const titleBlockH = titleLines.length * (titleFs + 4);
+        ensureBlock(titleBlockH + 24);
+        let ty = y;
+        for (const tl of titleLines) {
+          page.drawText(cleanText(tl), { x: MARGIN, y: ty, size: titleFs, font: bold, color: navyLight });
+          ty -= titleFs + 4;
+        }
+        y = ty - titleBottomMargin;
+
+        for (const para of chunk.paragraphs) {
+          const lines = wrapLinesToWidth(para, regular, bodyFs, appendixWrapWidthPt);
+          const blockH = lines.length * (bodyFs + bodyGap) + paraGapBelow;
+          if (y - blockH < FOOTER_SAFE_Y) {
+            newPage();
+          }
+          y = drawWrappedTextToWidth(para, MARGIN, y, appendixWrapWidthPt, bodyFs, ink, regular, bodyGap);
+          y -= paraGapBelow;
+        }
+        y -= 6;
+      }
     }
 
     function allocationCard(
@@ -1247,7 +1387,7 @@ export async function POST(req: Request) {
     newPage();
     drawRetirementSuccessModel();
 
-    drawMonteCarloExplanation();
+    drawRetirementSuccessMethodologyCue();
 
     drawHistoricalDecadeScenarios();
 
@@ -1290,6 +1430,8 @@ export async function POST(req: Request) {
     }
 
     drawHoldingsAppendix();
+
+    drawImportantInformationAppendix();
 
     const pages = pdfDoc.getPages();
     const totalP = pages.length;

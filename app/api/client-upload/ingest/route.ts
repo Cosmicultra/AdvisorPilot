@@ -4,11 +4,22 @@ import { createClient } from "@supabase/supabase-js";
 import { extractHoldingsFromFileBuffer } from "@/lib/extract-statement-holdings";
 import { writeAuditEvent } from "@/lib/audit-log";
 import { flagLikelyDuplicateHoldings } from "@/lib/holding-merge";
-import { applySyntheticCashTickerIfEligible, validateHoldingLocally } from "@/lib/holding-validation";
+import { applySyntheticCashTickerIfEligible, extractLikelySymbol, validateHoldingLocally } from "@/lib/holding-validation";
 import { normalizeRegistrationType } from "@/lib/holding-registration";
 import { canonicalizeAssetClass } from "@/lib/asset-classes";
 import { deriveHoldingStatus } from "@/lib/holding-status";
 import { normalizeIntakeClient, isIntakeComplete, intakeIncompleteStepTitles } from "@/lib/intake-config";
+import { SYNTHETIC_CASH_TICKER } from "@/lib/cash-holding-constants";
+import {
+  buildCashParkingSyntheticHolding,
+  cashParkingTitleMatches,
+} from "@/lib/cash-parking-title-heuristics";
+import {
+  applyMasterResolutionToHolding,
+  createSupabaseAdminForSecuritiesMaster,
+  resolveFromSecuritiesMaster,
+  securitiesMasterFeatureEnabled,
+} from "@/lib/securities-master";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,31 +36,58 @@ function missingEnv() {
   return !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY;
 }
 
-function normalizeHoldings(raw: unknown[]) {
-  return raw.map((holding) => {
+async function normalizeHoldings(raw: unknown[]) {
+  const masterOn = securitiesMasterFeatureEnabled();
+  const sb = masterOn ? createSupabaseAdminForSecuritiesMaster() : null;
+
+  const out: Array<Record<string, unknown>> = [];
+  for (const holding of raw) {
     const h = holding && typeof holding === "object" ? (holding as Record<string, unknown>) : {};
     const confidence = Number(h.confidence || 0);
     const rawName = String(h.rawName ?? "").trim() || "Unknown holding";
-    const suggestedBase =
-      String(h.suggested ?? "").trim() || "Needs advisor confirmation";
+    const suggestedBase = String(h.suggested ?? "").trim() || "Needs advisor confirmation";
+    const opts =
+      Array.isArray(h.options) && h.options.length > 0
+        ? h.options
+        : [suggestedBase, "Manual ticker / CUSIP entry"];
+
+    const overlay: Record<string, unknown> = {};
+    if (cashParkingTitleMatches(rawName)) {
+      const sym = extractLikelySymbol(suggestedBase, rawName);
+      const baseRec: Record<string, unknown> = { ...h, rawName, suggested: suggestedBase };
+      if (sb && sym && sym !== SYNTHETIC_CASH_TICKER) {
+        const hit = await resolveFromSecuritiesMaster(sb, {
+          inferredSymbol: sym,
+          suggested: suggestedBase,
+          rawName,
+        });
+        if (hit) Object.assign(overlay, applyMasterResolutionToHolding(baseRec, hit));
+        else Object.assign(overlay, buildCashParkingSyntheticHolding(baseRec));
+      } else {
+        Object.assign(overlay, buildCashParkingSyntheticHolding(baseRec));
+      }
+    }
+
+    const mergedIn = { ...h, ...overlay };
+    const confUse = Number(mergedIn.confidence ?? confidence);
     const normalized = applySyntheticCashTickerIfEligible({
       rawName,
-      suggested: suggestedBase,
-      confidence,
-      assetClass: canonicalizeAssetClass(String(h.assetClass || "Unknown")),
-      value: Number(h.value || 0),
-      status: deriveHoldingStatus(h.status, confidence),
+      suggested: String(mergedIn.suggested ?? suggestedBase),
+      confidence: confUse,
+      assetClass: canonicalizeAssetClass(String(mergedIn.assetClass ?? h.assetClass ?? "Unknown")),
+      value: Number(mergedIn.value ?? h.value ?? 0),
+      status: deriveHoldingStatus(mergedIn.status ?? h.status, confUse),
       options:
-        Array.isArray(h.options) && h.options.length > 0
-          ? h.options
-          : [suggestedBase, "Manual ticker / CUSIP entry"],
+        Array.isArray(mergedIn.options) && mergedIn.options.length > 0 ? mergedIn.options : opts,
       registrationType: normalizeRegistrationType(h.registrationType),
     });
+
     const acct = typeof h.accountNumber === "string" ? h.accountNumber.trim() : "";
     const cbRaw = Number(h.costBasis);
-    const costBasis =
-      Number.isFinite(cbRaw) && cbRaw > 0 ? cbRaw : undefined;
-    return {
+    const costBasis = Number.isFinite(cbRaw) && cbRaw > 0 ? cbRaw : undefined;
+
+    out.push({
+      ...mergedIn,
       ...normalized,
       ...validateHoldingLocally(normalized),
       ...(acct ? { accountNumber: acct } : {}),
@@ -58,8 +96,9 @@ function normalizeHoldings(raw: unknown[]) {
       ...(typeof h.sourceFileIndex === "number" && Number.isFinite(h.sourceFileIndex)
         ? { sourceFileIndex: h.sourceFileIndex }
         : {}),
-    };
-  });
+    });
+  }
+  return out;
 }
 
 /**
@@ -218,7 +257,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const holdings = flagLikelyDuplicateHoldings(normalizeHoldings(extractedHoldings));
+    const holdings = flagLikelyDuplicateHoldings(await normalizeHoldings(extractedHoldings));
     const totalValue = holdings.reduce((sum, h) => sum + Number(h.value || 0), 0);
 
     const meetingNotes = `Uploaded by client via advisor magic link (${new Date().toISOString()}). Files: ${files.map((file) => file.name || "statement").join(", ")}.`;

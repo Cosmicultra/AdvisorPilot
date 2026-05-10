@@ -18,6 +18,7 @@
   "Corporate Bond",
   "Municipal Bond",
   "Cash / Money Market",
+  "Money Market Account",
   "Fixed Indexed Annuity",
   "MYGA / Fixed Annuity",
   "SPIA / Income Annuity",
@@ -85,6 +86,10 @@ export function canonicalizeAssetClass(raw: string): AssetClassId {
     return "Cash Mutual Fund";
   }
 
+  if (/money\s*market\s*account/i.test(lower)) {
+    return "Money Market Account";
+  }
+
   if (
     (lower.includes("cash") || lower.includes("money market")) &&
     !/\betf\b/.test(lower) &&
@@ -144,7 +149,13 @@ export function classifyAllocationBucket(
   const canon = canonicalizeAssetClass(assetClass);
   const blob = `${suggested} ${rawName} ${canon}`.toLowerCase();
 
-  if (canon === "Cash / Money Market" || canon === "Cash ETF" || canon === "Cash Mutual Fund") return "cash";
+  if (
+    canon === "Cash / Money Market" ||
+    canon === "Money Market Account" ||
+    canon === "Cash ETF" ||
+    canon === "Cash Mutual Fund"
+  )
+    return "cash";
 
   const fixedCanon: AssetClassId[] = [
     "Bond Fund",

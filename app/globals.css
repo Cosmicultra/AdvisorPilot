@@ -40,82 +40,95 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-2xl: 0;
+  --radius-3xl: 0;
+  --radius-4xl: 0;
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  /* Advisor Pilot — logo palette: navy, vibrant blue, neutral gray (solids only) */
+  --ap-navy: #0c1929;
+  --ap-navy-mid: #153a5c;
+  --ap-royal: #0f6fde;
+  --ap-royal-hover: #0d5ec4;
+  /* Light “Pilot” blue — solid tint for selected section chips (upload / confirm / client link) */
+  --ap-pilot-light: #cce4ff;
+  --ap-pilot-light-hover: #b8d9ff;
+  --ap-pilot-light-border: #7eb3e8;
+  --ap-gray: #6b7280;
+  --ap-border: rgba(12, 25, 41, 0.12);
+  --ap-border-strong: rgba(12, 25, 41, 0.2);
+
+  --background: #f5f6f8;
+  --foreground: #0c1929;
+  --card: #ffffff;
+  --card-foreground: #0c1929;
+  --popover: #ffffff;
+  --popover-foreground: #0c1929;
+  --primary: #0f6fde;
+  --primary-foreground: #ffffff;
+  --secondary: #e8eaef;
+  --secondary-foreground: #0c1929;
+  --muted: #eef0f4;
+  --muted-foreground: #5c6570;
+  --accent: #e8edf5;
+  --accent-foreground: #0c1929;
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --border: #d8dde6;
+  --input: #d8dde6;
+  --ring: #0f6fde;
+  --chart-1: #0f6fde;
+  --chart-2: #6b7280;
+  --chart-3: #94a3b8;
+  --chart-4: #153a5c;
+  --chart-5: #b8950c;
+  --radius: 0;
+  --sidebar: #f8f9fb;
+  --sidebar-foreground: #0c1929;
+  --sidebar-primary: #0c1929;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eef0f4;
+  --sidebar-accent-foreground: #0c1929;
+  --sidebar-border: #d8dde6;
+  --sidebar-ring: #0f6fde;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --background: #0c1929;
+  --foreground: #f5f6f8;
+  --card: #132f4d;
+  --card-foreground: #f5f6f8;
+  --popover: #132f4d;
+  --popover-foreground: #f5f6f8;
+  --primary: #4d9ef7;
+  --primary-foreground: #0c1929;
+  --secondary: #1a3350;
+  --secondary-foreground: #f5f6f8;
+  --muted: #1a3350;
+  --muted-foreground: #a8b0bc;
+  --accent: #1a3350;
+  --accent-foreground: #f5f6f8;
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --border: rgba(255, 255, 255, 0.12);
+  --input: rgba(255, 255, 255, 0.14);
+  --ring: #4d9ef7;
+  --chart-1: #4d9ef7;
+  --chart-2: #94a3b8;
+  --chart-3: #6b7280;
+  --chart-4: #a8b0bc;
+  --chart-5: #d4a417;
+  --sidebar: #132f4d;
+  --sidebar-foreground: #f5f6f8;
+  --sidebar-primary: #4d9ef7;
+  --sidebar-primary-foreground: #0c1929;
+  --sidebar-accent: #1a3350;
+  --sidebar-accent-foreground: #f5f6f8;
+  --sidebar-border: rgba(255, 255, 255, 0.12);
+  --sidebar-ring: #4d9ef7;
 }
 
 @layer base {
@@ -133,13 +146,12 @@
     @apply bg-background text-foreground;
     letter-spacing: -0.005em;
   }
-  /* Serif headings — Fraunces, slightly tighter for an upscale editorial feel */
   h1, h2, h3, h4, h5, h6,
   .font-serif {
     font-family: var(--font-heading);
-    letter-spacing: -0.012em;
+    letter-spacing: -0.02em;
+    font-weight: 600;
   }
-  /* Tabular figures everywhere a number meaningfully aligns */
   .tabular-nums,
   table, th, td,
   .ap-tabular {
@@ -149,272 +161,302 @@
 }
 
 /* ============================================================
-   AdvisorPilot — futuristic UI utilities
-   Light-blue aurora background, glassmorphic cards, smooth
-   screen transitions, and a unified brand gradient.
+   AdvisorPilot — flat institutional surfaces (no gradients)
    ============================================================ */
 
-@keyframes ap-aurora-drift {
-  0%   { transform: translate3d(0, 0, 0) scale(1); }
-  35%  { transform: translate3d(6%, -5%, 0) scale(1.08); }
-  65%  { transform: translate3d(-7%, 4%, 0) scale(0.95); }
-  100% { transform: translate3d(0, 0, 0) scale(1); }
-}
-
-@keyframes ap-aurora-drift-alt {
-  0%   { transform: translate3d(0, 0, 0) scale(1.02); }
-  50%  { transform: translate3d(-8%, 6%, 0) scale(1.12); }
-  100% { transform: translate3d(0, 0, 0) scale(1.02); }
-}
-
 @keyframes ap-step-enter {
-  0%   { opacity: 0; transform: translate3d(0, 18px, 0); filter: blur(8px); }
-  60%  { filter: blur(0); }
-  100% { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
+  0%   { opacity: 0; transform: translate3d(0, 10px, 0); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
-/* Page-level aurora background */
 .ap-app-bg {
   position: relative;
   isolation: isolate;
   overflow-x: hidden;
-  background:
-    radial-gradient(ellipse 80% 60% at 70% 0%, rgba(186, 230, 253, 0.45), transparent 60%),
-    radial-gradient(ellipse 70% 60% at 0% 90%, rgba(199, 210, 254, 0.35), transparent 60%),
-    linear-gradient(180deg, #f4f9ff 0%, #eaf2ff 55%, #f4f9ff 100%);
+  background: #eef0f4;
+  box-shadow: none;
 }
 
-/* Soft animated colour blobs */
-.ap-app-bg::before {
-  content: "";
-  position: fixed;
-  inset: -15%;
-  z-index: -2;
-  pointer-events: none;
-  background-image:
-    radial-gradient(closest-side, rgba(56, 189, 248, 0.42), transparent 72%),
-    radial-gradient(closest-side, rgba(59, 130, 246, 0.32), transparent 72%),
-    radial-gradient(closest-side, rgba(99, 102, 241, 0.26), transparent 72%);
-  background-repeat: no-repeat;
-  background-size: 55% 55%, 48% 48%, 50% 50%;
-  background-position: 78% 18%, 12% 78%, 50% 55%;
-  filter: blur(70px) saturate(125%);
-  animation: ap-aurora-drift 26s ease-in-out infinite;
-}
-
-/* Faint futuristic grid overlay, masked to the page center */
-.ap-app-bg::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(15, 58, 122, 0.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(15, 58, 122, 0.07) 1px, transparent 1px);
-  background-size: 56px 56px;
-  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, black 35%, transparent 78%);
-          mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, black 35%, transparent 78%);
-}
-
-/* Floating accent orbs */
+.ap-app-bg::before,
+.ap-app-bg::after,
 .ap-app-bg .ap-orb {
-  position: fixed;
-  z-index: -2;
-  width: 32rem;
-  height: 32rem;
-  border-radius: 9999px;
-  filter: blur(80px);
-  opacity: 0.55;
-  pointer-events: none;
-}
-.ap-app-bg .ap-orb-1 {
-  top: -8rem;
-  right: -6rem;
-  background: radial-gradient(circle at 30% 30%, rgba(125, 211, 252, 0.7), rgba(125, 211, 252, 0) 70%);
-  animation: ap-aurora-drift-alt 30s ease-in-out infinite;
-}
-.ap-app-bg .ap-orb-2 {
-  bottom: -10rem;
-  left: -8rem;
-  width: 36rem;
-  height: 36rem;
-  background: radial-gradient(circle at 60% 60%, rgba(165, 180, 252, 0.55), rgba(165, 180, 252, 0) 70%);
-  animation: ap-aurora-drift 38s ease-in-out infinite reverse;
+  display: none;
 }
 
-/* Glassmorphic surface — used for header and major step cards */
 .ap-glass {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(244, 249, 255, 0.72));
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
-  border: 1px solid rgba(125, 184, 245, 0.32);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.85),
-    0 28px 60px -28px rgba(15, 58, 122, 0.32),
-    0 8px 24px -10px rgba(15, 58, 122, 0.16);
+  background: #ffffff;
+  border: 1px solid var(--ap-border);
+  box-shadow: 0 1px 0 rgba(12, 25, 41, 0.04);
 }
 
 .ap-glass-strong {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(238, 246, 255, 0.82));
-  backdrop-filter: blur(22px) saturate(150%);
-  -webkit-backdrop-filter: blur(22px) saturate(150%);
-  border: 1px solid rgba(125, 184, 245, 0.4);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    0 18px 40px -22px rgba(15, 58, 122, 0.32);
+  background: #ffffff;
+  border: 1px solid var(--ap-border-strong);
+  box-shadow: 0 2px 8px rgba(12, 25, 41, 0.06);
 }
 
-/* Step nav button — futuristic resting + active state */
-/* Step nav button — solid resting state, no gradient.
-   Hover rule is scoped with :not(.ap-step-btn-active) so the active button
-   keeps its dark navy background + white text on hover (otherwise the label
-   text inherits the hover color and visually disappears against the hover bg). */
 .ap-step-btn {
   position: relative;
-  background-color: rgba(255, 255, 255, 0.82);
-  border: 1px solid rgba(148, 197, 255, 0.4);
-  color: rgb(51, 65, 85);
+  background-color: #ffffff;
+  border: 1px solid var(--ap-border-strong);
+  color: #3d4d60;
   transition:
-    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    box-shadow 220ms ease,
-    border-color 220ms ease,
-    background-color 220ms ease,
-    color 220ms ease;
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
 }
 .ap-step-btn:not(.ap-step-btn-active):hover {
-  transform: translateY(-1px);
-  border-color: rgba(30, 64, 175, 0.45);
-  background-color: rgba(239, 246, 255, 0.95);
-  color: #1e3a8a;
-  box-shadow: 0 12px 28px -18px rgba(30, 64, 175, 0.45);
+  border-color: var(--ap-navy-mid);
+  background-color: #f8f9fb;
+  color: var(--ap-navy);
 }
-/* === Canonical brand gradient ===
-   Matches Tailwind's `bg-gradient-to-br from-blue-900 via-blue-700 to-sky-500`
-   exactly so buttons, icon tiles, and the active step nav are visually identical:
-     from blue-900  (#1e3a8a)
-     via  blue-700  (#1d4ed8)
-     to   sky-500   (#0ea5e9)
-   Hover: from blue-950 (#172554) via blue-800 (#1e40af) to sky-400 (#38bdf8) */
 .ap-step-btn-active {
-  background-image: linear-gradient(to bottom right, #1e3a8a 0%, #1d4ed8 50%, #0ea5e9 100%);
-  background-color: #1d4ed8; /* fallback */
-  color: #ffffff;
-  border-color: rgba(56, 189, 248, 0.6);
-  box-shadow:
-    inset 0 1.5px 0 rgba(255, 255, 255, 0.28),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.08),
-    0 1px 2px rgba(15, 23, 42, 0.06),
-    0 14px 32px -14px rgba(14, 165, 233, 0.55),
-    0 0 24px -2px rgba(56, 189, 248, 0.4);
+  background-color: var(--ap-pilot-light);
+  background-image: none;
+  color: var(--ap-navy);
+  border-color: var(--ap-pilot-light-border);
+  box-shadow: none;
 }
 .ap-step-btn-active:hover {
-  transform: translateY(-1px);
-  background-image: linear-gradient(to bottom right, #172554 0%, #1e40af 50%, #38bdf8 100%);
-  border-color: rgba(56, 189, 248, 0.75);
-  color: #ffffff;
+  background-color: var(--ap-pilot-light-hover);
+  border-color: var(--ap-pilot-light-border);
+  color: var(--ap-navy);
 }
 
-/* Brand gradient — same exact stops/direction as Tailwind utility chain */
+/* Same selected treatment as step chips — used on client magic-link Profile / Statements toggles */
+.ap-segment-active {
+  background-color: var(--ap-pilot-light) !important;
+  background-image: none !important;
+  color: var(--ap-navy) !important;
+  border-color: var(--ap-pilot-light-border) !important;
+  box-shadow: none !important;
+}
+.ap-segment-active:hover {
+  background-color: var(--ap-pilot-light-hover) !important;
+  border-color: var(--ap-pilot-light-border) !important;
+  color: var(--ap-navy) !important;
+}
+
 .ap-brand-gradient,
 .ap-brand {
-  background-image: linear-gradient(to bottom right, #1e3a8a 0%, #1d4ed8 50%, #0ea5e9 100%);
+  background-color: var(--ap-royal);
+  background-image: none;
   color: #ffffff;
 }
 
-/* Brand icon tile — Apple-style glossy depth on top of the canonical brand gradient. */
 .ap-icon-tile {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background-image: linear-gradient(to bottom right, #1e3a8a 0%, #1d4ed8 50%, #0ea5e9 100%);
-  background-color: #1d4ed8; /* fallback */
+  background-color: var(--ap-royal);
+  background-image: none;
   color: #ffffff;
-  box-shadow:
-    inset 0 1.5px 0 rgba(255, 255, 255, 0.32),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.08),
-    0 1px 2px rgba(15, 23, 42, 0.06),
-    0 8px 20px -10px rgba(14, 165, 233, 0.55);
-  transition: transform 200ms ease, box-shadow 200ms ease;
 }
-
-/* Score-based tile tints — same gradient direction & stops as the brand
-   gradient, recoloured. Used by ScoreCard for 80-100 / 50-79 / 0-49 ranges. */
 .ap-icon-tile-green {
-  /* emerald-900 → emerald-600 → emerald-400 */
-  background-image: linear-gradient(to bottom right, #064e3b 0%, #059669 50%, #34d399 100%);
-  background-color: #059669;
-  box-shadow:
-    inset 0 1.5px 0 rgba(255, 255, 255, 0.32),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.08),
-    0 1px 2px rgba(15, 23, 42, 0.06),
-    0 8px 20px -10px rgba(16, 185, 129, 0.55);
+  background-color: #047857;
+  background-image: none;
+  color: #ffffff;
 }
 .ap-icon-tile-amber {
-  /* amber-900 → amber-600 → amber-400 */
-  background-image: linear-gradient(to bottom right, #78350f 0%, #d97706 50%, #fbbf24 100%);
-  background-color: #d97706;
-  box-shadow:
-    inset 0 1.5px 0 rgba(255, 255, 255, 0.34),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.08),
-    0 1px 2px rgba(15, 23, 42, 0.06),
-    0 8px 20px -10px rgba(245, 158, 11, 0.55);
+  background-color: #b45309;
+  background-image: none;
+  color: #ffffff;
 }
 .ap-icon-tile-red {
-  /* red-900 → red-600 → red-400 */
-  background-image: linear-gradient(to bottom right, #7f1d1d 0%, #dc2626 50%, #f87171 100%);
-  background-color: #dc2626;
-  box-shadow:
-    inset 0 1.5px 0 rgba(255, 255, 255, 0.30),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.08),
-    0 1px 2px rgba(15, 23, 42, 0.06),
-    0 8px 20px -10px rgba(239, 68, 68, 0.55);
+  background-color: #b91c1c;
+  background-image: none;
+  color: #ffffff;
 }
 
-/* Light-blue callout panel */
 .ap-callout {
-  background:
-    radial-gradient(ellipse 90% 65% at 100% 0%, rgba(125, 211, 252, 0.20), transparent 65%),
-    linear-gradient(180deg, rgba(241, 248, 255, 0.92), rgba(255, 255, 255, 0.85));
-  border: 1px solid rgba(125, 184, 245, 0.4);
+  background: #ffffff;
+  border: 1px solid var(--ap-border);
 }
 
-/* Soft inner panel — used inside IntakeShell etc. */
 .ap-soft-panel {
-  background:
-    radial-gradient(ellipse 90% 60% at 100% 0%, rgba(125, 211, 252, 0.20), transparent 65%),
-    linear-gradient(180deg, rgba(238, 246, 255, 0.85), rgba(247, 251, 255, 0.92));
-  border: 1px solid rgba(148, 197, 255, 0.35);
+  background: #fafbfc;
+  border: 1px solid var(--ap-border);
 }
 
-/* Section eyebrow used in toolbar groups */
 .ap-eyebrow {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ap-navy-mid);
+}
+
+/* Primary actions — solid royal (replaces Tailwind gradient CTA chains) */
+.ap-cta-solid {
+  background-color: var(--ap-royal) !important;
+  background-image: none !important;
+  border-color: var(--ap-royal) !important;
+  color: #ffffff !important;
+}
+.ap-cta-solid:hover:not(:disabled) {
+  background-color: var(--ap-royal-hover) !important;
+  border-color: var(--ap-royal-hover) !important;
+  color: #ffffff !important;
+}
+.ap-cta-solid:disabled {
+  opacity: 0.5;
+}
+
+.ap-choice-selected {
+  background-color: var(--ap-royal) !important;
+  background-image: none !important;
+  border-color: var(--ap-royal) !important;
+  color: #ffffff !important;
+}
+.ap-choice-selected:hover {
+  background-color: var(--ap-royal-hover) !important;
+  border-color: var(--ap-royal-hover) !important;
+}
+
+/* Legacy class name kept for compatibility with prior refactor */
+.ap-cta-gradient {
+  background-color: var(--ap-royal) !important;
+  background-image: none !important;
+  border-color: var(--ap-royal) !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+.ap-cta-gradient:hover:not(:disabled) {
+  background-color: var(--ap-royal-hover) !important;
+  border-color: var(--ap-royal-hover) !important;
+}
+
+/* Full-width shell (mockup-style): navy header + horizontal wizard */
+.ap-top-nav {
+  background-color: var(--ap-navy);
+  color: #f5f6f8;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.ap-nav-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.5rem 0;
+  margin: 0 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(245, 246, 248, 0.62);
+  transition: color 150ms ease;
+  white-space: nowrap;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+.ap-nav-link:first-of-type {
+  margin-left: 0;
+}
+.ap-nav-link:hover {
+  color: rgba(245, 246, 248, 0.95);
+}
+.ap-nav-link-active {
+  color: #f5f6f8;
+}
+.ap-nav-link-active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -0.55rem;
+  height: 3px;
+  background-color: var(--ap-royal);
+  border-radius: 0;
+}
+
+.ap-wizard-rail {
+  background-color: #ffffff;
+  border: 1px solid var(--ap-border-strong);
+  border-top: none;
+  border-bottom: none;
+  box-shadow: none;
+}
+.ap-wizard-rail-inner {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.ap-wizard-segment {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 6rem;
+  min-height: 4.5rem;
+  padding: 1rem 0.35rem 1.05rem;
+  text-align: center;
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
   text-transform: uppercase;
-  color: #1e3a8a;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  border-top: 3px solid transparent;
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease,
+    background-color 150ms ease;
+  font-family: inherit;
+}
+.ap-wizard-segment:hover {
+  color: var(--ap-navy);
+  background-color: #f8fafc;
+}
+.ap-wizard-segment-active {
+  color: var(--ap-navy);
+  border-top-color: var(--ap-royal);
+  background-color: #fafbfc;
+}
+.ap-wizard-segment-index {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #94a3b8;
+  margin-bottom: 0.35rem;
+  letter-spacing: 0.04em;
+}
+.ap-wizard-segment-active .ap-wizard-segment-index {
+  color: var(--ap-royal);
 }
 
-/* Smooth step transitions — re-runs whenever the keyed wrapper remounts */
+.ap-intake-shell-card {
+  border-radius: 0 0 0.75rem 0.75rem;
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(12, 25, 41, 0.07);
+  border: 1px solid var(--ap-border);
+  border-top: none;
+}
+.ap-intake-shell-accent {
+  border-right: 4px solid var(--ap-royal);
+}
+
 .ap-step-enter {
-  animation: ap-step-enter 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: ap-step-enter 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/* Respect users who request reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  .ap-app-bg::before,
-  .ap-app-bg .ap-orb,
   .ap-step-enter {
     animation: none !important;
   }
 }
 
-/* Don't show animated background when printing */
 @media print {
-  .ap-app-bg::before,
-  .ap-app-bg::after,
-  .ap-app-bg .ap-orb {
+  .ap-app-bg {
+    box-shadow: none;
+    background: white !important;
+  }
+  .ap-top-nav,
+  .ap-wizard-rail {
     display: none !important;
   }
 }

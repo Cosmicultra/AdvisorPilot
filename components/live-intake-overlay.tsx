@@ -124,12 +124,9 @@ function CircularBars({ analyser, boost }: { analyser: AnalyserNode | null; boos
         const x2 = cx + Math.cos(angle) * (innerR + barLen);
         const y2 = cy + Math.sin(angle) * (innerR + barLen);
 
-        const gradient = ctx2d.createLinearGradient(x1, y1, x2, y2);
-        gradient.addColorStop(0, "rgba(45, 212, 191, 0.95)");
-        gradient.addColorStop(1, "rgba(59, 130, 246, 0.35)");
-        ctx2d.strokeStyle = gradient;
+        ctx2d.strokeStyle = "rgba(15, 111, 222, 0.9)";
         ctx2d.lineWidth = 4;
-        ctx2d.lineCap = "round";
+        ctx2d.lineCap = "butt";
         ctx2d.beginPath();
         ctx2d.moveTo(x1, y1);
         ctx2d.lineTo(x2, y2);
@@ -889,13 +886,13 @@ export function LiveIntakeOverlay({
   const visualBoost = phase === "listening" ? 1.15 : phase === "speaking" ? 0.45 : 0.65;
 
   const ui = (
-    <div className="fixed inset-0 z-[100] flex flex-col bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
+    <div className="fixed inset-0 z-[100] flex flex-col bg-[#0c1929] text-white">
       <div className="flex items-center justify-end p-4">
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          className="rounded-full text-white hover:bg-white/10"
+          className="rounded-none text-white hover:bg-white/10"
           onClick={() => {
             overlayActiveRef.current = false;
             sessionCounterRef.current += 1;
@@ -916,7 +913,7 @@ export function LiveIntakeOverlay({
             <CircularBars analyser={analyser} boost={visualBoost} />
           </div>
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <div className="relative h-[58%] w-[58%] overflow-hidden rounded-full bg-white shadow-2xl shadow-sky-500/30 ring-2 ring-sky-300/40">
+            <div className="relative h-[58%] w-[58%] overflow-hidden rounded-none bg-white shadow-lg shadow-black/20 ring-2 ring-[#0f6fde]/45">
               {logoOk ? (
                 <Image
                   src="/logo.png"
@@ -936,7 +933,7 @@ export function LiveIntakeOverlay({
         </div>
 
         {transcriptDisplay && (
-          <p className="max-w-xl rounded-2xl bg-white/5 px-5 py-3 text-center text-base text-slate-100">
+          <p className="max-w-xl rounded-none bg-white/5 px-5 py-3 text-center text-base text-slate-100">
             “{transcriptDisplay}”
           </p>
         )}

@@ -22,6 +22,7 @@ const TICKER_RE = /\b[A-Z]{1,5}\b/;
 /** Cash-sleeve classes that may use SYNTHETIC_CASH_TICKER when no real symbol exists on the statement. */
 const CASH_SLEEVE_FOR_SYNTHETIC_TICKER = new Set<AssetClassId>([
   "Cash / Money Market",
+  "Money Market Account",
   "Cash ETF",
   "Cash Mutual Fund",
 ]);
@@ -148,7 +149,7 @@ export function validateHoldingLocally(holding: {
   } else if (normalizedSymbol) {
     validationStatus = confidence >= 75 && status !== "review" ? "validated" : "needs_review";
     reason = "A ticker-like symbol was inferred from the selected holding label.";
-  } else if (assetClass.includes("cash")) {
+  } else if (assetClass.includes("cash") || assetClass.includes("money market")) {
     validationStatus = "validated";
     reason = "Cash or money-market position does not require a market ticker for this workflow.";
   }

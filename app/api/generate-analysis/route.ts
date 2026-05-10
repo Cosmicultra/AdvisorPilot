@@ -138,9 +138,10 @@ Use this exact JSON shape:
     "advisor-only rebalance consideration 4"
   ],
   "talkingPoints": [
-    "advisor meeting agenda point 1",
-    "advisor meeting agenda point 2",
-    "advisor meeting agenda point 3"
+    "advisor meeting agenda point 1 (grounding)",
+    "advisor meeting agenda point 2 (registration wrappers)",
+    "advisor meeting agenda point 3 (narrative and sleeves)",
+    "advisor meeting agenda point 4 (diagnostics: scores, stress, red flags vs overlap, impact before strategy)"
   ],
   "advisorOpeningScript": "Professional advisor opening script.",
   "objectionHandling": [
@@ -226,9 +227,14 @@ SECTION ROLES:
 
 8. talkingPoints
 - Advisor meeting agenda only.
+- Return exactly 4 bullets, one sentence each, in this conversation order (do not number them in the strings):
+  a) Grounding: confirm statement period, rough total, and whether major accounts are missing from uploads.
+  b) Registration: tax wrappers (traditional vs taxable vs Roth) using the registration summary—qualitative, not tax advice.
+  c) Narrative then sleeves: executive story then current vs proposed allocation roles.
+  d) Diagnostics: scores and illustrative stress only after context; then red flags versus overlap as distinct jobs; translate impact before strategy.
 - Brief and advisor-facing.
 - This is not intended to appear as the final client report section if Portfolio Highlights is used instead.
-- No repeated full analysis.
+- No repeated full analysis; do not paste synopsis sentences verbatim.
 
 9. advisorOpeningScript
 - Advisor-facing.

@@ -58,7 +58,7 @@ export function normalizeRegistrationType(raw: unknown): RegistrationBucket {
 export function registrationLabel(t: RegistrationBucket): string {
   switch (t) {
     case "qualified":
-      return "Traditional / tax-deferred";
+      return "Qualified";
     case "non_qualified":
       return "Non-qualified (taxable)";
     case "roth":
