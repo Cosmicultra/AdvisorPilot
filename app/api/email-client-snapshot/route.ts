@@ -84,6 +84,9 @@ type AdvisorProfileRecord = {
   office_phone?: string | null;
   cell_phone?: string | null;
   website?: string | null;
+  logo_url?: string | null;
+  disclosures_text?: string | null;
+  disclosures_image_url?: string | null;
 };
 
 type SessionWithAccessToken = Awaited<ReturnType<typeof getServerSession>> & {
@@ -204,6 +207,49 @@ function buildHtmlSignature(profile: AdvisorProfileRecord | null, fallbackSignat
   }
 
   return parts.join("<br />");
+}
+
+const SIGNATURE_LOGO_IMG_STYLE =
+  "max-width:220px;width:100%;height:auto;display:block;border:0;outline:none;text-decoration:none;";
+const DISCLOSURES_IMG_STYLE =
+  "max-width:480px;width:100%;height:auto;display:block;border:0;outline:none;text-decoration:none;";
+
+function appendBrandingToHtmlSignature(coreHtml: string, profile: AdvisorProfileRecord | null): string {
+  if (!profile) return coreHtml;
+  const parts: string[] = [coreHtml];
+  const logo = clean(profile.logo_url);
+  if (logo) {
+    parts.push(
+      `<div style="margin-top:14px;"><img src="${escapeHtml(logo)}" alt="" width="220" style="${SIGNATURE_LOGO_IMG_STYLE}" /></div>`
+    );
+  }
+  const discText = clean(profile.disclosures_text);
+  if (discText) {
+    const discHtml = escapeHtml(discText).replace(/\r\n|\n|\r/g, "<br />");
+    parts.push(
+      `<div style="margin-top:14px;font-size:11px;line-height:1.45;color:#64748b;">${discHtml}</div>`
+    );
+  }
+  const discImg = clean(profile.disclosures_image_url);
+  if (discImg) {
+    parts.push(
+      `<div style="margin-top:10px;"><img src="${escapeHtml(discImg)}" alt="Disclosures" width="480" style="${DISCLOSURES_IMG_STYLE}" /></div>`
+    );
+  }
+  return parts.join("");
+}
+
+function appendBrandingToPlainSignature(plain: string, profile: AdvisorProfileRecord | null): string {
+  if (!profile) return plain;
+  const extra: string[] = [];
+  const logo = clean(profile.logo_url);
+  if (logo) extra.push(`Logo: ${logo}`);
+  const discText = clean(profile.disclosures_text);
+  if (discText) extra.push(discText);
+  const discImg = clean(profile.disclosures_image_url);
+  if (discImg) extra.push(`Disclosures image: ${discImg}`);
+  if (!extra.length) return plain;
+  return `${plain}\n\n${extra.join("\n\n")}`;
 }
 
 async function getAdvisorProfile(ownerEmail: string): Promise<AdvisorProfileRecord | null> {
@@ -407,6 +453,28 @@ function buildEmailWithAttachment(params: {
   return messageParts.join("\r\n");
 }
 
+function gmailSendNeedsGoogleReconnect(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const o = err as Record<string, unknown>;
+  const response = o.response as { status?: number; data?: { error?: string; error_description?: string } } | undefined;
+  const status = response?.status;
+  if (status === 401 || status === 403) return true;
+  const dataErr = String(response?.data?.error || "");
+  const dataDesc = String(response?.data?.error_description || "");
+  if (/invalid_grant|unauthorized_client|invalid_token|insufficient/i.test(dataErr + dataDesc)) return true;
+  const msg = String(o.message || err);
+  if (
+    /invalid_grant|invalid[_ ]token|Token has been expired|token expired|Invalid Credentials|UNAUTHENTICATED|Insufficient Permission|insufficient authentication scopes|no access token|401|403/i.test(
+      msg
+    )
+  ) {
+    return true;
+  }
+  const errCode = o.code;
+  if (errCode === 401 || errCode === "401" || errCode === 403 || errCode === "403") return true;
+  return false;
+}
+
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -415,7 +483,11 @@ export async function POST(req: Request) {
 
     if (!session || !accessToken) {
       return NextResponse.json(
-        { error: "You must sign in with Google before sending email." },
+        {
+          error:
+            "Google is not connected or your Gmail send session expired. Use “Reconnect Google for Gmail” on the report page, then try again.",
+          needsGoogleReconnect: true,
+        },
         { status: 401 }
       );
     }
@@ -453,8 +525,14 @@ export async function POST(req: Request) {
         : "review the portfolio together and confirm it aligns with your goals.";
 
     const advisorProfile = await getAdvisorProfile(senderEmail);
-    const plainSignature = buildPlainSignature(advisorProfile, body?.emailSignature, body?.calendarLink);
-    const htmlSignature = buildHtmlSignature(advisorProfile, body?.emailSignature, body?.calendarLink);
+    const plainSignature = appendBrandingToPlainSignature(
+      buildPlainSignature(advisorProfile, body?.emailSignature, body?.calendarLink),
+      advisorProfile
+    );
+    const htmlSignature = appendBrandingToHtmlSignature(
+      buildHtmlSignature(advisorProfile, body?.emailSignature, body?.calendarLink),
+      advisorProfile
+    );
 
     const emailBodies =
       emailVariant === "follow_up"
@@ -481,6 +559,7 @@ export async function POST(req: Request) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...(req.headers.get("cookie") ? { Cookie: req.headers.get("cookie")! } : {}),
       },
       body: JSON.stringify({
         ...body,
@@ -508,6 +587,7 @@ export async function POST(req: Request) {
       auth: oauth2Client,
     });
 
+    // Single MIME message for Gmail `users.messages.send` (see `buildEmailWithAttachment`).
     const rawMessage = buildEmailWithAttachment({
       from: senderEmail,
       to,
@@ -518,12 +598,28 @@ export async function POST(req: Request) {
       filename: "Client_Snapshot.pdf",
     });
 
-    await gmail.users.messages.send({
-      userId: "me",
-      requestBody: {
-        raw: base64UrlEncode(rawMessage),
-      },
-    });
+    try {
+      await gmail.users.messages.send({
+        userId: "me",
+        requestBody: {
+          raw: base64UrlEncode(rawMessage),
+        },
+      });
+    } catch (sendErr: unknown) {
+      console.error("GMAIL SEND ERROR:", sendErr);
+      const reconnect = gmailSendNeedsGoogleReconnect(sendErr);
+      const fallbackMsg =
+        sendErr instanceof Error ? sendErr.message : "Gmail rejected the send request.";
+      return NextResponse.json(
+        {
+          error: reconnect
+            ? "Gmail could not send with your saved Google connection. Reconnect Google below (Consent may ask you to allow sending again), then try “Send via Gmail” once more."
+            : fallbackMsg,
+          needsGoogleReconnect: reconnect,
+        },
+        { status: reconnect ? 401 : 502 }
+      );
+    }
 
     await writeAuditEvent({
       ownerEmail: normalizeEmail(senderEmail),
@@ -560,10 +656,18 @@ export async function POST(req: Request) {
     });
   } catch (err: unknown) {
     console.error("EMAIL CLIENT SNAPSHOT ERROR:", err);
+    const reconnect = gmailSendNeedsGoogleReconnect(err);
 
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to send Client Snapshot email." },
-      { status: 500 }
+      {
+        error: reconnect
+          ? "Gmail could not send with your saved Google connection. Reconnect Google on the report page, then try again."
+          : err instanceof Error
+            ? err.message
+            : "Failed to send Client Snapshot email.",
+        needsGoogleReconnect: reconnect,
+      },
+      { status: reconnect ? 401 : 500 }
     );
   }
 }

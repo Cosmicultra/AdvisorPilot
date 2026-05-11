@@ -90,6 +90,8 @@ alter table public.advisorpilot_advisor_profiles
   add column if not exists office_phone text,
   add column if not exists cell_phone text,
   add column if not exists website text,
+  add column if not exists disclosures_text text,
+  add column if not exists disclosures_image_url text,
   add column if not exists created_at timestamptz not null default now(),
   add column if not exists updated_at timestamptz not null default now();
 
@@ -315,6 +317,10 @@ with check (owner_user_id = auth.uid() or lower(owner_email) = lower(coalesce(au
 insert into storage.buckets (id, name, public)
 values ('advisorpilot-statements', 'advisorpilot-statements', false)
 on conflict (id) do update set public = false;
+
+insert into storage.buckets (id, name, public)
+values ('advisorpilot-advisor-branding', 'advisorpilot-advisor-branding', true)
+on conflict (id) do update set public = true;
 
 drop policy if exists "advisorpilot_storage_select_own" on storage.objects;
 drop policy if exists "advisorpilot_storage_insert_own" on storage.objects;

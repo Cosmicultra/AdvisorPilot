@@ -8,16 +8,16 @@ export const LIVE_INTAKE_OPENING_SCRIPT = `Hi, how are you? I'm {{ADVISOR_FIRST}
  * Asked after the main goal is captured, before Statement Capture.
  * Covers paper vs advisor upload vs digital link to the email from the form.
  */
-export const LIVE_INTAKE_HANDOFF_QUESTION_SCRIPT = `How do you plan on giving us your statements? Do you have a copy of the paper statement for the advisor? Or are we going to upload one? If you have it digitally, I can send a link right now to the email you used at the beginning of this form — you can upload directly through that link.`;
+export const LIVE_INTAKE_HANDOFF_QUESTION_SCRIPT = `How do you plan on giving us your statements? Do you have a copy of the paper statement for the advisor? Or are we going to upload one? If you have it digitally, I can send a link right now to the email you used at the beginning of this form, and you can upload directly through that link.`;
 
 /** After they choose paper / in-person statement with the advisor. Use {{ADVISOR_FIRST}}. */
-export const LIVE_INTAKE_PAPER_SIGNOFF_SCRIPT = `Well, {{ADVISOR_FIRST}}, it sounds like you've got it from here. I'll sign off — thank you both.`;
+export const LIVE_INTAKE_PAPER_SIGNOFF_SCRIPT = `Well, {{ADVISOR_FIRST}}, it sounds like you've got it from here. I'll sign off. Thank you both.`;
 
 /** Right before minting the link and sending email (digital path). */
-export const LIVE_INTAKE_DIGITAL_ACK_SCRIPT = `Got it — I'm creating your secure upload link and emailing it to the address we saved at the start of the form. One moment.`;
+export const LIVE_INTAKE_DIGITAL_ACK_SCRIPT = `Got it. I'm creating your secure upload link and emailing it to the address we saved at the start of the form. One moment.`;
 
 /** After other paths (e.g. advisor uploads on this device). Use {{FIRST_NAME}}. */
-export const LIVE_INTAKE_UPLOAD_CLOSING_SCRIPT = `Perfect — {{FIRST_NAME}}, we're opening Statement Capture next. You'll see upload options on the next screen.`;
+export const LIVE_INTAKE_UPLOAD_CLOSING_SCRIPT = `Perfect. {{FIRST_NAME}}, we're opening Statement Capture next. You'll see upload options on the next screen.`;
 
 export type LiveIntakeHandoffAction = "paper" | "digital_email" | "advisor_upload" | "none";
 
@@ -31,7 +31,7 @@ export function personalizeLiveIntakeScript(
   return template
     .replace(/\{\{FIRST_NAME\}\}/g, clientFirstNameSalutation(client))
     .replace(/\{\{ADVISOR_FIRST\}\}/g, firstName)
-    /** Backward compat — older templates referenced full name. */
+    /** Backward compat: older templates referenced full name. */
     .replace(/\{\{ADVISOR_NAME\}\}/g, fullName);
 }
 
@@ -95,16 +95,16 @@ export function buildStepConfirmationScript(stepIndex: number, client: IntakeCli
     case 4: {
       const sr = client.spouseRetirementAge.trim();
       if (client.married && sr) {
-        return `Retiring at age ${retire || "—"} for the client and ${sr} for the spouse. Is that right?`;
+        return `Retiring at age ${retire || "not set"} for the client and ${sr} for the spouse. Is that right?`;
       }
-      return `Planning to retire at age ${retire || "—"}. Is that right?`;
+      return `Planning to retire at age ${retire || "not set"}. Is that right?`;
     }
     case 5:
       return spend
         ? `For spendable income in retirement, I'm using about ${spend} dollars per year. Does that match?`
         : `Did I capture the retirement income need correctly?`;
     case 6:
-      if (!client.takingSocialSecurity) return `Got it — not taking Social Security yet. We'll move on. Sound right?`;
+      if (!client.takingSocialSecurity) return `Got it. Not taking Social Security yet. We'll move on. Sound right?`;
       if (client.married && ssClient && ssSpouse) {
         return `Social Security about ${ssClient} a month for the client and ${ssSpouse} for the spouse. Does that match?`;
       }
@@ -116,7 +116,7 @@ export function buildStepConfirmationScript(stepIndex: number, client: IntakeCli
         const sug = client.riskProfileSuggested.replace(/-/g, " ").trim();
         if (client.riskProfile.trim() && client.riskProfile !== client.riskProfileSuggested) {
           const fin = client.riskProfile.replace(/-/g, " ").trim();
-          return `We're recording a ${fin} risk profile for this review—the quick assessment suggested ${sug}. Sound right?`;
+          return `We're recording a ${fin} risk profile for this review. The quick assessment suggested ${sug}. Sound right?`;
         }
         return `We're recording a ${risk} risk profile from the quick assessment. Sound right?`;
       }
@@ -135,7 +135,7 @@ export function buildStepConfirmationScript(stepIndex: number, client: IntakeCli
 
 /**
  * Lightweight client-side yes/no classifier for the confirmation reply.
- * If unclear, we treat the response as a correction and re-run as a normal turn —
+ * If unclear, we treat the response as a correction and re-run as a normal turn so
  * the LLM can then update fields based on what they actually said.
  */
 export function classifyConfirmationReply(text: string): "yes" | "no" {

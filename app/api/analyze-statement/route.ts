@@ -14,8 +14,15 @@ import {
   resolveFromSecuritiesMaster,
   securitiesMasterFeatureEnabled,
 } from "@/lib/securities-master";
+import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import { writeAuditEvent } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
+
+function formDemoMode(formData: FormData): boolean {
+  const v = formData.get("demoMode");
+  return v === "1" || v === "true";
+}
 
 async function enrichHoldingsWithSecuritiesMaster(
   holders: Record<string, unknown>[]
@@ -74,6 +81,15 @@ async function enrichHoldingsWithSecuritiesMaster(
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
+    const demoMode = formDemoMode(formData);
+    const identity = await resolveAdvisorIdentity(request);
+    if (!demoMode && !identity) {
+      return NextResponse.json(
+        { error: "Sign in to extract holdings from statements." },
+        { status: 401 }
+      );
+    }
+
     const files = formData
       .getAll("files")
       .filter((value): value is File => value instanceof File);
@@ -111,6 +127,20 @@ export async function POST(request: Request) {
       const tagged = await enrichHoldingsWithSecuritiesMaster(withMeta);
       allHoldings.push(...tagged);
     }
+
+    await writeAuditEvent({
+      ownerEmail: identity?.email ?? "unauthenticated.demo",
+      ownerUserId: identity?.userId ?? null,
+      actorEmail: identity?.email ?? null,
+      action: "statement.extracted",
+      entityType: "statement",
+      metadata: {
+        demoMode,
+        fileCount: files.length,
+        holdingsCount: allHoldings.length,
+        unauthenticated: !identity,
+      },
+    });
 
     return NextResponse.json({ holdings: allHoldings });
   } catch (error: unknown) {

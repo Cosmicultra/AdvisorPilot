@@ -38,7 +38,7 @@ export type IntakeClient = {
   riskProfileSuggested: string;
   calibration: string;
   goal: string;
-  /** Client's email — used as the *To:* address for Client Snapshot / follow-up (not the advisor's login). */
+  /** Client's email: used as the To: address for Client Snapshot / follow-up (not the advisor's login). */
   advisorEmail: string;
   married: boolean;
   spouseFirstName: string;
@@ -92,7 +92,7 @@ export const INTAKE_STEPS: IntakeStepMeta[] = [
     eyebrow: "Question 3",
     title: "What was your Adjusted Gross Income (AGI) on your most recent tax return?",
     helper:
-      "Use the AGI from the client's federal return (Form 1040, line 11 on recent-year returns). For illustrative planning only—not tax advice.",
+      "Use the AGI from the client's federal return (Form 1040, line 11 on recent-year returns). For illustrative planning only, not tax advice.",
     fields: ["adjustedGrossIncomeAnnual"],
   },
   {
@@ -128,7 +128,7 @@ export const INTAKE_STEPS: IntakeStepMeta[] = [
     eyebrow: "Question 8",
     title: "What is their risk profile?",
     helper:
-      "First confirm whether they already have a stated profile (IPS, firm questionnaire, or prior onboarding). If yes, pick the matching tier. If not, use the short on-screen assessment—illustrative for discussion, not a substitute for your firm's full risk process. Either path feeds the same calibration engine.",
+      "First confirm whether they already have a stated profile (IPS, firm questionnaire, or prior onboarding). If yes, pick the matching tier. If not, use the short on-screen assessment. It is illustrative for discussion, not a substitute for your firm's full risk process. Either path feeds the same calibration engine.",
     fields: ["riskProfile", "riskIntakeKnown", "riskIntakeScreen", "riskQuizAnswers", "riskProfileSuggested"],
   },
   {
@@ -136,7 +136,7 @@ export const INTAKE_STEPS: IntakeStepMeta[] = [
     eyebrow: "Question 9",
     title: "How should AdvisorPilot calibrate the review?",
     helper:
-      "Stated risk profile is the default fit after Question 8. Age-based default ignores that tier and uses age only. Retirement income goal emphasizes income stability. Custom leaves room for your own model—even if you used the in-app risk assessment, you may still pick age-based or custom here if appropriate.",
+      "Stated risk profile is the default fit after Question 8. Age-based default ignores that tier and uses age only. Retirement income goal emphasizes income stability. Custom leaves room for your own model. Even if you used the in-app risk assessment, you may still pick age-based or custom here if appropriate.",
     fields: ["calibration"],
   },
   {

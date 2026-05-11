@@ -1,5 +1,5 @@
 /**
- * Short label for the Matched holding dropdown — ticker-style symbol + share class only.
+ * Short label for the Matched holding dropdown: ticker-style symbol + share class only.
  * The underlying option string stays full-length for storage; this is display-only.
  */
 
@@ -61,7 +61,7 @@ export function formatMatchedHoldingOptionLabel(raw: string): string {
   const ticker = extractTicker(s);
   const share = extractShareClass(s);
 
-  if (ticker && share) return `${ticker} — ${share}`;
+  if (ticker && share) return `${ticker}: ${share}`;
   if (ticker) return ticker;
   if (share) return share;
   return s.length > 36 ? `${s.slice(0, 33)}...` : s;

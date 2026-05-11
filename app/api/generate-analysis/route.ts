@@ -6,6 +6,8 @@ import {
   analysisResearchModel,
   logOpenAiPass,
 } from "@/lib/openai-route-models";
+import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import { writeAuditEvent } from "@/lib/audit-log";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -13,7 +15,16 @@ const openai = new OpenAI({
 
 export async function POST(req: Request) {
   try {
-    const { client, holdings, allocation, totalValue } = await req.json();
+    const body = await req.json();
+    const { client, holdings, allocation, totalValue } = body;
+    const demoMode = Boolean(body?.demoMode);
+    const identity = await resolveAdvisorIdentity(req);
+    if (!demoMode && !identity) {
+      return NextResponse.json(
+        { error: "Sign in to generate portfolio analysis." },
+        { status: 401 }
+      );
+    }
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
@@ -279,6 +290,25 @@ RISK INTAKE AND QUESTIONNAIRE (use Client JSON fields riskIntakeKnown, riskIntak
     });
 
     const parsed = JSON.parse(jsonResponse.output_text || "{}");
+
+    const clientId = typeof body?.clientId === "string" ? body.clientId : null;
+    const holdingsLen = Array.isArray(holdings) ? holdings.length : 0;
+
+    await writeAuditEvent({
+      ownerEmail: identity?.email ?? "unauthenticated.demo",
+      ownerUserId: identity?.userId ?? null,
+      actorEmail: identity?.email ?? null,
+      action: "analysis.completed",
+      entityType: "analysis",
+      entityId: clientId,
+      metadata: {
+        demoMode,
+        holdingsCount: holdingsLen,
+        researchModel: researchModel,
+        jsonModel: jsonModel,
+        unauthenticated: !identity,
+      },
+    });
 
     return NextResponse.json({
       synopsis: parsed.synopsis || "",

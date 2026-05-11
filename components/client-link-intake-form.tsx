@@ -56,7 +56,7 @@ function SwitchRow({
 
 const CALIBRATION_CHOICES: { value: string; title: string; desc: string }[] = [
   ["risk-profile", "Use stated risk profile", "Best default once you confirm Question 8."],
-  ["age-default", "Run default based on age", "Uses age only—ignores the tier from Question 8."],
+  ["age-default", "Run default based on age", "Uses age only; ignores the tier from Question 8."],
   ["income-goal", "Retirement income goal", "Emphasizes income stability for near-retirees."],
   ["custom", "Custom advisor model", "Your advisor can fine-tune allocations after upload."],
 ].map(([value, title, desc]) => ({ value: String(value), title: String(title), desc: String(desc) }));
@@ -100,7 +100,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
     <div className="space-y-6">
       <p className="text-sm text-slate-600">
         Confirm or fill in each section the same way you would with your advisor. If your advisor entered details already,
-        they will appear below—please correct anything that changed.
+        they will appear below. Please correct anything that changed.
       </p>
 
       {INTAKE_STEPS.map((step) => (
@@ -143,7 +143,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                     autoComplete="email"
                   />
                   <p className="mt-1 text-xs text-slate-500">
-                    This stays with your advisor for follow-up—you can leave it blank if unsure.
+                    This stays with your advisor for follow-up. You can leave it blank if unsure.
                   </p>
                 </div>
                 <SwitchRow
@@ -273,7 +273,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="mt-1 text-xs text-slate-500">Illustrative only—not a tax determination.</p>
+                <p className="mt-1 text-xs text-slate-500">Illustrative only, not a tax determination.</p>
               </div>
             )}
 

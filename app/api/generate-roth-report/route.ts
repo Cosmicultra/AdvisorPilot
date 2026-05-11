@@ -21,13 +21,13 @@ const theme = {
   gold: rgb(0.78, 0.62, 0.28),
   stayBar: rgb(0.12, 0.36, 0.55),
   stayBarSoft: rgb(0.75, 0.84, 0.92),
-  /** Roth conversion pathway bars — distinct green vs. blue “stay” bars. */
+  /** Roth conversion pathway bars: distinct green vs. blue “stay” bars. */
   rothBar: rgb(0.12, 0.52, 0.32),
   rothBarSoft: rgb(0.85, 0.95, 0.88),
 };
 
 const PAIRED_BAR_INTRO_TEXT =
-  "Paired bars use a common scale within each metric (longer bar equals larger modeled value). This view relies on simplifying assumptions — it is not predictive of actual taxes, Medicare surcharges, or investment returns.";
+  "Paired bars use a common scale within each metric (longer bar equals larger modeled value). This view relies on simplifying assumptions: it is not predictive of actual taxes, Medicare surcharges, or investment returns.";
 
 const ROTH_REPORT_SCOPE_DISCLOSURE =
   "This report compares an illustrative current-allocation path with a modeled Roth conversion path. Assumptions, inputs, limitations, and other disclosures follow below.";
@@ -80,7 +80,7 @@ function wrapPlainText(lineMeasurer: (s: string) => number, text: string, size: 
   return out;
 }
 
-/** Horizontal paired bars per metric — stay vs Roth (values share row scale). */
+/** Horizontal paired bars per metric: stay vs Roth (values share row scale). */
 function drawScenarioBarBlock(
   pg: PDFPage,
   topY: number,
@@ -512,7 +512,7 @@ export async function POST(req: Request) {
     drawTable(rothHeaders, [...rothBody, rothFooter], rothW);
 
     const disclaimerText =
-      "Hypothetical illustration only — not tax, legal, investment, or Medicare advice. Actual outcomes depend on statutes, filings, withholding, Roth basis rules, beneficiary designations, enrollment timing for Medicare-related surcharges, and market results. Confirm all material facts with counsel and an independent CPA prior to recommending or executing transactions.";
+      "Hypothetical illustration only: not tax, legal, investment, or Medicare advice. Actual outcomes depend on statutes, filings, withholding, Roth basis rules, beneficiary designations, enrollment timing for Medicare-related surcharges, and market results. Confirm all material facts with counsel and an independent CPA prior to recommending or executing transactions.";
     const discSize = 6.85;
     const discLineH = 9;
     const discLines = wrapPlainText((t) => widthOf(t, discSize), disclaimerText, discSize, 534);

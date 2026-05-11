@@ -323,7 +323,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
-      message: "Thank you — your advisor will review this shortly.",
+      message: "Thank you. Your advisor will review this shortly.",
       reviewId: inserted?.id,
     });
   } catch (err: unknown) {

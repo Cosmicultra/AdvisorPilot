@@ -22,6 +22,8 @@ type AdvisorProfileRecord = {
   office_phone?: string | null;
   cell_phone?: string | null;
   website?: string | null;
+  disclosures_text?: string | null;
+  disclosures_image_url?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -32,6 +34,11 @@ function missingSupabaseEnv() {
 
 function errorMessage(err: unknown, fallback: string) {
   return err instanceof Error ? err.message : fallback;
+}
+
+function nullableTrim(value: unknown): string | null {
+  const s = String(value ?? "").trim();
+  return s || null;
 }
 
 function mapProfile(record: AdvisorProfileRecord) {
@@ -47,6 +54,8 @@ function mapProfile(record: AdvisorProfileRecord) {
     officePhone: record.office_phone || "",
     cellPhone: record.cell_phone || "",
     website: record.website || "",
+    disclosuresText: record.disclosures_text || "",
+    disclosuresImageUrl: record.disclosures_image_url || "",
     createdAt: record.created_at,
     updatedAt: record.updated_at,
   };
@@ -98,7 +107,7 @@ export const POST = async (req: Request) => {
       owner_email: identity.email,
       owner_user_id: identity.userId,
       email_signature: String(body?.emailSignature || "").trim(),
-      logo_url: body?.logoUrl || null,
+      logo_url: nullableTrim(body?.logoUrl),
       advisor_name: String(body?.advisorName || "").trim() || null,
       advisor_title: String(body?.advisorTitle || "").trim() || null,
       advisor_license: String(body?.advisorLicense || "").trim() || null,
@@ -107,6 +116,8 @@ export const POST = async (req: Request) => {
       office_phone: String(body?.officePhone || "").trim() || null,
       cell_phone: String(body?.cellPhone || "").trim() || null,
       website: String(body?.website || "").trim() || null,
+      disclosures_text: String(body?.disclosuresText || "").trim() || null,
+      disclosures_image_url: nullableTrim(body?.disclosuresImageUrl),
     };
 
     const { data, error } = await supabaseAdmin

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
+import { LineCapStyle, PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { Buffer } from "buffer";
 import fs from "fs/promises";
 import path from "path";
@@ -14,6 +14,8 @@ import {
   scenarioProposedPortfolioReturnDecimal,
   scenarioProposedPortfolioSingleYearReturnDecimal,
 } from "@/lib/ten-year-scenario-models";
+import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import { writeAuditEvent } from "@/lib/audit-log";
 
 type ReportMode = "client" | "advisor";
 
@@ -63,6 +65,52 @@ function stringItems(value: unknown, limit = 12) {
   return uniqueItems(Array.isArray(value) ? value : [], limit);
 }
 
+function donutPathFmt(n: number) {
+  return String(Number(Math.round(n * 10_000) / 10_000));
+}
+
+/**
+ * Must match `ProfessionalDonutChart` in app/page.tsx (viewBox 190×190, rotate -90, stroke arcs).
+ * pdf-lib fills SVG arcs unreliably here; we use the same stroke-ring technique as the app.
+ */
+const SNAPSHOT_DONUT = {
+  view: 190,
+  cx: 95,
+  cy: 95,
+  r: 72,
+  stroke: 22,
+  holeR: 45,
+} as const;
+
+function snapshotDonutPt(radius: number, degCwFromTop: number) {
+  const rad = (degCwFromTop * Math.PI) / 180;
+  return {
+    x: SNAPSHOT_DONUT.cx + radius * Math.sin(rad),
+    y: SNAPSHOT_DONUT.cy - radius * Math.cos(rad),
+  };
+}
+
+/** Open stroke path along outer circle from degStart → degEnd (clockwise from top). */
+function snapshotDonutStrokeArcPath(degStart: number, degEnd: number): string {
+  const { r } = SNAPSHOT_DONUT;
+  const d = ((degEnd - degStart) % 360 + 360) % 360;
+  if (d < 0.000_1) return "";
+  const p1 = snapshotDonutPt(r, degStart);
+  const p2 = snapshotDonutPt(r, degEnd);
+  const large = d > 180 ? 1 : 0;
+  const f = donutPathFmt;
+  return `M ${f(p1.x)} ${f(p1.y)} A ${f(r)} ${f(r)} 0 ${large} 1 ${f(p2.x)} ${f(p2.y)}`;
+}
+
+/** Full circle as two half-arcs (grey track). */
+function snapshotDonutFullRingPath(): string {
+  const { cx, cy, r } = SNAPSHOT_DONUT;
+  const f = donutPathFmt;
+  const top = f(cy - r);
+  const bot = f(cy + r);
+  return `M ${f(cx)} ${top} A ${f(r)} ${f(r)} 0 1 1 ${f(cx)} ${bot} A ${f(r)} ${f(r)} 0 1 1 ${f(cx)} ${top}`;
+}
+
 export async function POST(req: Request) {
   try {
     const body = asRecord(await req.json());
@@ -76,6 +124,16 @@ export async function POST(req: Request) {
     const scoresInput = asRecord(body.scores);
     const totalValue = Number(body?.totalValue || 0);
     const holdings = Array.isArray(body?.holdings) ? body.holdings : [];
+
+    const demoMode = Boolean(body?.demoMode);
+    const identity = await resolveAdvisorIdentity(req);
+    if (!demoMode && !identity) {
+      return NextResponse.json({ error: "Sign in to generate PDF reports." }, { status: 401 });
+    }
+
+    const clientIdForAudit = typeof body?.clientId === "string" ? body.clientId : null;
+    const auditOwnerEmail = identity?.email ?? "unauthenticated.demo";
+    const auditOwnerUserId = identity?.userId ?? null;
 
     function asNumber(value: unknown, fallback = 0) {
       const n = Number(value);
@@ -400,6 +458,13 @@ export async function POST(req: Request) {
     const rule = rgb(0.78, 0.8, 0.84);
     const ruleStrong = rgb(0.55, 0.58, 0.62);
     const white = rgb(1, 1, 1);
+    /** Allocation donut — match app `allocationData` / `allocationDataCurrent` (ProfessionalDonutChart). */
+    const donutEquity = rgb(15 / 255, 118 / 255, 110 / 255);
+    const donutFixed = rgb(29 / 255, 78 / 255, 216 / 255);
+    const donutCash = rgb(201 / 255, 151 / 255, 0);
+    const donutOther = rgb(100 / 255, 116 / 255, 139 / 255);
+    /** #e5e7eb — same as ProfessionalDonutChart base stroke. */
+    const donutTrack = rgb(229 / 255, 231 / 255, 235 / 255);
 
     const MARGIN = 44;
     const CONTENT_W = 612 - MARGIN * 2;
@@ -1093,8 +1158,8 @@ export async function POST(req: Request) {
       const lineA =
         mode === "client"
           ? "These scores illustrate sustainability under modeled scenarios only. They are not predictions of outcomes or suitability."
-          : "Illustrative sustainability scores based on seeded Monte Carlo simulations. Not suitability, not predictive. Full methodology follows in Important information about this report.";
-      const lineB = "Details on assumptions, hypothetical stress paths, narrative sources, and limitations appear at the end of this document.";
+          : "Illustrative sustainability scores based on seeded Monte Carlo simulations. Not suitability, not predictive. Full methodology follows in Disclosures.";
+      const lineB = "Details on assumptions, hypothetical stress paths, narrative sources, and limitations appear at the end of this document under Disclosures.";
       const fs = 6.5;
       const lineGap = 3.8;
       const cueH = 36;
@@ -1104,11 +1169,32 @@ export async function POST(req: Request) {
       y -= 8;
     }
 
-    /** Terminal appendix with client vs advisor depth; renders after holdings table (if any). */
+    /** Terminal disclosures with client vs advisor depth; renders after holdings table (if any). */
     function drawImportantInformationAppendix() {
       newPage();
-      drawSectionEyebrow("Appendix");
-      sectionTitle("Important information about this report", "Methodology, data, limitations, and supervisory context.");
+      drawSectionEyebrow("Disclosures");
+      /** Tighter than `sectionTitle` so the full disclosures block fits on one page in advisor (long-form) mode. */
+      function drawDisclosuresHead(title: string, subtitle: string) {
+        page.drawRectangle({ x: MARGIN, y: y - 8, width: 2.5, height: 10, color: stayBar });
+        page.drawText(cleanText(title), { x: MARGIN + 8, y, size: 10, font: bold, color: navyLight });
+        y -= 14;
+        page.drawLine({
+          start: { x: MARGIN, y: y + 6 },
+          end: { x: MARGIN + CONTENT_W, y: y + 6 },
+          thickness: 0.4,
+          color: rule,
+        });
+        y -= 8;
+        page.drawText(cleanText(subtitle), { x: MARGIN, y, size: 6.9, font: regular, color: muted });
+        y -= 9;
+      }
+
+      drawDisclosuresHead("Important information about this report", "Methodology, data, limitations, and supervisory context.");
+
+      /** Slightly wider measure and lower floor recover vertical space without touching the footer band. */
+      const disclosureFloorY = 66;
+      const disclosureTextX = MARGIN - 7;
+      const disclosureWrapW = CONTENT_W + 14;
 
       const riskKey = String(client?.riskProfile || "moderate").toLowerCase();
       const withdrawalRule =
@@ -1180,7 +1266,7 @@ export async function POST(req: Request) {
               : [
                   "Decade rows: ten-year geometric mean (CAGR) based on calendar-year returns. Current portfolio paths map each holding to equity (S&P 500 total return calibration when no resolved ticker history), fixed (Bloomberg US Aggregate / AGG proxy), or cash (annual-average 3-month T-bill proxy); unclassified sleeves use a 50/50 equity/bond blend in the scenario engine unless refined.",
                   "Proposed portfolio uses the same index proxies at target sleeve weights with static rebalancing logic as implemented in code.",
-                  `The single-year drawdown row uses ${BIGGEST_DRAWDOWN_SCENARIO_YEAR} with the firm S&P equity calibration (-36.55% for that year on the equity sleeve) blended with bond and cash proxies for that year—one calendar year only, not a multi-year drawdown path.`,
+                  `The single-year drawdown row uses ${BIGGEST_DRAWDOWN_SCENARIO_YEAR} with the firm S&P equity calibration (-36.55% for that year on the equity sleeve) blended with bond and cash proxies for that year: one calendar year only, not a multi-year drawdown path.`,
                   "Limitation: actual funds, active management, fees, taxes, and timing differ from these mechanical blends.",
                 ],
         },
@@ -1195,38 +1281,39 @@ export async function POST(req: Request) {
           title: "Hypothetical performance and supervisory note",
           paragraphs: [
             "Where this report illustrates hypothetical allocations, simulations, back-tests, or stress paths, outcomes depend on modeled assumptions rather than realized client-specific results.",
-            "Illustrative output must be supervised under your firm's policies—including how hypothetical performance may be communicated and documented.",
+            "Illustrative output must be supervised under your firm's policies, including how hypothetical performance may be communicated and documented.",
           ],
         },
       ];
 
-      const titleFs = 8.9;
-      const bodyFs = 7.05;
-      const bodyGap = 4.35;
-      const titleBottomMargin = 7;
-      const paraGapBelow = 9;
+      const titleFs = 7.85;
+      const titleLineLead = 2.35;
+      const bodyFs = 6.05;
+      const bodyGap = 2.45;
+      const titleBottomMargin = 3;
+      const paraGapBelow = 3.2;
 
       for (const chunk of commonChunks) {
-        const titleLines = wrapLinesToWidth(chunk.title, bold, titleFs, appendixWrapWidthPt);
-        const titleBlockH = titleLines.length * (titleFs + 4);
-        ensureBlock(titleBlockH + 24);
+        const titleLines = wrapLinesToWidth(chunk.title, bold, titleFs, disclosureWrapW);
+        const titleBlockH = titleLines.length * (titleFs + titleLineLead);
+        ensureBlock(titleBlockH + 10);
         let ty = y;
         for (const tl of titleLines) {
           page.drawText(cleanText(tl), { x: MARGIN, y: ty, size: titleFs, font: bold, color: navyLight });
-          ty -= titleFs + 4;
+          ty -= titleFs + titleLineLead;
         }
         y = ty - titleBottomMargin;
 
         for (const para of chunk.paragraphs) {
-          const lines = wrapLinesToWidth(para, regular, bodyFs, appendixWrapWidthPt);
+          const lines = wrapLinesToWidth(para, regular, bodyFs, disclosureWrapW);
           const blockH = lines.length * (bodyFs + bodyGap) + paraGapBelow;
-          if (y - blockH < FOOTER_SAFE_Y) {
+          if (y - blockH < disclosureFloorY) {
             newPage();
           }
-          y = drawWrappedTextToWidth(para, MARGIN, y, appendixWrapWidthPt, bodyFs, ink, regular, bodyGap);
+          y = drawWrappedTextToWidth(para, disclosureTextX, y, disclosureWrapW, bodyFs, ink, regular, bodyGap);
           y -= paraGapBelow;
         }
-        y -= 6;
+        y -= 2.5;
       }
     }
 
@@ -1237,18 +1324,25 @@ export async function POST(req: Request) {
       top: number,
       data: unknown,
       accent: RGB,
-      cardH = 124
+      cardH = 130,
+      opts?: { includeOther?: boolean }
     ) {
       const record = asRecord(data);
       const equity = asNumber(record.equity);
       const fixed = asNumber(record.fixedIncome);
       const cash = asNumber(record.cash);
+      const other = opts?.includeOther ? asNumber(record.other) : 0;
       const cardW = Math.floor((CONTENT_W - 12) / 2);
-      const values = [
-        { label: "Equity", value: equity, color: stayBar },
-        { label: "Fixed", value: fixed, color: accentSecondary },
-        { label: "Cash", value: cash, color: goldAccent },
+
+      const segmentsRaw = [
+        { label: "Equity", value: equity, color: donutEquity },
+        { label: "Fixed", value: fixed, color: donutFixed },
+        { label: "Cash", value: cash, color: donutCash },
+        ...(other > 0 ? [{ label: "Unclassified", value: other, color: donutOther }] : []),
       ];
+      let sum = segmentsRaw.reduce((s, it) => s + it.value, 0);
+      if (sum <= 0) sum = 1;
+      const segments = segmentsRaw.map((it) => ({ ...it, value: (it.value / sum) * 100 })).filter((it) => it.value > 0);
 
       const cardBottomY = top - cardH;
       page.drawRectangle({ x, y: cardBottomY, width: cardW, height: cardH, color: white, borderColor: rule, borderWidth: 0.35 });
@@ -1257,57 +1351,71 @@ export async function POST(req: Request) {
       page.drawText(title, { x: x + 12, y: top - 20, size: 10.5, font: bold, color: navyLight });
       page.drawText(subtitle, { x: x + 12, y: top - 34, size: 7, font: regular, color: muted });
 
-      const padSides = 12;
-      const labelSize = 8;
-      const pctSize = 8.2;
-      const barH = 3;
-      const barGapBelowLabel = 6;
-      const rowStride = 26;
-      const accentW = 2.5;
-      const accentH = 10;
+      /** Match ProfessionalDonutChart geometry; scale sizes the ring on the page. */
+      const scale = 0.4;
+      const donutCx = x + 42;
+      const donutCy = top - 72;
+      const pathBaseX = donutCx - scale * SNAPSHOT_DONUT.cx;
+      const pathBaseY = donutCy + scale * SNAPSHOT_DONUT.cy;
+      /**
+       * Stroke must stay in the same user units as the SVG path (see strokeWidth={22} in app).
+       * Do not multiply by `scale`: pdf-lib already scales the path, and line width is transformed too —
+       * using stroke * scale made the ring ~scale² thin on the page.
+       */
+      const strokeW = SNAPSHOT_DONUT.stroke * 1.08;
 
-      const barTrackW = cardW - padSides * 2 - 8;
-      const pctColX = x + cardW - padSides;
+      page.drawSvgPath(snapshotDonutFullRingPath(), {
+        x: pathBaseX,
+        y: pathBaseY,
+        scale,
+        borderWidth: strokeW,
+        borderColor: donutTrack,
+      });
 
-      let rowBaseline = top - 48;
-      for (const item of values) {
-        const barY = rowBaseline - barGapBelowLabel - barH;
+      let cumDeg = 0;
+      for (const seg of segments) {
+        const slice = (seg.value / 100) * 360;
+        const path = snapshotDonutStrokeArcPath(cumDeg, cumDeg + slice);
+        if (path) {
+          page.drawSvgPath(path, {
+            x: pathBaseX,
+            y: pathBaseY,
+            scale,
+            borderWidth: strokeW,
+            borderColor: seg.color,
+            borderLineCap: LineCapStyle.Round,
+          });
+        }
+        cumDeg += slice;
+      }
 
-        page.drawRectangle({
-          x: x + padSides,
-          y: rowBaseline - 2,
-          width: accentW,
-          height: accentH,
-          color: item.color,
-        });
-        page.drawText(item.label, { x: x + padSides + accentW + 6, y: rowBaseline, size: labelSize, font: regular, color: ink });
+      page.drawCircle({ x: donutCx, y: donutCy, size: SNAPSHOT_DONUT.holeR * scale, color: white });
 
-        const pct = `${item.value}%`;
+      const totalLabel = "Total";
+      const totalSize = 6.2;
+      const totalW = regular.widthOfTextAtSize(totalLabel, totalSize);
+      page.drawText(totalLabel, { x: donutCx - totalW / 2, y: donutCy + 9, size: totalSize, font: regular, color: muted });
+      const pctLabel = "100%";
+      const pctCenterSize = 11;
+      const tw = bold.widthOfTextAtSize(pctLabel, pctCenterSize);
+      page.drawText(pctLabel, { x: donutCx - tw / 2, y: donutCy - 6, size: pctCenterSize, font: bold, color: navy });
+
+      const outerVisual = (SNAPSHOT_DONUT.r + strokeW / 2) * scale;
+      const legendLeft = donutCx + outerVisual + 10;
+      const pctColRight = x + cardW - 12;
+      const labelSize = 7.6;
+      const pctSize = 8;
+      const rowStride = 22;
+      let rowY = top - 50;
+      for (const item of segmentsRaw) {
+        const pctRounded = Math.round((item.value / sum) * 100);
+        const sw = 3.2;
+        page.drawRectangle({ x: legendLeft, y: rowY - 1, width: sw, height: sw + 4, color: item.color });
+        page.drawText(item.label, { x: legendLeft + sw + 5, y: rowY, size: labelSize, font: regular, color: ink });
+        const pct = `${pctRounded}%`;
         const pw = bold.widthOfTextAtSize(pct, pctSize);
-        page.drawText(pct, {
-          x: pctColX - pw,
-          y: rowBaseline,
-          size: pctSize,
-          font: bold,
-          color: navy,
-        });
-
-        page.drawRectangle({
-          x: x + padSides,
-          y: barY,
-          width: barTrackW,
-          height: barH,
-          color: rgb(0.9, 0.93, 0.96),
-        });
-        page.drawRectangle({
-          x: x + padSides,
-          y: barY,
-          width: Math.max(barH, barTrackW * (item.value / 100)),
-          height: barH,
-          color: item.color,
-        });
-
-        rowBaseline -= rowStride;
+        page.drawText(pct, { x: pctColRight - pw, y: rowY, size: pctSize, font: bold, color: navy });
+        rowY -= rowStride;
       }
     }
 
@@ -1319,12 +1427,15 @@ export async function POST(req: Request) {
 
       const cardGap = 12;
       const cardW = Math.floor((CONTENT_W - cardGap) / 2);
-      const cardH = 124;
+      const otherN = asNumber(currentAllocation.other);
+      const cardH = otherN > 0 ? 136 : 130;
       const cardTopOffset = 0;
       const x1 = MARGIN;
       const x2 = MARGIN + cardW + cardGap;
       const cardTopY = y + cardTopOffset;
-      allocationCard("Current allocation", "Based on confirmed holdings", x1, cardTopY, currentAllocation, stayBar, cardH);
+      allocationCard("Current allocation", "Based on confirmed holdings", x1, cardTopY, currentAllocation, stayBar, cardH, {
+        includeOther: true,
+      });
       allocationCard("Proposed allocation", "Illustrative target mix for discussion", x2, cardTopY, targetAllocation, accentSecondary, cardH);
       const cardBottomY = cardTopY - cardH;
       y = cardBottomY - 22;
@@ -1437,6 +1548,23 @@ export async function POST(req: Request) {
     const totalP = pages.length;
     pages.forEach((p, i) => drawFooter(p, i + 1, totalP));
     const pdfBytes = await pdfDoc.save();
+
+    await writeAuditEvent({
+      ownerEmail: auditOwnerEmail,
+      ownerUserId: auditOwnerUserId,
+      actorEmail: identity?.email ?? null,
+      action: "report.generated",
+      entityType: "report",
+      entityId: clientIdForAudit,
+      metadata: {
+        demoMode,
+        mode,
+        holdingsCount: holdings.length,
+        totalValue,
+        filename: fileName,
+        unauthenticated: !identity,
+      },
+    });
 
     return new Response(Buffer.from(pdfBytes), {
       headers: {
