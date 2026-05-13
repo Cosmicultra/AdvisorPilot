@@ -118,6 +118,19 @@ export async function POST(request: Request) {
       .filter((value): value is File => value instanceof File);
     const legacyFile = formData.get("file");
     if (files.length === 0 && legacyFile instanceof File) files.push(legacyFile);
+
+    let filePageHints: string[] = [];
+    const hintsRaw = formData.get("filePageHints");
+    if (typeof hintsRaw === "string" && hintsRaw.trim()) {
+      try {
+        const parsed = JSON.parse(hintsRaw) as unknown;
+        if (Array.isArray(parsed)) {
+          filePageHints = parsed.map((x) => String(x ?? ""));
+        }
+      } catch {
+        filePageHints = [];
+      }
+    }
     const firstName = String(formData.get("firstName") || "").trim();
     const lastName = String(formData.get("lastName") || "").trim();
     const advisorEmail = String(formData.get("advisorEmail") || "").trim();
@@ -234,11 +247,17 @@ export async function POST(request: Request) {
     for (const [index, file] of files.entries()) {
       const bytes = Buffer.from(await file.arrayBuffer());
       const mimeType = file.type || "application/pdf";
+      const pageHint = filePageHints[index]?.trim() || "";
       const extracted = await extractHoldingsFromFileBuffer({
         fileName: file.name || `statement-${index + 1}.pdf`,
         mimeType,
         bytes,
-        clientContext: { ...clientContext, sourceFileName: file.name, sourceFileIndex: index + 1 },
+        clientContext: {
+          ...clientContext,
+          sourceFileName: file.name,
+          sourceFileIndex: index + 1,
+          ...(pageHint ? { holdingsPagesWithPositions: pageHint } : {}),
+        },
       });
       const holdingsForFile = Array.isArray(extracted.holdings) ? extracted.holdings : [];
       extractedHoldings.push(

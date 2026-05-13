@@ -42,6 +42,19 @@ export function extractionModel(): string {
 }
 
 /**
+ * Upper bound for extraction JSON size (many holdings × options[] can exceed low defaults).
+ * Override with `OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS` (positive integer).
+ */
+export function extractionMaxOutputTokens(): number {
+  const raw = trimEnv("OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS");
+  if (raw) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 1024) return Math.min(Math.floor(n), 32768);
+  }
+  return 16384;
+}
+
+/**
  * When `ADVISORPILOT_OPENAI_LOG_MODEL_PASS=1`, logs `[openai:route:pass] model=…` per call.
  */
 export function logOpenAiPass(routeTag: string, pass: string, model: string) {

@@ -83,4 +83,20 @@ describe("intake-config", () => {
       )
     ).toBe(true);
   });
+
+  it("normalizes persistedAdvisorUi for reopening saved advisor sessions", () => {
+    expect(
+      normalizeIntakeClient({
+        firstName: "A",
+        persistedAdvisorUi: { rothLiveAnalysisOpen: true },
+      }).persistedAdvisorUi
+    ).toEqual({ rothLiveAnalysisOpen: true });
+    expect(
+      normalizeIntakeClient({
+        firstName: "A",
+        persistedAdvisorUi: { rothLiveAnalysisOpen: false },
+      }).persistedAdvisorUi
+    ).toEqual({ rothLiveAnalysisOpen: false });
+    expect(normalizeIntakeClient({ firstName: "A", persistedAdvisorUi: {} }).persistedAdvisorUi).toBeUndefined();
+  });
 });

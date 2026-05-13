@@ -6,6 +6,7 @@
 import { canAdvanceRiskIntake } from "@/lib/risk-questionnaire";
 import type { RiskIntakeScreen } from "@/lib/risk-questionnaire";
 import { RISK_PROFILES } from "@/lib/risk-profiles";
+import { normalizeFiaWorksheet, type FiaWorksheet } from "@/lib/fia-worksheet";
 
 export type RiskIntakeKnown = "unset" | "yes" | "no";
 
@@ -49,6 +50,12 @@ export type IntakeClient = {
   takingSocialSecurity: boolean;
   /** True when this profile was started from a client-side magic-link upload. */
   magicLinkUpload?: boolean;
+  /** Hypothetical FIA calculator inputs; stored with saved client JSON, not collected in intake wizard. */
+  fiaWorksheet?: FiaWorksheet | null;
+  /** Advisor UI to restore when reopening a saved profile (not shown on intake forms). */
+  persistedAdvisorUi?: {
+    rothLiveAnalysisOpen?: boolean;
+  } | null;
 };
 
 export type { RiskIntakeScreen } from "@/lib/risk-questionnaire";
@@ -232,6 +239,21 @@ export function normalizeIntakeClient(raw: unknown): IntakeClient {
     spouseRetirementAge: String(r.spouseRetirementAge ?? ""),
     takingSocialSecurity: Boolean(r.takingSocialSecurity),
     magicLinkUpload: Boolean(r.magicLinkUpload),
+    fiaWorksheet: (() => {
+      if (!Object.prototype.hasOwnProperty.call(r, "fiaWorksheet")) return undefined;
+      const f = r.fiaWorksheet;
+      if (f === null) return null;
+      return normalizeFiaWorksheet(f);
+    })(),
+    persistedAdvisorUi: (() => {
+      if (!Object.prototype.hasOwnProperty.call(r, "persistedAdvisorUi")) return undefined;
+      const p = r.persistedAdvisorUi;
+      if (p === null) return null;
+      if (!p || typeof p !== "object") return undefined;
+      const o = p as Record<string, unknown>;
+      if (typeof o.rothLiveAnalysisOpen !== "boolean") return undefined;
+      return { rothLiveAnalysisOpen: o.rothLiveAnalysisOpen };
+    })(),
   };
 }
 
@@ -342,6 +364,14 @@ export function applyIntakePatch(base: IntakeClient, patch: Partial<Record<keyof
     }
     if (key === "magicLinkUpload" && typeof raw === "boolean") {
       next.magicLinkUpload = raw;
+      continue;
+    }
+    if (key === "persistedAdvisorUi" && raw && typeof raw === "object") {
+      const o = raw as Record<string, unknown>;
+      next.persistedAdvisorUi = {
+        ...(next.persistedAdvisorUi && typeof next.persistedAdvisorUi === "object" ? next.persistedAdvisorUi : {}),
+        ...(typeof o.rothLiveAnalysisOpen === "boolean" ? { rothLiveAnalysisOpen: o.rothLiveAnalysisOpen } : {}),
+      };
       continue;
     }
     if (key === "married" && typeof raw === "boolean") {

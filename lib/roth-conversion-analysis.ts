@@ -42,6 +42,15 @@ export const RMD_DISTRIBUTION_PERIOD: Record<number, number> = {
   95: 8.9,
 };
 
+/** Divisor for Uniform Lifetime RMD factor; null below age 73 (illustration start age). Also used by FIA qualified illustration. */
+export function uniformLifetimeRmdDivisor(age: number): number | null {
+  if (age < 73) return null;
+  const d = RMD_DISTRIBUTION_PERIOD[age];
+  if (d) return d;
+  if (age > 95) return Math.max(2.0, 8.9 - (age - 95) * 0.35);
+  return null;
+}
+
 /** Kept for UI / legacy id checks; Roth model uses progressive tax + standard deduction instead. */
 export const FEDERAL_MARGINAL_RATE: Record<string, number> = {
   "10": 0.1,
@@ -54,11 +63,7 @@ export const FEDERAL_MARGINAL_RATE: Record<string, number> = {
 };
 
 function rmdDivisor(age: number): number | null {
-  if (age < 73) return null;
-  const d = RMD_DISTRIBUTION_PERIOD[age];
-  if (d) return d;
-  if (age > 95) return Math.max(2.0, 8.9 - (age - 95) * 0.35);
-  return null;
+  return uniformLifetimeRmdDivisor(age);
 }
 
 /**

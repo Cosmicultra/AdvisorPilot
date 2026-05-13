@@ -15,26 +15,40 @@ function mergeHeaders(base: HeadersInit | undefined): Headers {
   return new Headers(base ?? undefined);
 }
 
+/** FormData may not be reusable across two fetch() calls; clone so retries keep all file parts. */
+function cloneFormData(fd: FormData): FormData {
+  const out = new FormData();
+  for (const [key, value] of fd.entries()) {
+    if (value instanceof File) {
+      out.append(key, value, value.name);
+    } else {
+      out.append(key, value);
+    }
+  }
+  return out;
+}
+
 export async function advisorFetch(input: RequestInfo | URL, init?: AdvisorFetchInit): Promise<Response> {
   const { onEmailSessionExpired, ...baseInit } = init ?? {};
+  const { body, headers: headersInit, ...restInit } = baseInit;
 
   if (typeof window === "undefined") {
-    const headers = mergeHeaders(baseInit.headers);
+    const headers = mergeHeaders(headersInit);
     return fetch(input, { ...baseInit, headers, credentials: "include" });
   }
 
-  const headers = mergeHeaders(baseInit.headers);
+  const headers = mergeHeaders(headersInit);
   const accessBefore = sessionStorage.getItem(AP_SUPABASE_AT);
   if (accessBefore) headers.set("Authorization", `Bearer ${accessBefore}`);
 
-  const doFetch = (h: Headers) =>
-    fetch(input, {
-      ...baseInit,
-      headers: h,
-      credentials: "include",
-    });
+  const buildBody = () => (body instanceof FormData ? cloneFormData(body) : body);
 
-  let res = await doFetch(headers);
+  let res = await fetch(input, {
+    ...restInit,
+    body: buildBody(),
+    headers,
+    credentials: "include",
+  });
 
   if (res.status !== 401 || !accessBefore) return res;
 
@@ -71,6 +85,11 @@ export async function advisorFetch(input: RequestInfo | URL, init?: AdvisorFetch
   if (refreshJson.refresh_token) sessionStorage.setItem(AP_SUPABASE_RT, refreshJson.refresh_token);
 
   headers.set("Authorization", `Bearer ${refreshJson.access_token}`);
-  res = await doFetch(headers);
+  res = await fetch(input, {
+    ...restInit,
+    body: buildBody(),
+    headers,
+    credentials: "include",
+  });
   return res;
 }

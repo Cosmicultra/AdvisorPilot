@@ -102,16 +102,36 @@ export async function POST(request: Request) {
     }
 
     const client = clientRaw ? JSON.parse(clientRaw) : {};
+
+    let filePageHints: string[] = [];
+    const hintsRaw = formData.get("filePageHints");
+    if (typeof hintsRaw === "string" && hintsRaw.trim()) {
+      try {
+        const parsed = JSON.parse(hintsRaw) as unknown;
+        if (Array.isArray(parsed)) {
+          filePageHints = parsed.map((x) => String(x ?? ""));
+        }
+      } catch {
+        filePageHints = [];
+      }
+    }
+
     const allHoldings: unknown[] = [];
 
     for (const [index, file] of files.entries()) {
       const bytes = Buffer.from(await file.arrayBuffer());
       const mimeType = file.type || "application/pdf";
+      const pageHint = filePageHints[index]?.trim() || "";
       const data = await extractHoldingsFromFileBuffer({
         fileName: file.name || `statement-${index + 1}.pdf`,
         mimeType,
         bytes,
-        clientContext: { ...client, sourceFileName: file.name, sourceFileIndex: index + 1 },
+        clientContext: {
+          ...client,
+          sourceFileName: file.name,
+          sourceFileIndex: index + 1,
+          ...(pageHint ? { holdingsPagesWithPositions: pageHint } : {}),
+        },
       });
       const holdings = Array.isArray(data.holdings) ? data.holdings : [];
       const withMeta = holdings.map((holding) =>
@@ -124,6 +144,7 @@ export async function POST(request: Request) {
         }) as Record<string, unknown>
       );
 
+      // Cross-check extracted tickers/names vs Supabase firm catalog before UI (ADVISORPILOT_SECURITIES_MASTER).
       const tagged = await enrichHoldingsWithSecuritiesMaster(withMeta);
       allHoldings.push(...tagged);
     }

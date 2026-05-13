@@ -16,6 +16,16 @@ import {
 } from "@/lib/ten-year-scenario-models";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
+import { buildFiaScenarioSummaries } from "@/lib/fia-illustration";
+import { fiaInputValue, normalizeFiaWorksheet } from "@/lib/fia-worksheet";
+import {
+  appendFiaIllustrationFiguresAndTables,
+  appendRothIllustrationFiguresAndTables,
+  getFiaDisclosureChunksForPortfolio,
+  getRothDisclosureChunksForPortfolio,
+  type PortfolioIllustrationLayout,
+} from "@/lib/portfolio-illustration-inlays";
+import { buildRothReportModelBundle } from "@/lib/roth-report-pdf";
 
 type ReportMode = "client" | "advisor";
 
@@ -1169,8 +1179,8 @@ export async function POST(req: Request) {
       y -= 8;
     }
 
-    /** Terminal disclosures with client vs advisor depth; renders after holdings table (if any). */
-    function drawImportantInformationAppendix() {
+    /** Terminal disclosures with client vs advisor depth; renders after holdings and optional integrated illustrations. */
+    function drawImportantInformationAppendix(extraIllustrationChunks: { title: string; paragraphs: string[] }[]) {
       newPage();
       drawSectionEyebrow("Disclosures");
       /** Tighter than `sectionTitle` so the full disclosures block fits on one page in advisor (long-form) mode. */
@@ -1293,7 +1303,9 @@ export async function POST(req: Request) {
       const titleBottomMargin = 3;
       const paraGapBelow = 3.2;
 
-      for (const chunk of commonChunks) {
+      const allChunks = [...commonChunks, ...extraIllustrationChunks];
+
+      for (const chunk of allChunks) {
         const titleLines = wrapLinesToWidth(chunk.title, bold, titleFs, disclosureWrapW);
         const titleBlockH = titleLines.length * (titleFs + titleLineLead);
         ensureBlock(titleBlockH + 10);
@@ -1542,7 +1554,102 @@ export async function POST(req: Request) {
 
     drawHoldingsAppendix();
 
-    drawImportantInformationAppendix();
+    const includeFiaAppendix = Boolean(body.includeFiaAppendix);
+    const includeRothConversionAppendix = Boolean(body.includeRothConversionAppendix);
+    const illustrationDisclosureChunks: { title: string; paragraphs: string[] }[] = [];
+
+    const illustrationLayout: PortfolioIllustrationLayout = {
+      getPage: () => page,
+      setPage: (p) => {
+        page = p;
+      },
+      getY: () => y,
+      setY: (v) => {
+        y = v;
+      },
+      addContinuationPage: () => {
+        newPage();
+      },
+      margin: MARGIN,
+      contentW: CONTENT_W,
+      footerSafeY: FOOTER_SAFE_Y,
+      regular,
+      bold,
+      navyLight,
+      stayBar,
+      muted,
+      rule,
+      surface,
+      ink,
+    };
+
+    let fiaIllustrationRendered = false;
+    let rothIllustrationRendered = false;
+
+    if (includeFiaAppendix) {
+      try {
+        const fiaPremium = asNumber(body.fiaPremiumDefault, 0);
+        const rawFiaAge = body.fiaClientAgeForIllustration;
+        const fiaClientAgeForIllustration =
+          rawFiaAge === null || rawFiaAge === undefined || rawFiaAge === ""
+            ? null
+            : asNumber(rawFiaAge, NaN);
+        const fiaAgeOk =
+          fiaClientAgeForIllustration != null && Number.isFinite(fiaClientAgeForIllustration)
+            ? fiaClientAgeForIllustration
+            : null;
+        const ws = normalizeFiaWorksheet(body.fiaWorksheet);
+        const capRaw = fiaInputValue(ws.contractCapRatePct).trim();
+        const fiaReady =
+          fiaPremium > 0 &&
+          capRaw &&
+          buildFiaScenarioSummaries(ws, fiaPremium, fiaAgeOk).length > 0;
+        if (fiaReady) {
+          newPage();
+          drawSectionEyebrow("Illustrative exhibits");
+          sectionTitle(
+            "Hypothetical fixed index annuity",
+            "Advisor-entered terms; illustrative only, not a carrier illustration."
+          );
+          y += 2;
+          if (
+            appendFiaIllustrationFiguresAndTables(illustrationLayout, {
+              fiaWorksheet: body.fiaWorksheet,
+              fiaPremiumDefault: fiaPremium,
+              fiaClientAgeForIllustration: fiaAgeOk,
+            })
+          ) {
+            fiaIllustrationRendered = true;
+            illustrationDisclosureChunks.push(...getFiaDisclosureChunksForPortfolio());
+          }
+        }
+      } catch (e) {
+        console.warn("[generate-report] FIA illustration skipped:", e);
+      }
+    }
+
+    if (includeRothConversionAppendix) {
+      try {
+        const rothQualified = asNumber(body.rothPdfQualifiedTotal, 0);
+        const rothTotal = rothQualified > 0 ? rothQualified : totalValue;
+        const bundle = buildRothReportModelBundle({
+          client,
+          rothWorksheet: body.rothWorksheet,
+          totalValue: rothTotal,
+        });
+        newPage();
+        drawSectionEyebrow(fiaIllustrationRendered ? "Illustrative exhibits (continued)" : "Illustrative exhibits");
+        sectionTitle("Roth conversion comparison", "Illustrative stay vs. conversion paths; see Disclosures for assumptions.");
+        y += 2;
+        appendRothIllustrationFiguresAndTables(illustrationLayout, bundle.model);
+        illustrationDisclosureChunks.push(...getRothDisclosureChunksForPortfolio(bundle.model, bundle.need));
+        rothIllustrationRendered = true;
+      } catch (e) {
+        console.warn("[generate-report] Roth illustration skipped:", e);
+      }
+    }
+
+    drawImportantInformationAppendix(illustrationDisclosureChunks);
 
     const pages = pdfDoc.getPages();
     const totalP = pages.length;
@@ -1563,6 +1670,11 @@ export async function POST(req: Request) {
         totalValue,
         filename: fileName,
         unauthenticated: !identity,
+        includeFiaAppendix,
+        includeRothConversionAppendix,
+        fiaIllustrationRendered,
+        rothIllustrationRendered,
+        appendixCount: 0,
       },
     });
 

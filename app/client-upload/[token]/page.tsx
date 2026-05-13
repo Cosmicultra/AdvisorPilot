@@ -1,11 +1,13 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { ClientLinkIntakeForm } from "@/components/client-link-intake-form";
+import { Trash2 } from "lucide-react";
+import { newStatementUploadId, type StatementUploadQueueItem } from "@/lib/statement-upload-queue";
 import {
   intakeIncompleteStepTitles,
   isIntakeComplete,
@@ -18,6 +20,10 @@ import {
   isRiskQuizComplete,
 } from "@/lib/risk-questionnaire";
 import type { RiskProfileId } from "@/lib/risk-profiles";
+
+/** Native file control (avoid wrapper quirks); keep strong file-button styling. */
+const CLIENT_STATEMENT_FILE_INPUT_CLASS =
+  "min-h-11 w-full min-w-0 rounded-none border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none file:mr-3 file:inline-flex file:h-7 file:rounded-none file:border-0 file:bg-[#0f6fde] file:px-3 file:py-2 file:text-sm file:text-white focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm";
 
 function normalizeRiskGateFromSnapshot(raw: unknown): IntakeClient {
   const n = normalizeIntakeClient(raw);
@@ -51,11 +57,36 @@ export default function ClientMagicUploadPage() {
   const [linkExpiresAt, setLinkExpiresAt] = useState("");
   const [intake, setIntake] = useState<IntakeClient>(() => normalizeIntakeClient({}));
 
-  const [files, setFiles] = useState<File[]>([]);
+  const [statementQueue, setStatementQueue] = useState<StatementUploadQueueItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [validationHint, setValidationHint] = useState<string[]>([]);
+
+  const [clientFileInputRevision, setClientFileInputRevision] = useState(0);
+
+  const appendStatementFiles = useCallback((list: FileList | null) => {
+    // `FileList` is live; clearing the input in the same `change` handler empties it before React runs the queued updater.
+    const picked = list && list.length > 0 ? Array.from(list) : [];
+    if (picked.length === 0) return;
+    setStatementQueue((prev) => [
+      ...prev,
+      ...picked.map((file) => ({
+        id: newStatementUploadId(),
+        file,
+        holdingsPages: "",
+      })),
+    ]);
+  }, []);
+
+  const removeStatementFile = useCallback((id: string) => {
+    setStatementQueue((prev) => prev.filter((x) => x.id !== id));
+    setClientFileInputRevision((n) => n + 1);
+  }, []);
+
+  const setStatementHoldingsPages = useCallback((id: string, holdingsPages: string) => {
+    setStatementQueue((prev) => prev.map((x) => (x.id === id ? { ...x, holdingsPages } : x)));
+  }, []);
 
   useEffect(() => {
     if (!token) return;
@@ -130,7 +161,7 @@ export default function ClientMagicUploadPage() {
       return;
     }
 
-    if (files.length === 0) {
+    if (statementQueue.length === 0) {
       setError("Please choose at least one statement file (PDF or photo).");
       return;
     }
@@ -139,7 +170,8 @@ export default function ClientMagicUploadPage() {
     try {
       const fd = new FormData();
       fd.set("token", token);
-      files.forEach((file) => fd.append("files", file));
+      statementQueue.forEach((item) => fd.append("files", item.file));
+      fd.set("filePageHints", JSON.stringify(statementQueue.map((item) => item.holdingsPages.trim())));
       fd.set("intakeJson", JSON.stringify(intake));
 
       const res = await fetch("/api/client-upload/ingest", {
@@ -159,7 +191,8 @@ export default function ClientMagicUploadPage() {
       }
 
       setMessage(data.message || "Upload received. You can close this page.");
-      setFiles([]);
+      setStatementQueue([]);
+      setClientFileInputRevision(0);
       setPhase("done");
     } catch {
       setError("Network error. Check your connection and try again.");
@@ -266,28 +299,118 @@ export default function ClientMagicUploadPage() {
                   <div>
                     <h1 className="font-serif text-xl font-bold text-slate-900">Upload your statement(s)</h1>
                     <p className="mt-2 text-sm leading-relaxed text-slate-600">
-                      Choose a PDF or clear photos of your statement. You can attach more than one file if your holdings span multiple statements.
+                      Add one or more PDFs or clear photos. You can use the file picker more than once to build your
+                      queue, and remove anything attached by mistake before sending.
                     </p>
                   </div>
 
                   <form className="space-y-4" onSubmit={onSubmit}>
-                    <div>
-                      <label className="text-xs font-semibold text-slate-700">Statement file(s)</label>
-                      <Input
-                        className="mt-1 min-h-12 rounded-none file:mr-3 file:rounded-none file:border-0 file:bg-[#0f6fde] file:px-3 file:py-2 file:text-sm file:text-white"
-                        type="file"
-                        accept=".pdf,image/*"
-                        capture="environment"
-                        multiple
-                        onChange={(e) => setFiles(Array.from(e.target.files || []))}
-                      />
-                      <p className="mt-1 text-xs text-slate-500">PDF or photos (JPG/PNG). Max 25 MB per file.</p>
-                      {files.length > 0 ? (
-                        <p className="mt-2 text-xs text-slate-600">
-                          Selected: {files.map((file) => file.name).join(", ")}
-                        </p>
-                      ) : null}
+                    <div className="space-y-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Add files</p>
+                      <div className="grid grid-cols-1 gap-3">
+                        <label className="block cursor-pointer rounded-none border border-slate-200 bg-slate-50/80 p-4 transition hover:border-sky-300">
+                          <span className="text-sm font-medium text-slate-900">PDF or saved images</span>
+                          <p className="mb-2 text-xs text-slate-600">Multi-select supported. Each choice adds to your list.</p>
+                          <input
+                            key={`client-stmt-pdf-${clientFileInputRevision}`}
+                            type="file"
+                            accept=".pdf,image/*"
+                            multiple
+                            className={CLIENT_STATEMENT_FILE_INPUT_CLASS}
+                            onChange={(e) => {
+                              appendStatementFiles(e.currentTarget.files);
+                              e.currentTarget.value = "";
+                            }}
+                          />
+                        </label>
+                        <label className="block cursor-pointer rounded-none border border-slate-200 bg-slate-50/80 p-4 transition hover:border-sky-300">
+                          <span className="text-sm font-medium text-slate-900">Take a photo (mobile)</span>
+                          <p className="mb-2 text-xs text-slate-600">Opens your camera on many phones. You can add more files afterward.</p>
+                          <input
+                            key={`client-stmt-cam-${clientFileInputRevision}`}
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
+                            multiple
+                            className={CLIENT_STATEMENT_FILE_INPUT_CLASS}
+                            onChange={(e) => {
+                              appendStatementFiles(e.currentTarget.files);
+                              e.currentTarget.value = "";
+                            }}
+                          />
+                        </label>
+                      </div>
+                      <p className="text-xs text-slate-500">Max 25 MB per file.</p>
                     </div>
+
+                    {statementQueue.length > 0 ? (
+                      <div className="space-y-3 rounded-none border border-sky-200 bg-sky-50/70 p-3">
+                        <p className="text-sm font-semibold text-blue-950">
+                          Queued files ({statementQueue.length})
+                        </p>
+                        <p className="text-xs leading-relaxed text-slate-600">
+                          Please indicate which pages <strong className="font-semibold text-slate-800">specifically</strong>{" "}
+                          have holdings on them for most accurate extraction (optional, 1-based page numbers). Examples:{" "}
+                          <code className="rounded bg-white px-1 font-mono text-[0.75rem]">1-2</code>,{" "}
+                          <code className="rounded bg-white px-1 font-mono text-[0.75rem]">1,3,5,9</code>, or{" "}
+                          <code className="rounded bg-white px-1 font-mono text-[0.75rem]">1-3,5-6,10-11</code>. For{" "}
+                          <strong className="font-semibold text-slate-800">PDFs</strong>, the server trims to those pages
+                          before analysis. Leave blank to send the <strong className="font-semibold text-slate-800">whole</strong>{" "}
+                          file; <strong className="font-semibold text-slate-800">images</strong> are not trimmed.
+                        </p>
+                        <ul className="space-y-3">
+                          {statementQueue.map((item, idx) => (
+                            <li
+                              key={item.id}
+                              className="flex flex-col gap-2 rounded-none border border-sky-100/80 bg-white/95 p-3"
+                            >
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-[0.65rem] font-semibold uppercase tracking-wide text-slate-500">
+                                    File {idx + 1}
+                                  </p>
+                                  <p className="truncate text-sm font-medium text-slate-900" title={item.file.name}>
+                                    {item.file.name}
+                                  </p>
+                                  <p className="text-xs tabular-nums text-slate-500">
+                                    {item.file.size >= 1024 * 1024
+                                      ? `${(item.file.size / (1024 * 1024)).toFixed(1)} MB`
+                                      : `${Math.max(1, Math.round(item.file.size / 1024))} KB`}
+                                  </p>
+                                </div>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-none border-red-200 px-2.5 text-red-700 hover:bg-red-50 sm:px-3"
+                                  onClick={() => removeStatementFile(item.id)}
+                                  disabled={busy}
+                                >
+                                  <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
+                                  Remove
+                                </Button>
+                              </div>
+                              <div>
+                                <label
+                                  className="text-[0.65rem] font-semibold uppercase tracking-wide text-slate-500"
+                                  htmlFor={`client-holdings-pages-${item.id}`}
+                                >
+                                  Pages with holdings
+                                </label>
+                                <Input
+                                  id={`client-holdings-pages-${item.id}`}
+                                  className="mt-1 h-10 rounded-none font-mono text-sm"
+                                  placeholder="e.g. 1-2 · 1,3,9 · 1-3,5-6,10-11"
+                                  value={item.holdingsPages}
+                                  onChange={(e) => setStatementHoldingsPages(item.id, e.target.value)}
+                                  autoComplete="off"
+                                  disabled={busy}
+                                />
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
 
                     {error && (
                       <div className="rounded-none border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>

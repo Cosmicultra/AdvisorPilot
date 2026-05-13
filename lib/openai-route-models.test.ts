@@ -4,6 +4,7 @@ import {
   analysisResearchModel,
   enrichmentJsonModel,
   enrichmentResearchModel,
+  extractionMaxOutputTokens,
   extractionModel,
   logOpenAiPass,
 } from "./openai-route-models";
@@ -14,6 +15,7 @@ const MODEL_ENV_KEYS = [
   "OPENAI_ENRICHMENT_RESEARCH_MODEL",
   "OPENAI_ENRICHMENT_JSON_MODEL",
   "OPENAI_EXTRACTION_MODEL",
+  "OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS",
   "ADVISORPILOT_OPENAI_LOG_MODEL_PASS",
 ] as const;
 
@@ -32,6 +34,17 @@ describe("openai-route-models", () => {
     expect(enrichmentResearchModel()).toBe("gpt-4o");
     expect(enrichmentJsonModel()).toBe("gpt-4o");
     expect(extractionModel()).toBe("gpt-4o");
+    expect(extractionMaxOutputTokens()).toBe(16384);
+  });
+
+  it("honors OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS override", () => {
+    process.env.OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS = "8192";
+    expect(extractionMaxOutputTokens()).toBe(8192);
+  });
+
+  it("caps OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS at 32768", () => {
+    process.env.OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS = "999999";
+    expect(extractionMaxOutputTokens()).toBe(32768);
   });
 
   it("trims whitespace and honors overrides", () => {

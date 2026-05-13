@@ -19,11 +19,29 @@ export function sumTraditionalQualifiedValue(
   }, 0);
 }
 
+/** Sum of non-qualified (taxable) registration holdings only. */
+export function sumNonQualifiedValue(
+  holdings: Array<{ value?: unknown; registrationType?: unknown }>
+): number {
+  return holdings.reduce((sum, h) => {
+    if (normalizeRegistrationType(h.registrationType) !== "non_qualified") return sum;
+    const v = Number(h.value || 0);
+    return sum + (Number.isFinite(v) ? v : 0);
+  }, 0);
+}
+
 export function normalizeRegistrationType(raw: unknown): RegistrationBucket {
-  const s = String(raw || "")
+  const s = String(raw ?? "")
     .trim()
     .toLowerCase()
-    .replace(/-/g, "_");
+    .replace(/-/g, "_")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_");
+
+  const segments = s.split("_").filter(Boolean);
+  const rothToken = segments.some(
+    (seg) => seg === "roth" || seg === "rothira" || seg.startsWith("roth")
+  );
 
   if (
     s === "qualified" ||
@@ -45,7 +63,21 @@ export function normalizeRegistrationType(raw: unknown): RegistrationBucket {
     s === "brokerage" ||
     s === "individual" ||
     s === "jt" ||
-    s === "joint"
+    s === "joint" ||
+    (!rothToken &&
+      (s === "trust" ||
+        s === "ttee" ||
+        s === "living_trust" ||
+        s === "revocable_trust" ||
+        s === "irrevocable_trust" ||
+        s === "grantor_trust" ||
+        s === "family_trust" ||
+        s.includes("living_trust") ||
+        s.includes("revocable_trust") ||
+        s.includes("irrevocable_trust") ||
+        s.includes("grantor_trust") ||
+        s.includes("family_trust") ||
+        s.endsWith("_trust")))
   ) {
     return "non_qualified";
   }
