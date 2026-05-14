@@ -98,5 +98,17 @@ describe("intake-config", () => {
       }).persistedAdvisorUi
     ).toEqual({ rothLiveAnalysisOpen: false });
     expect(normalizeIntakeClient({ firstName: "A", persistedAdvisorUi: {} }).persistedAdvisorUi).toBeUndefined();
+    expect(
+      normalizeIntakeClient({
+        firstName: "A",
+        persistedAdvisorUi: { snapshotIncludeFiaAppendix: true, snapshotIncludeRothAppendix: false },
+      }).persistedAdvisorUi
+    ).toEqual({ snapshotIncludeFiaAppendix: true, snapshotIncludeRothAppendix: false });
+    expect(
+      normalizeIntakeClient({
+        firstName: "A",
+        persistedAdvisorUi: { rothLiveAnalysisOpen: true, snapshotIncludeFiaAppendix: true },
+      }).persistedAdvisorUi
+    ).toEqual({ rothLiveAnalysisOpen: true, snapshotIncludeFiaAppendix: true });
   });
 });

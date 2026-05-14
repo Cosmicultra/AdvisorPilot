@@ -55,6 +55,9 @@ export type IntakeClient = {
   /** Advisor UI to restore when reopening a saved profile (not shown on intake forms). */
   persistedAdvisorUi?: {
     rothLiveAnalysisOpen?: boolean;
+    /** Last saved Client Snapshot PDF toggles (Wrap-up); used for Gmail + DB follow-up PDFs. */
+    snapshotIncludeFiaAppendix?: boolean;
+    snapshotIncludeRothAppendix?: boolean;
   } | null;
 };
 
@@ -251,8 +254,11 @@ export function normalizeIntakeClient(raw: unknown): IntakeClient {
       if (p === null) return null;
       if (!p || typeof p !== "object") return undefined;
       const o = p as Record<string, unknown>;
-      if (typeof o.rothLiveAnalysisOpen !== "boolean") return undefined;
-      return { rothLiveAnalysisOpen: o.rothLiveAnalysisOpen };
+      const out: NonNullable<IntakeClient["persistedAdvisorUi"]> = {};
+      if (typeof o.rothLiveAnalysisOpen === "boolean") out.rothLiveAnalysisOpen = o.rothLiveAnalysisOpen;
+      if (typeof o.snapshotIncludeFiaAppendix === "boolean") out.snapshotIncludeFiaAppendix = o.snapshotIncludeFiaAppendix;
+      if (typeof o.snapshotIncludeRothAppendix === "boolean") out.snapshotIncludeRothAppendix = o.snapshotIncludeRothAppendix;
+      return Object.keys(out).length ? out : undefined;
     })(),
   };
 }
@@ -371,6 +377,12 @@ export function applyIntakePatch(base: IntakeClient, patch: Partial<Record<keyof
       next.persistedAdvisorUi = {
         ...(next.persistedAdvisorUi && typeof next.persistedAdvisorUi === "object" ? next.persistedAdvisorUi : {}),
         ...(typeof o.rothLiveAnalysisOpen === "boolean" ? { rothLiveAnalysisOpen: o.rothLiveAnalysisOpen } : {}),
+        ...(typeof o.snapshotIncludeFiaAppendix === "boolean"
+          ? { snapshotIncludeFiaAppendix: o.snapshotIncludeFiaAppendix }
+          : {}),
+        ...(typeof o.snapshotIncludeRothAppendix === "boolean"
+          ? { snapshotIncludeRothAppendix: o.snapshotIncludeRothAppendix }
+          : {}),
       };
       continue;
     }

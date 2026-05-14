@@ -43,6 +43,7 @@ import {
   ChevronDown,
   RefreshCw,
   X,
+  Landmark,
 } from "lucide-react";
 import {
   computeRiskProfileFromQuiz,
@@ -126,6 +127,7 @@ import {
 } from "@/lib/holding-registration";
 import type { LiveIntakeHandoffAction } from "@/lib/live-intake-scripts";
 import { LiveIntakeOverlay } from "@/components/live-intake-overlay";
+import { FiaScenarioReturnChart } from "@/components/fia-scenario-return-chart";
 import { ASSET_CLASSES, classifyAllocationBucket, isCanonicalAssetClass } from "@/lib/asset-classes";
 import { bucketValuesToPercents, allocationForRiskModel } from "@/lib/allocation-math";
 import {
@@ -137,6 +139,13 @@ import {
   scenarioProposedPortfolioReturnDecimal,
   scenarioProposedPortfolioSingleYearReturnDecimal,
 } from "@/lib/ten-year-scenario-models";
+import { buildRetirementIncomeProjection } from "@/lib/retirement-income-projection";
+import {
+  illustrativeSpouseMonthlyMaxOwnOrSpousal,
+  illustrativeSsaRetirementBenefitMonthly,
+  illustrativeWorkerPiaMonthly,
+  parseBirthYearFromIsoDob,
+} from "@/lib/social-security-benefit-estimate";
 import { newStatementUploadId, type StatementUploadQueueItem } from "@/lib/statement-upload-queue";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -578,6 +587,7 @@ function wizardRailLabel(item: string) {
   if (item === "saved") return "Client Database";
   if (item === "intake") return "Client Profile";
   if (item === "fia") return "FIA calculator";
+  if (item === "retIncome") return "Ret. Inc Calculator";
   return item.charAt(0).toUpperCase() + item.slice(1);
 }
 
@@ -610,7 +620,7 @@ function AppTopNav({
 }) {
   const navNewReview =
     (step === "intake" && intakeStep > 0) ||
-    ["upload", "confirm", "analysis", "meeting", "fia", "roth", "report"].includes(step);
+    ["upload", "confirm", "analysis", "meeting", "fia", "roth", "retIncome", "report"].includes(step);
 
   const initials = advisorNavInitials(
     signatureName,
@@ -1028,6 +1038,37 @@ export default function AdvisorPilotPage() {
   const [snapshotIncludeRothAppendix, setSnapshotIncludeRothAppendix] = useState(false);
   const [duplicatesAcknowledged, setDuplicatesAcknowledged] = useState(false);
 
+  /** Retirement income calculator — advisor-only inputs (not persisted on client JSON). */
+  const [retIncClientEarnedAnnual, setRetIncClientEarnedAnnual] = useState("");
+  const [retIncSpouseEarnedAnnual, setRetIncSpouseEarnedAnnual] = useState("");
+  const [retIncPensionAnnual, setRetIncPensionAnnual] = useState("");
+  const [retIncPensionColaPct, setRetIncPensionColaPct] = useState("");
+  const [retIncOtherAnnual, setRetIncOtherAnnual] = useState("");
+  const [retIncOtherGrowthPct, setRetIncOtherGrowthPct] = useState("");
+  const [retIncNeedInflationPct, setRetIncNeedInflationPct] = useState("3");
+  const [retIncSsColaPct, setRetIncSsColaPct] = useState("2");
+  /** Calculator-only SS monthly amounts; prefilled from client profile when those fields are set (see sync effect). */
+  const [retIncSsMonthlyClient, setRetIncSsMonthlyClient] = useState("");
+  const [retIncSsMonthlySpouse, setRetIncSsMonthlySpouse] = useState("");
+  /** When profile says not yet receiving SS: advisor picks known amount vs illustrative estimate. */
+  const [retIncSsKnowBenefit, setRetIncSsKnowBenefit] = useState<"unset" | "yes" | "no">("unset");
+  const [retIncSsEstClientAnnual, setRetIncSsEstClientAnnual] = useState("");
+  const [retIncSsEstClientYears, setRetIncSsEstClientYears] = useState("");
+  const [retIncSsEstClientClaimAge, setRetIncSsEstClientClaimAge] = useState("");
+  const [retIncSsEstSpouseAnnual, setRetIncSsEstSpouseAnnual] = useState("");
+  const [retIncSsEstSpouseYears, setRetIncSsEstSpouseYears] = useState("");
+  const [retIncSsEstSpouseClaimAge, setRetIncSsEstSpouseClaimAge] = useState("");
+  /** When estimating SS: compare spouse own retirement to illustrative spousal (50% × worker PIA). */
+  const [retIncSsUseSpousalModel, setRetIncSsUseSpousalModel] = useState(true);
+  const [retIncSpendNetOfTax, setRetIncSpendNetOfTax] = useState(true);
+  /** Flat illustrative rate on ordinary-style cash flows when spend target is after-tax (0–100). */
+  const [retIncEffectiveTaxPct, setRetIncEffectiveTaxPct] = useState("20");
+  /** Optional override for SS benefit start on the timeline; blank = use claim-age estimate or retirement age. */
+  const [retIncSsStartAgeClient, setRetIncSsStartAgeClient] = useState("");
+  const [retIncSsStartAgeSpouse, setRetIncSsStartAgeSpouse] = useState("");
+  const [retIncReturnMode, setRetIncReturnMode] = useState<"snapshot" | "proposed" | "custom">("snapshot");
+  const [retIncCustomReturnPct, setRetIncCustomReturnPct] = useState("");
+
   /** Supabase `client` JSON: intake + nested FIA worksheet + advisor UI to restore (FIA lives separately in React state). */
   const buildClientJsonForDatabase = useCallback((): Client => {
     return {
@@ -1035,9 +1076,11 @@ export default function AdvisorPilotPage() {
       fiaWorksheet,
       persistedAdvisorUi: {
         rothLiveAnalysisOpen,
+        snapshotIncludeFiaAppendix,
+        snapshotIncludeRothAppendix,
       },
     };
-  }, [client, fiaWorksheet, rothLiveAnalysisOpen]);
+  }, [client, fiaWorksheet, rothLiveAnalysisOpen, snapshotIncludeFiaAppendix, snapshotIncludeRothAppendix]);
 
   const handleEmailSessionExpired = useCallback(() => {
     setEmailAuthUser(null);
@@ -1074,8 +1117,8 @@ export default function AdvisorPilotPage() {
   const wizardSteps = useMemo(() => {
     const head = ["intake", "upload", "confirm", "analysis", "meeting", "fia"] as const;
     return showRothOptionReport
-      ? ([...head, "roth", "report", "saved"] as const)
-      : ([...head, "report", "saved"] as const);
+      ? ([...head, "roth", "retIncome", "report", "saved"] as const)
+      : ([...head, "retIncome", "report", "saved"] as const);
   }, [showRothOptionReport]);
 
   /** True when starting a new review could discard advisor work (prompt before reset). */
@@ -1201,6 +1244,333 @@ export default function AdvisorPilotPage() {
   });
 
   const successImprovement = proposedSuccessRate - currentSuccessRate;
+
+  const retIncomeScenarioYears = TEN_YEAR_SCENARIOS[2]?.years ?? TEN_YEAR_SCENARIOS[0]!.years;
+  const retIncomeSnapshotReturnDec = useMemo(() => {
+    const d = scenarioHoldingsPortfolioReturnDecimal(retIncomeScenarioYears, holdings);
+    return Number.isFinite(d) ? d : 0.05;
+  }, [holdings, retIncomeScenarioYears]);
+  const retIncomeProposedReturnDec = useMemo(() => {
+    const proposedAlloc = {
+      equity: target.equity,
+      fixedIncome: target.fixedIncome,
+      cash: target.cash,
+    };
+    const d = scenarioProposedPortfolioReturnDecimal(retIncomeScenarioYears, proposedAlloc);
+    return Number.isFinite(d) ? d : 0.05;
+  }, [retIncomeScenarioYears, target.equity, target.fixedIncome, target.cash]);
+
+  const retIncomeClientAgeStart = useMemo(() => {
+    if (derivedAge != null && Number.isFinite(derivedAge)) return Math.max(0, Math.floor(derivedAge));
+    const n = Number(client.age);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  }, [derivedAge, client.age]);
+
+  const retIncomeSpouseAgeStart = useMemo(() => {
+    if (!client.married) return null;
+    const n = Number(client.spouseAge);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+    const d = getAgeFromDob(client.spouseDob);
+    if (d != null && Number.isFinite(d)) return Math.floor(d);
+    if (retIncomeClientAgeStart > 0) return retIncomeClientAgeStart;
+    return 62;
+  }, [client.married, client.spouseAge, client.spouseDob, retIncomeClientAgeStart]);
+
+  const retIncomeClientBirthYear = useMemo(() => {
+    const y = parseBirthYearFromIsoDob(client.dob);
+    if (y != null) return y;
+    const cy = typeof window !== "undefined" ? new Date().getFullYear() : 2026;
+    if (derivedAge != null && Number.isFinite(derivedAge)) return cy - Math.floor(derivedAge);
+    return null;
+  }, [client.dob, derivedAge]);
+
+  const retIncomeSpouseBirthYear = useMemo(() => {
+    if (!client.married) return null;
+    const y = parseBirthYearFromIsoDob(client.spouseDob);
+    if (y != null) return y;
+    const cy = typeof window !== "undefined" ? new Date().getFullYear() : 2026;
+    const sa = Number(client.spouseAge);
+    if (Number.isFinite(sa) && sa > 0) return cy - Math.floor(sa);
+    const d = getAgeFromDob(client.spouseDob);
+    if (d != null && Number.isFinite(d)) return cy - Math.floor(d);
+    if (derivedAge != null && Number.isFinite(derivedAge)) return cy - Math.floor(derivedAge);
+    return null;
+  }, [client.married, client.spouseDob, client.spouseAge, derivedAge]);
+
+  const retIncomeSsEstimatorClientMonthly = useMemo(() => {
+    if (client.takingSocialSecurity || retIncSsKnowBenefit !== "no") return null;
+    if (retIncomeClientBirthYear == null) return null;
+    const annual = Number(String(retIncSsEstClientAnnual).replace(/[$,]/g, "")) || 0;
+    const yearsIn = Number(String(retIncSsEstClientYears).replace(/[^0-9.]/g, "")) || 0;
+    const ageNow = retIncomeClientAgeStart > 0 ? retIncomeClientAgeStart : null;
+    const years =
+      yearsIn > 0
+        ? Math.min(35, Math.max(1, Math.floor(yearsIn)))
+        : ageNow != null
+          ? Math.min(35, Math.max(1, ageNow - 22))
+          : 35;
+    const claimDefault = Math.min(70, Math.max(62, Math.floor(Number(client.retirementAge) || 67)));
+    const claim = Number(String(retIncSsEstClientClaimAge).replace(/[^0-9.]/g, ""));
+    const claimAge = Number.isFinite(claim) && claim >= 62 && claim <= 70 ? Math.floor(claim) : claimDefault;
+    return illustrativeSsaRetirementBenefitMonthly({
+      birthYear: retIncomeClientBirthYear,
+      annualCoveredEarnings: annual,
+      yearsWorkedCapped35: years,
+      benefitStartAge: claimAge,
+    });
+  }, [
+    client.takingSocialSecurity,
+    retIncSsKnowBenefit,
+    retIncomeClientBirthYear,
+    retIncSsEstClientAnnual,
+    retIncSsEstClientYears,
+    retIncSsEstClientClaimAge,
+    client.retirementAge,
+    retIncomeClientAgeStart,
+  ]);
+
+  const retIncomeSsWorkerPiaMonthly = useMemo(() => {
+    if (client.takingSocialSecurity || retIncSsKnowBenefit !== "no") return null;
+    if (retIncomeClientBirthYear == null) return null;
+    const annual = Number(String(retIncSsEstClientAnnual).replace(/[$,]/g, "")) || 0;
+    const yearsIn = Number(String(retIncSsEstClientYears).replace(/[^0-9.]/g, "")) || 0;
+    const ageNow = retIncomeClientAgeStart > 0 ? retIncomeClientAgeStart : null;
+    const years =
+      yearsIn > 0
+        ? Math.min(35, Math.max(1, Math.floor(yearsIn)))
+        : ageNow != null
+          ? Math.min(35, Math.max(1, ageNow - 22))
+          : 35;
+    return illustrativeWorkerPiaMonthly({
+      birthYear: retIncomeClientBirthYear,
+      annualCoveredEarnings: annual,
+      yearsWorkedCapped35: years,
+    });
+  }, [
+    client.takingSocialSecurity,
+    retIncSsKnowBenefit,
+    retIncomeClientBirthYear,
+    retIncSsEstClientAnnual,
+    retIncSsEstClientYears,
+    retIncomeClientAgeStart,
+  ]);
+
+  const retIncomeSsEstimatorSpouseMonthly = useMemo(() => {
+    if (!client.married) return null;
+    if (client.takingSocialSecurity || retIncSsKnowBenefit !== "no") return null;
+    if (retIncomeSpouseBirthYear == null) return null;
+    const annual = Number(String(retIncSsEstSpouseAnnual).replace(/[$,]/g, "")) || 0;
+    const yearsIn = Number(String(retIncSsEstSpouseYears).replace(/[^0-9.]/g, "")) || 0;
+    const ageS = retIncomeSpouseAgeStart;
+    const years =
+      yearsIn > 0
+        ? Math.min(35, Math.max(1, Math.floor(yearsIn)))
+        : ageS != null
+          ? Math.min(35, Math.max(1, ageS - 22))
+          : 35;
+    const claimDefault = Math.min(70, Math.max(62, Math.floor(Number(client.spouseRetirementAge) || 67)));
+    const claim = Number(String(retIncSsEstSpouseClaimAge).replace(/[^0-9.]/g, ""));
+    const claimAge = Number.isFinite(claim) && claim >= 62 && claim <= 70 ? Math.floor(claim) : claimDefault;
+    return illustrativeSpouseMonthlyMaxOwnOrSpousal({
+      workerPiaMonthly: retIncomeSsWorkerPiaMonthly,
+      spouseInput: {
+        birthYear: retIncomeSpouseBirthYear,
+        annualCoveredEarnings: annual,
+        yearsWorkedCapped35: years,
+        benefitStartAge: claimAge,
+      },
+      useSpousalLayer: retIncSsUseSpousalModel,
+    });
+  }, [
+    client.married,
+    client.takingSocialSecurity,
+    retIncSsKnowBenefit,
+    retIncomeSpouseBirthYear,
+    retIncSsEstSpouseAnnual,
+    retIncSsEstSpouseYears,
+    retIncSsEstSpouseClaimAge,
+    client.spouseRetirementAge,
+    retIncomeSpouseAgeStart,
+    retIncomeSsWorkerPiaMonthly,
+    retIncSsUseSpousalModel,
+  ]);
+
+  const retIncomeCalcSsAnnual = useMemo(() => {
+    if (client.takingSocialSecurity || retIncSsKnowBenefit === "yes") {
+      const c = Number(String(retIncSsMonthlyClient).replace(/[$,]/g, "")) || 0;
+      const s = Number(String(retIncSsMonthlySpouse).replace(/[$,]/g, "")) || 0;
+      return Math.max(0, (c + s) * 12);
+    }
+    if (retIncSsKnowBenefit === "no") {
+      const cm = retIncomeSsEstimatorClientMonthly ?? 0;
+      const sm = retIncomeSsEstimatorSpouseMonthly ?? 0;
+      return Math.max(0, (cm + sm) * 12);
+    }
+    return 0;
+  }, [
+    client.takingSocialSecurity,
+    retIncSsKnowBenefit,
+    retIncSsMonthlyClient,
+    retIncSsMonthlySpouse,
+    retIncomeSsEstimatorClientMonthly,
+    retIncomeSsEstimatorSpouseMonthly,
+  ]);
+
+  const retIncomeSsClientAnnualPart = useMemo(() => {
+    if (client.takingSocialSecurity || retIncSsKnowBenefit === "yes") {
+      return Math.max(0, (Number(String(retIncSsMonthlyClient).replace(/[$,]/g, "")) || 0) * 12);
+    }
+    if (retIncSsKnowBenefit === "no") {
+      return Math.max(0, (retIncomeSsEstimatorClientMonthly ?? 0) * 12);
+    }
+    return 0;
+  }, [client.takingSocialSecurity, retIncSsKnowBenefit, retIncSsMonthlyClient, retIncomeSsEstimatorClientMonthly]);
+
+  const retIncomeSsSpouseAnnualPart = useMemo(() => {
+    if (!client.married) return 0;
+    if (client.takingSocialSecurity || retIncSsKnowBenefit === "yes") {
+      return Math.max(0, (Number(String(retIncSsMonthlySpouse).replace(/[$,]/g, "")) || 0) * 12);
+    }
+    if (retIncSsKnowBenefit === "no") {
+      return Math.max(0, (retIncomeSsEstimatorSpouseMonthly ?? 0) * 12);
+    }
+    return 0;
+  }, [client.married, client.takingSocialSecurity, retIncSsKnowBenefit, retIncSsMonthlySpouse, retIncomeSsEstimatorSpouseMonthly]);
+
+  const retIncomeResolvedSsStartClient = useMemo(() => {
+    const fallbackRet = Math.min(70, Math.max(50, Math.floor(Number(client.retirementAge) || 67)));
+    if (retIncSsKnowBenefit === "yes") {
+      const raw = retIncSsStartAgeClient.trim();
+      if (raw) {
+        const n = Math.floor(Number(raw.replace(/[^0-9.]/g, "")));
+        if (Number.isFinite(n) && n >= 50 && n <= 80) return n;
+      }
+    }
+    const claim = Number(String(retIncSsEstClientClaimAge).replace(/[^0-9.]/g, ""));
+    if (retIncSsKnowBenefit === "no" && Number.isFinite(claim) && claim >= 62 && claim <= 70) return Math.floor(claim);
+    return fallbackRet;
+  }, [retIncSsStartAgeClient, retIncSsEstClientClaimAge, retIncSsKnowBenefit, client.retirementAge]);
+
+  const retIncomeResolvedSsStartSpouse = useMemo(() => {
+    const fallbackRet = Math.min(70, Math.max(50, Math.floor(Number(client.spouseRetirementAge) || 67)));
+    if (!client.married) return fallbackRet;
+    if (retIncSsKnowBenefit === "yes") {
+      const raw = retIncSsStartAgeSpouse.trim();
+      if (raw) {
+        const n = Math.floor(Number(raw.replace(/[^0-9.]/g, "")));
+        if (Number.isFinite(n) && n >= 50 && n <= 80) return n;
+      }
+    }
+    const claim = Number(String(retIncSsEstSpouseClaimAge).replace(/[^0-9.]/g, ""));
+    if (retIncSsKnowBenefit === "no" && Number.isFinite(claim) && claim >= 62 && claim <= 70) return Math.floor(claim);
+    return fallbackRet;
+  }, [client.married, retIncSsStartAgeSpouse, retIncSsEstSpouseClaimAge, retIncSsKnowBenefit, client.spouseRetirementAge]);
+
+  const retIncomeEffectiveTaxDec = useMemo(() => {
+    if (!retIncSpendNetOfTax) return 0;
+    const n = (Number(String(retIncEffectiveTaxPct).replace(/%/g, "")) || 0) / 100;
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.min(0.95, n);
+  }, [retIncSpendNetOfTax, retIncEffectiveTaxPct]);
+
+  /** When receiving benefits on profile, copy saved monthly amounts into this screen when non-blank. */
+  useEffect(() => {
+    if (step !== "retIncome") return;
+    if (!client.takingSocialSecurity) return;
+    const pc = String(client.socialSecurityMonthlyClient ?? "").trim();
+    const ps = String(client.socialSecurityMonthlySpouse ?? "").trim();
+    if (pc) setRetIncSsMonthlyClient(client.socialSecurityMonthlyClient);
+    if (client.married) {
+      if (ps) setRetIncSsMonthlySpouse(client.socialSecurityMonthlySpouse);
+    } else {
+      setRetIncSsMonthlySpouse("");
+    }
+  }, [step, client.takingSocialSecurity, client.socialSecurityMonthlyClient, client.socialSecurityMonthlySpouse, client.married]);
+
+  const retIncomeBaseNeedAnnual = useMemo(() => {
+    const raw = Number(String(client.retirementSpendableIncomeAnnual).replace(/[$,]/g, ""));
+    return Number.isFinite(raw) && raw > 0 ? raw : 0;
+  }, [client.retirementSpendableIncomeAnnual]);
+
+  const retIncomePortfolioReturnDec = useMemo(() => {
+    if (retIncReturnMode === "proposed") return retIncomeProposedReturnDec;
+    if (retIncReturnMode === "custom") {
+      const n = Number(String(retIncCustomReturnPct).replace(/%/g, "").trim());
+      if (Number.isFinite(n) && n > -50 && n < 80) return n / 100;
+    }
+    return retIncomeSnapshotReturnDec;
+  }, [retIncReturnMode, retIncCustomReturnPct, retIncomeProposedReturnDec, retIncomeSnapshotReturnDec]);
+
+  /** Rows through client age 95 (inclusive). */
+  const retIncomeHorizonYearsThroughAge95 = useMemo(() => {
+    if (retIncomeClientAgeStart <= 0) return 1;
+    return Math.max(1, 95 - retIncomeClientAgeStart + 1);
+  }, [retIncomeClientAgeStart]);
+
+  const retIncomeProjectionRows = useMemo(() => {
+    const needInfl = (Number(String(retIncNeedInflationPct).replace(/%/g, "")) || 0) / 100;
+    const ssCola = (Number(String(retIncSsColaPct).replace(/%/g, "")) || 0) / 100;
+    const penCola = (Number(String(retIncPensionColaPct).replace(/%/g, "")) || 0) / 100;
+    const othGr = (Number(String(retIncOtherGrowthPct).replace(/%/g, "")) || 0) / 100;
+    const pension = Number(String(retIncPensionAnnual).replace(/[$,]/g, "")) || 0;
+    const other = Number(String(retIncOtherAnnual).replace(/[$,]/g, "")) || 0;
+    const earnedC = Number(String(retIncClientEarnedAnnual).replace(/[$,]/g, "")) || 0;
+    const earnedS = Number(String(retIncSpouseEarnedAnnual).replace(/[$,]/g, "")) || 0;
+    const cy = typeof window !== "undefined" ? new Date().getFullYear() : 2026;
+    if (retIncomeClientAgeStart <= 0) return [];
+    return buildRetirementIncomeProjection({
+      clientAgeStart: retIncomeClientAgeStart,
+      spouseAgeStart: retIncomeSpouseAgeStart,
+      married: client.married,
+      clientRetirementAge: Math.max(50, Math.floor(Number(client.retirementAge) || 67)),
+      spouseRetirementAge: Math.max(50, Math.floor(Number(client.spouseRetirementAge) || 67)),
+      earnedClientAnnual: earnedC,
+      earnedSpouseAnnual: earnedS,
+      baseRetirementNeedAnnual: retIncomeBaseNeedAnnual,
+      needInflationAnnual: needInfl,
+      baseSocialSecurityClientAnnual: retIncomeSsClientAnnualPart,
+      baseSocialSecuritySpouseAnnual: retIncomeSsSpouseAnnualPart,
+      clientSocialSecurityStartAge: retIncomeResolvedSsStartClient,
+      spouseSocialSecurityStartAge: retIncomeResolvedSsStartSpouse,
+      socialSecurityColaAnnual: ssCola,
+      basePensionAnnual: pension,
+      pensionColaAnnual: penCola,
+      baseOtherIncomeAnnual: other,
+      otherIncomeGrowthAnnual: othGr,
+      initialTotalPortfolio: Math.max(0, totalValue),
+      initialQualifiedPortfolio: Math.max(0, traditionalQualifiedTotal),
+      portfolioReturnAnnual: retIncomePortfolioReturnDec,
+      horizonYears: retIncomeHorizonYearsThroughAge95,
+      startCalendarYear: cy,
+      spendTargetNetOfTax: retIncSpendNetOfTax,
+      effectiveTaxRateAnnual: retIncomeEffectiveTaxDec,
+    });
+  }, [
+    retIncomeClientAgeStart,
+    retIncomeSpouseAgeStart,
+    client.married,
+    client.retirementAge,
+    client.spouseRetirementAge,
+    retIncClientEarnedAnnual,
+    retIncSpouseEarnedAnnual,
+    retIncomeBaseNeedAnnual,
+    retIncNeedInflationPct,
+    retIncSsColaPct,
+    retIncPensionAnnual,
+    retIncPensionColaPct,
+    retIncOtherAnnual,
+    retIncOtherGrowthPct,
+    retIncomeSsClientAnnualPart,
+    retIncomeSsSpouseAnnualPart,
+    retIncomeResolvedSsStartClient,
+    retIncomeResolvedSsStartSpouse,
+    retIncSpendNetOfTax,
+    retIncomeEffectiveTaxDec,
+    totalValue,
+    traditionalQualifiedTotal,
+    retIncomePortfolioReturnDec,
+    retIncomeHorizonYearsThroughAge95,
+  ]);
 
   const retirementModelInsights = [
     `Current allocation estimate: ${currentSuccessRate}/100 (${successLabel(currentSuccessRate)}).`,
@@ -2071,6 +2441,30 @@ export default function AdvisorPilotPage() {
     setRothFicTemplateRemapTargetId(null);
     setSnapshotIncludeFiaAppendix(false);
     setSnapshotIncludeRothAppendix(false);
+    setRetIncClientEarnedAnnual("");
+    setRetIncSpouseEarnedAnnual("");
+    setRetIncPensionAnnual("");
+    setRetIncPensionColaPct("");
+    setRetIncOtherAnnual("");
+    setRetIncOtherGrowthPct("");
+    setRetIncNeedInflationPct("3");
+    setRetIncSsColaPct("2");
+    setRetIncSsMonthlyClient("");
+    setRetIncSsMonthlySpouse("");
+    setRetIncSsKnowBenefit("unset");
+    setRetIncSsEstClientAnnual("");
+    setRetIncSsEstClientYears("");
+    setRetIncSsEstClientClaimAge("");
+    setRetIncSsEstSpouseAnnual("");
+    setRetIncSsEstSpouseYears("");
+    setRetIncSsEstSpouseClaimAge("");
+    setRetIncSsUseSpousalModel(true);
+    setRetIncSpendNetOfTax(true);
+    setRetIncEffectiveTaxPct("20");
+    setRetIncSsStartAgeClient("");
+    setRetIncSsStartAgeSpouse("");
+    setRetIncReturnMode("snapshot");
+    setRetIncCustomReturnPct("");
     setFollowUpEmail("");
     setEmailCopied(false);
     setDuplicatesAcknowledged(false);
@@ -2109,6 +2503,8 @@ export default function AdvisorPilotPage() {
     setActiveReviewId(review.id);
     const loadedClient = normalizeIntakeClient(review.client);
     setRothLiveAnalysisOpen(loadedClient.persistedAdvisorUi?.rothLiveAnalysisOpen === true);
+    setSnapshotIncludeFiaAppendix(loadedClient.persistedAdvisorUi?.snapshotIncludeFiaAppendix === true);
+    setSnapshotIncludeRothAppendix(loadedClient.persistedAdvisorUi?.snapshotIncludeRothAppendix === true);
     setFiaWorksheet(normalizeFiaWorksheet(loadedClient.fiaWorksheet ?? emptyFiaWorksheet()));
     setClient({ ...loadedClient, fiaWorksheet: undefined, persistedAdvisorUi: undefined });
     const reviewDemo = Boolean(review.demoMode);
@@ -2126,6 +2522,22 @@ export default function AdvisorPilotPage() {
     setRothAnalysisPrecheckMessages([]);
     setFollowUpEmail("");
     setEmailCopied(false);
+    const lc = String(loadedClient.socialSecurityMonthlyClient ?? "").trim();
+    const ls = String(loadedClient.socialSecurityMonthlySpouse ?? "").trim();
+    setRetIncSsMonthlyClient(lc ? loadedClient.socialSecurityMonthlyClient : "");
+    setRetIncSsMonthlySpouse(loadedClient.married && ls ? loadedClient.socialSecurityMonthlySpouse : "");
+    setRetIncSsKnowBenefit("unset");
+    setRetIncSsEstClientAnnual("");
+    setRetIncSsEstClientYears("");
+    setRetIncSsEstClientClaimAge("");
+    setRetIncSsEstSpouseAnnual("");
+    setRetIncSsEstSpouseYears("");
+    setRetIncSsEstSpouseClaimAge("");
+    setRetIncSsUseSpousalModel(true);
+    setRetIncSpendNetOfTax(true);
+    setRetIncEffectiveTaxPct("20");
+    setRetIncSsStartAgeClient("");
+    setRetIncSsStartAgeSpouse("");
     const resumeConfirm =
       String(review.status || "").trim().toLowerCase() === "draft" && !review.analysis;
     setStep(resumeConfirm ? "confirm" : "analysis");
@@ -2219,6 +2631,21 @@ export default function AdvisorPilotPage() {
         objectionHandling: freshAnalysis.objectionHandling || [],
       };
 
+      const rothWsFollowUp = normalizeRothWorksheet(review.rothWorksheet);
+      const tradQFollowUp = sumTraditionalQualifiedValue(reviewHoldings);
+      const nonQFollowUp = sumNonQualifiedValue(reviewHoldings);
+      const fiaWsFollowUp =
+        normalizedClient.fiaWorksheet != null ? normalizedClient.fiaWorksheet : emptyFiaWorksheet();
+      const fiaPremiumFollowUp = defaultPremiumForWorksheet(fiaWsFollowUp, tradQFollowUp, nonQFollowUp);
+      const fiaAgeFollowUp =
+        ctx.derivedAge != null && Number.isFinite(ctx.derivedAge) ? ctx.derivedAge : null;
+      const rothPdfQFollowUp = rothIllustrationQualifiedBalance(
+        rothWsFollowUp,
+        ctx.totalValue || 0,
+        tradQFollowUp
+      );
+      const persistUiFollowUp = normalizedClient.persistedAdvisorUi;
+
       let emailOk = false;
       let emailErrMsg = "";
       let emailPlainBody = "";
@@ -2234,7 +2661,7 @@ export default function AdvisorPilotPage() {
             calendarLink: signatureCalendarLink,
             clientId: review.id,
             demoMode: Boolean(review.demoMode),
-            client: normalizedClient,
+            client: { ...normalizedClient, fiaWorksheet: undefined, persistedAdvisorUi: undefined },
             analysis: analysisPayload,
             allocation: {
               current: ctx.currentAllocation,
@@ -2249,6 +2676,13 @@ export default function AdvisorPilotPage() {
             },
             totalValue: ctx.totalValue,
             holdings: reviewHoldings,
+            includeFiaAppendix: persistUiFollowUp?.snapshotIncludeFiaAppendix === true,
+            includeRothConversionAppendix: persistUiFollowUp?.snapshotIncludeRothAppendix === true,
+            fiaWorksheet: fiaWsFollowUp,
+            fiaPremiumDefault: fiaPremiumFollowUp,
+            fiaClientAgeForIllustration: fiaAgeFollowUp,
+            rothWorksheet: rothWsFollowUp,
+            rothPdfQualifiedTotal: rothPdfQFollowUp || 0,
           }),
         });
 
@@ -2344,6 +2778,8 @@ export default function AdvisorPilotPage() {
     setActiveReviewId(review.id);
     const loadedClient = normalizeIntakeClient(review.client);
     setRothLiveAnalysisOpen(loadedClient.persistedAdvisorUi?.rothLiveAnalysisOpen === true);
+    setSnapshotIncludeFiaAppendix(loadedClient.persistedAdvisorUi?.snapshotIncludeFiaAppendix === true);
+    setSnapshotIncludeRothAppendix(loadedClient.persistedAdvisorUi?.snapshotIncludeRothAppendix === true);
     setFiaWorksheet(normalizeFiaWorksheet(loadedClient.fiaWorksheet ?? emptyFiaWorksheet()));
     setClient({ ...loadedClient, fiaWorksheet: undefined, persistedAdvisorUi: undefined });
     setHoldings(normalizeHoldingsForUi(review.holdings));
@@ -2784,6 +3220,13 @@ async function sendClientSnapshotEmail() {
         },
         totalValue,
         holdings,
+        includeFiaAppendix: snapshotIncludeFiaAppendix,
+        includeRothConversionAppendix: snapshotIncludeRothAppendix,
+        fiaWorksheet,
+        fiaPremiumDefault,
+        fiaClientAgeForIllustration,
+        rothWorksheet,
+        rothPdfQualifiedTotal: rothPdfQualifiedTotal || 0,
       }),
     });
 
@@ -4200,7 +4643,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   Back to analysis
                 </Button>
                 <p className="hidden text-center text-xs text-slate-500 sm:block">
-                  After the conversation, optionally use the FIA calculator or Roth worksheet, then Wrap-up for the Client Snapshot PDF, Gmail send, and follow-up copy.
+                  After the conversation, optionally use the FIA calculator, Roth worksheet, Ret. Inc Calculator, then Wrap-up for the Client Snapshot PDF, Gmail send, and follow-up copy.
                 </p>
                 <Button className="h-12 rounded-none ap-cta-solid px-5 touch-manipulation" onClick={() => setStep("fia")}>
                   <Calculator className="mr-2 h-4 w-4" />
@@ -4209,7 +4652,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </Button>
               </div>
               <p className="text-xs text-slate-500 sm:hidden">
-                After the meeting, optionally use the FIA and Roth screens, then open Wrap-up for PDFs and email.
+                After the meeting, optionally use the FIA, Roth, and Ret. Inc screens, then open Wrap-up for PDFs and email.
               </p>
             </CardContent>
           </Card>
@@ -4780,6 +5223,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                               </tbody>
                             </table>
                           </div>
+                          <FiaScenarioReturnChart
+                            rows={s.rows}
+                            scenarioId={s.scenarioId}
+                            windowLabel={
+                              s.years.length === 10
+                                ? `${s.years[0]}\u2013${s.years[9]}`
+                                : s.label
+                            }
+                          />
                         </TabsContent>
                       ))}
                     </Tabs>
@@ -4953,6 +5405,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       Roth worksheet
                     </Button>
                   ) : null}
+                  <Button
+                    variant="outline"
+                    className="h-12 rounded-none border-sky-200 bg-sky-50/90 touch-manipulation hover:bg-sky-100/90"
+                    onClick={() => setStep("retIncome")}
+                  >
+                    <Landmark className="mr-2 h-4 w-4" />
+                    Ret. Inc Calculator
+                  </Button>
                 </div>
               </div>
             </CardContent>
@@ -5879,6 +6339,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <Button
                     variant="outline"
                     className="h-12 rounded-none border-slate-300 touch-manipulation"
+                    onClick={() => setStep("retIncome")}
+                  >
+                    <Landmark className="mr-2 h-4 w-4" />
+                    Ret. Inc Calculator
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-12 rounded-none border-slate-300 touch-manipulation"
                     onClick={() => setStep("report")}
                   >
                     <Download className="mr-2 h-4 w-4" />
@@ -5892,6 +6360,763 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   >
                     <BrainCircuit className="mr-2 h-4 w-4" />
                     {rothAnalysisBusy ? "Running…" : "Roth Analysis"}
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {step === "retIncome" && (
+          <Card className="rounded-none ap-glass border-0">
+            <CardContent className="space-y-8 p-6 md:p-8">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none border-sky-200 bg-sky-50">
+                    <Landmark className="h-6 w-6 text-sky-900" />
+                  </div>
+                  <div>
+                    <h2 className="font-serif text-3xl font-bold">Ret. Inc Calculator</h2>
+                    <p className="text-sm text-slate-500">
+                      Illustrative year-by-year bridge: retirement spending vs. earned income, Social Security, other recurring
+                      income, RMDs on traditional balances, and portfolio draws. Assumptions are for discussion only, not tax or
+                      legal advice.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-none border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-950">
+                <p className="font-semibold">Model limits</p>
+                <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                  RMD uses IRS Uniform Lifetime divisors from age 73 on the traditional tax-deferred total from Confirm. Return
+                  mode uses the firm&apos;s decade CAGR blend (most recent 10-year scenario) for either current holdings or the
+                  proposed allocation from the Portfolio Review target mix. Social Security uses monthly amounts you enter,
+                  profile amounts when marked &quot;receiving&quot;, or the illustrative estimator when you choose that path
+                  below — not an SSA record match. Benefits apply on the timeline from each person&apos;s SS start age (defaults
+                  below). When &quot;Spend target&quot; is after-tax, an illustrative flat tax rate scales earned income, SS,
+                  pension, other income, RMDs, and additional withdrawals as ordinary income for residual draw math only — not
+                  tax advice.
+                </p>
+              </div>
+
+              <div className="space-y-5 rounded-none border border-slate-200 bg-slate-50/80 p-5 md:p-6">
+                <p className="text-sm font-semibold text-slate-800">From client profile (editable)</p>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Client first name</label>
+                    <Input
+                      className="mt-2 h-12 rounded-none bg-white"
+                      value={client.firstName}
+                      onChange={(e) => setClient({ ...client, firstName: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Client last name</label>
+                    <Input
+                      className="mt-2 h-12 rounded-none bg-white"
+                      value={client.lastName}
+                      onChange={(e) => setClient({ ...client, lastName: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Client current age</label>
+                    <Input
+                      className="mt-2 h-12 rounded-none bg-white"
+                      type="number"
+                      value={client.age}
+                      onChange={(e) => setClient({ ...client, age: e.target.value })}
+                      placeholder="62"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Client retirement age</label>
+                    <Input
+                      className="mt-2 h-12 rounded-none bg-white"
+                      type="number"
+                      value={client.retirementAge}
+                      onChange={(e) => setClient({ ...client, retirementAge: e.target.value })}
+                    />
+                  </div>
+                  {client.married ? (
+                    <>
+                      <div>
+                        <label className="text-sm font-semibold text-slate-700">Spouse first name</label>
+                        <Input
+                          className="mt-2 h-12 rounded-none bg-white"
+                          value={client.spouseFirstName}
+                          onChange={(e) => setClient({ ...client, spouseFirstName: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-semibold text-slate-700">Spouse last name</label>
+                        <Input
+                          className="mt-2 h-12 rounded-none bg-white"
+                          value={client.spouseLastName}
+                          onChange={(e) => setClient({ ...client, spouseLastName: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-semibold text-slate-700">Spouse current age</label>
+                        <Input
+                          className="mt-2 h-12 rounded-none bg-white"
+                          type="number"
+                          value={client.spouseAge}
+                          onChange={(e) => setClient({ ...client, spouseAge: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-semibold text-slate-700">Spouse retirement age</label>
+                        <Input
+                          className="mt-2 h-12 rounded-none bg-white"
+                          type="number"
+                          value={client.spouseRetirementAge}
+                          onChange={(e) => setClient({ ...client, spouseRetirementAge: e.target.value })}
+                        />
+                      </div>
+                    </>
+                  ) : null}
+                  <div className="md:col-span-2">
+                    <label className="text-sm font-semibold text-slate-700">Annual spendable income need in retirement</label>
+                    <div className="mt-2 flex h-12 max-w-md items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                      <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                      <Input
+                        className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                        type="text"
+                        inputMode="decimal"
+                        value={client.retirementSpendableIncomeAnnual}
+                        onChange={(e) => setClient({ ...client, retirementSpendableIncomeAnnual: e.target.value })}
+                        placeholder="85000"
+                      />
+                    </div>
+                  </div>
+                  <div className="md:col-span-2 flex flex-col gap-4 rounded-none border border-slate-200 bg-white px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">Spend target net of income taxes?</p>
+                        <p className="text-xs text-slate-500">
+                          After-tax: the table treats the spend target as cash after tax and applies the illustrative rate below
+                          to earned income, SS, pension, other income, RMDs, and extra portfolio draws. Gross: same sources
+                          without that adjustment.
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant={retIncSpendNetOfTax ? "default" : "outline"}
+                          className="h-10 rounded-none"
+                          onClick={() => setRetIncSpendNetOfTax(true)}
+                        >
+                          Yes (after-tax)
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={!retIncSpendNetOfTax ? "default" : "outline"}
+                          className="h-10 rounded-none"
+                          onClick={() => setRetIncSpendNetOfTax(false)}
+                        >
+                          No (gross)
+                        </Button>
+                      </div>
+                    </div>
+                    {retIncSpendNetOfTax ? (
+                      <div className="max-w-xs space-y-2">
+                        <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Illustrative effective tax rate (%)
+                        </label>
+                        <Input
+                          className="h-11 rounded-none border border-blue-100 bg-white"
+                          type="text"
+                          inputMode="decimal"
+                          value={retIncEffectiveTaxPct}
+                          onChange={(e) => setRetIncEffectiveTaxPct(e.target.value)}
+                          placeholder="20"
+                        />
+                        <p className="text-xs text-slate-500">Flat rate for discussion only (not bracket or NIIT modeling).</p>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500">Married status is set during intake (Question 1).</p>
+              </div>
+
+              <div className="space-y-5 rounded-none border border-slate-200 bg-white p-5 md:p-6">
+                <div className="flex flex-col gap-2 border-b border-slate-100 pb-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">Social Security</p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                      Combined annual benefit at full payment (both receiving):{" "}
+                      <span className="font-semibold text-slate-800">{currency(retIncomeCalcSsAnnual)}</span>
+                      {retIncSsKnowBenefit === "unset" && !client.takingSocialSecurity ? (
+                        <span> — answer the question below to include benefits.</span>
+                      ) : retIncSsKnowBenefit === "yes" ? (
+                        <span>
+                          {" "}
+                          · Client / spouse components can start in different years — set ages below the monthly amounts.
+                        </span>
+                      ) : null}
+                    </p>
+                  </div>
+                  <a
+                    href="https://www.ssa.gov/OACT/quickcalc/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 text-xs font-semibold text-sky-800 underline decoration-sky-300 underline-offset-2 hover:text-sky-950"
+                  >
+                    SSA Quick Calculator (reference)
+                  </a>
+                </div>
+
+                {client.takingSocialSecurity ? (
+                  <div className="space-y-4">
+                    <p className="text-xs text-slate-600">
+                      Client Profile marks this household as <strong>receiving</strong> benefits. Monthly amounts below sync
+                      from Question 7 when saved; edit here for this illustration only.
+                    </p>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div>
+                        <label className="text-sm font-semibold text-slate-700">Client (monthly)</label>
+                        <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                          <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                          <Input
+                            className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                            type="text"
+                            inputMode="decimal"
+                            value={retIncSsMonthlyClient}
+                            onChange={(e) => setRetIncSsMonthlyClient(e.target.value)}
+                            placeholder="0"
+                          />
+                        </div>
+                      </div>
+                      {client.married ? (
+                        <div>
+                          <label className="text-sm font-semibold text-slate-700">Spouse (monthly)</label>
+                          <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                            <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                            <Input
+                              className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                              type="text"
+                              inputMode="decimal"
+                              value={retIncSsMonthlySpouse}
+                              onChange={(e) => setRetIncSsMonthlySpouse(e.target.value)}
+                              placeholder="0"
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-5">
+                    <p className="text-xs text-slate-600">
+                      Client Profile does <strong>not</strong> mark benefits as receiving yet. Choose how to represent Social
+                      Security in this run.
+                    </p>
+                    <div className="rounded-none border border-slate-200 bg-slate-50/90 p-4 md:p-5">
+                      <p className="text-sm font-semibold text-slate-900">Do you know the estimated monthly retirement benefit?</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant={retIncSsKnowBenefit === "yes" ? "default" : "outline"}
+                          className="h-10 rounded-none"
+                          onClick={() => setRetIncSsKnowBenefit("yes")}
+                        >
+                          Yes
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={retIncSsKnowBenefit === "no" ? "default" : "outline"}
+                          className="h-10 rounded-none"
+                          onClick={() => setRetIncSsKnowBenefit("no")}
+                        >
+                          No — estimate
+                        </Button>
+                      </div>
+                    </div>
+
+                    {retIncSsKnowBenefit === "yes" ? (
+                      <div className="space-y-3">
+                        <p className="text-xs text-slate-600">Enter the monthly retirement benefit to use in the table (today&apos;s dollars).</p>
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="text-sm font-semibold text-slate-700">Client (monthly)</label>
+                            <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                              <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                              <Input
+                                className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                                type="text"
+                                inputMode="decimal"
+                                value={retIncSsMonthlyClient}
+                                onChange={(e) => setRetIncSsMonthlyClient(e.target.value)}
+                                placeholder="0"
+                              />
+                            </div>
+                          </div>
+                          {client.married ? (
+                            <div>
+                              <label className="text-sm font-semibold text-slate-700">Spouse (monthly)</label>
+                              <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                                <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                                <Input
+                                  className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={retIncSsMonthlySpouse}
+                                  onChange={(e) => setRetIncSsMonthlySpouse(e.target.value)}
+                                  placeholder="0"
+                                />
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="grid grid-cols-1 gap-4 rounded-none border border-slate-100 bg-slate-50/80 p-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <label className="text-sm font-semibold text-slate-700">SS benefit start age — client (timeline)</label>
+                            <Input
+                              className="h-11 rounded-none border border-blue-100 bg-white"
+                              type="text"
+                              inputMode="numeric"
+                              value={retIncSsStartAgeClient}
+                              onChange={(e) => setRetIncSsStartAgeClient(e.target.value)}
+                              placeholder="Blank = auto"
+                            />
+                            <p className="text-xs text-slate-500">
+                              Resolved for this table:{" "}
+                              <span className="font-semibold text-slate-800">{retIncomeResolvedSsStartClient}</span>. Leave blank
+                              to use client retirement age from the profile.
+                            </p>
+                          </div>
+                          {client.married ? (
+                            <div className="space-y-2">
+                              <label className="text-sm font-semibold text-slate-700">SS benefit start age — spouse (timeline)</label>
+                              <Input
+                                className="h-11 rounded-none border border-blue-100 bg-white"
+                                type="text"
+                                inputMode="numeric"
+                                value={retIncSsStartAgeSpouse}
+                                onChange={(e) => setRetIncSsStartAgeSpouse(e.target.value)}
+                                placeholder="Blank = auto"
+                              />
+                              <p className="text-xs text-slate-500">
+                                Resolved: <span className="font-semibold text-slate-800">{retIncomeResolvedSsStartSpouse}</span> —
+                                blank uses spouse retirement age from the profile.
+                              </p>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {retIncSsKnowBenefit === "no" ? (
+                      <div className="space-y-4 rounded-none border border-sky-200/80 bg-sky-50/40 p-4 md:p-5">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">Illustrative benefit estimate</p>
+                          <p className="mt-1 text-xs leading-relaxed text-slate-600">
+                            Same idea as the SSA Quick Calculator: no earnings record is loaded. We approximate average indexed
+                            earnings from your covered annual amount and years worked, apply SSA-style bend points for 2026
+                            eligibility, then adjust for benefit start age. For a married spouse, you can optionally compare their
+                            own benefit to an illustrative spousal amount (50% of the worker&apos;s PIA, using the same claiming-age
+                            factor as the spouse retirement path — not identical to SSA spousal reductions). For a certified
+                            estimate, use{" "}
+                            <a
+                              href="https://www.ssa.gov/OACT/quickcalc/"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-semibold text-sky-900 underline decoration-sky-400 underline-offset-2"
+                            >
+                              ssa.gov/quickcalc
+                            </a>
+                            .
+                          </p>
+                        </div>
+                        <div className={`grid grid-cols-1 gap-4 ${client.married ? "lg:grid-cols-2" : ""}`}>
+                          <div className="space-y-3 rounded-none border border-white bg-white p-4 shadow-sm">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Client</p>
+                            <p className="text-xs text-slate-600">
+                              DOB (profile): <span className="font-medium text-slate-900">{client.dob?.trim() || "—"}</span>
+                              {retIncomeClientBirthYear != null ? (
+                                <span className="text-slate-500"> · birth year {retIncomeClientBirthYear}</span>
+                              ) : (
+                                <span className="text-amber-800"> · add date of birth on Client Profile for an estimate</span>
+                              )}
+                            </p>
+                            <div>
+                              <label className="text-xs font-semibold text-slate-700">Annual covered earnings (SS wages)</label>
+                              <div className="mt-1 flex h-11 items-center overflow-hidden rounded-none border border-slate-200 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                                <span className="pl-3 text-sm font-medium text-slate-600">$</span>
+                                <Input
+                                  className="h-full flex-1 border-0 bg-transparent pl-1 pr-3 text-sm shadow-none focus-visible:ring-0"
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={retIncSsEstClientAnnual}
+                                  onChange={(e) => setRetIncSsEstClientAnnual(e.target.value)}
+                                  placeholder="e.g. 85000"
+                                />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-xs font-semibold text-slate-700">Years worked (1–35)</label>
+                                <Input
+                                  className="mt-1 h-11 rounded-none border border-slate-200 bg-white text-sm"
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={retIncSsEstClientYears}
+                                  onChange={(e) => setRetIncSsEstClientYears(e.target.value)}
+                                  placeholder={`Auto ${Math.min(35, Math.max(1, retIncomeClientAgeStart - 22))}`}
+                                />
+                              </div>
+                              <div>
+                                <label className="text-xs font-semibold text-slate-700">Start benefits (age)</label>
+                                <Input
+                                  className="mt-1 h-11 rounded-none border border-slate-200 bg-white text-sm"
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={retIncSsEstClientClaimAge}
+                                  onChange={(e) => setRetIncSsEstClientClaimAge(e.target.value)}
+                                  placeholder={`Default ${Math.min(70, Math.max(62, Math.floor(Number(client.retirementAge) || 67)))}`}
+                                />
+                              </div>
+                            </div>
+                            <div className="border-t border-slate-100 pt-3">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Estimated monthly</p>
+                              <p className="mt-1 font-serif text-2xl font-bold tabular-nums text-slate-900">
+                                {retIncomeSsEstimatorClientMonthly != null
+                                  ? currency(retIncomeSsEstimatorClientMonthly)
+                                  : "—"}
+                              </p>
+                              <p className="mt-1 text-[0.65rem] text-slate-500">Rounded; illustrative only.</p>
+                            </div>
+                          </div>
+
+                          {client.married ? (
+                            <div className="space-y-3 rounded-none border border-white bg-white p-4 shadow-sm">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Spouse</p>
+                              <p className="text-xs text-slate-600">
+                                DOB (profile):{" "}
+                                <span className="font-medium text-slate-900">{client.spouseDob?.trim() || "—"}</span>
+                                {retIncomeSpouseBirthYear != null ? (
+                                  <span className="text-slate-500"> · birth year {retIncomeSpouseBirthYear}</span>
+                                ) : (
+                                  <span className="text-amber-800"> · add spouse DOB or age for an estimate</span>
+                                )}
+                              </p>
+                              <div>
+                                <label className="text-xs font-semibold text-slate-700">Annual covered earnings (SS wages)</label>
+                                <div className="mt-1 flex h-11 items-center overflow-hidden rounded-none border border-slate-200 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                                  <span className="pl-3 text-sm font-medium text-slate-600">$</span>
+                                  <Input
+                                    className="h-full flex-1 border-0 bg-transparent pl-1 pr-3 text-sm shadow-none focus-visible:ring-0"
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={retIncSsEstSpouseAnnual}
+                                    onChange={(e) => setRetIncSsEstSpouseAnnual(e.target.value)}
+                                    placeholder="e.g. 72000"
+                                  />
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="text-xs font-semibold text-slate-700">Years worked (1–35)</label>
+                                  <Input
+                                    className="mt-1 h-11 rounded-none border border-slate-200 bg-white text-sm"
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={retIncSsEstSpouseYears}
+                                    onChange={(e) => setRetIncSsEstSpouseYears(e.target.value)}
+                                    placeholder={
+                                      retIncomeSpouseAgeStart != null
+                                        ? `Auto ${Math.min(35, Math.max(1, retIncomeSpouseAgeStart - 22))}`
+                                        : "Auto"
+                                    }
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs font-semibold text-slate-700">Start benefits (age)</label>
+                                  <Input
+                                    className="mt-1 h-11 rounded-none border border-slate-200 bg-white text-sm"
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={retIncSsEstSpouseClaimAge}
+                                    onChange={(e) => setRetIncSsEstSpouseClaimAge(e.target.value)}
+                                    placeholder={`Default ${Math.min(70, Math.max(62, Math.floor(Number(client.spouseRetirementAge) || 67)))}`}
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex flex-col gap-2 rounded-none border border-slate-100 bg-slate-50/90 px-3 py-2.5">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-xs font-semibold text-slate-800">Spousal benefit check</p>
+                                    <p className="text-[0.65rem] leading-snug text-slate-600">
+                                      Uses max(spouse&apos;s own retirement, 50% × worker PIA × spouse claiming factor). Off = own
+                                      record only.
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={retIncSsUseSpousalModel}
+                                    onClick={() => setRetIncSsUseSpousalModel((v) => !v)}
+                                    className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                                      retIncSsUseSpousalModel ? "bg-sky-500" : "bg-slate-200"
+                                    }`}
+                                  >
+                                    <span className="sr-only">Include spousal benefit comparison</span>
+                                    <span
+                                      className={`absolute top-1 h-6 w-6 rounded-none bg-white shadow transition-[left] ${
+                                        retIncSsUseSpousalModel ? "left-7" : "left-1"
+                                      }`}
+                                    />
+                                  </button>
+                                </div>
+                                {retIncSsUseSpousalModel ? (
+                                  <p className="text-[0.65rem] text-slate-600">
+                                    Worker PIA (illustrative, for 50% test):{" "}
+                                    <span className="font-semibold tabular-nums text-slate-900">
+                                      {retIncomeSsWorkerPiaMonthly != null ? currency(retIncomeSsWorkerPiaMonthly) : "—"}
+                                    </span>
+                                  </p>
+                                ) : null}
+                              </div>
+                              <div className="border-t border-slate-100 pt-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Estimated monthly</p>
+                                <p className="mt-1 font-serif text-2xl font-bold tabular-nums text-slate-900">
+                                  {retIncomeSsEstimatorSpouseMonthly != null
+                                    ? currency(retIncomeSsEstimatorSpouseMonthly)
+                                    : "—"}
+                                </p>
+                                <p className="mt-1 text-[0.65rem] text-slate-500">
+                                  {retIncSsUseSpousalModel
+                                    ? "Survivor, deeming, family max, and SSA spousal reduction tables not modeled."
+                                    : "Own earnings record only; turn on spousal check to compare to 50% of worker PIA."}
+                                </p>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <div className="space-y-4 rounded-none border border-slate-200 bg-white p-5 md:p-6">
+                  <p className="text-sm font-semibold text-slate-800">Earned income (annual, pre-retirement)</p>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Client</label>
+                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                      <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                      <Input
+                        className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                        type="text"
+                        inputMode="decimal"
+                        value={retIncClientEarnedAnnual}
+                        onChange={(e) => setRetIncClientEarnedAnnual(e.target.value)}
+                        placeholder="0"
+                      />
+                    </div>
+                  </div>
+                  {client.married ? (
+                    <div>
+                      <label className="text-sm font-semibold text-slate-700">Spouse</label>
+                      <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                        <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                        <Input
+                          className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                          type="text"
+                          inputMode="decimal"
+                          value={retIncSpouseEarnedAnnual}
+                          onChange={(e) => setRetIncSpouseEarnedAnnual(e.target.value)}
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="space-y-4 rounded-none border border-slate-200 bg-white p-5 md:p-6">
+                  <p className="text-sm font-semibold text-slate-800">Pension and other long-term income</p>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Pension (annual start)</label>
+                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                      <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                      <Input
+                        className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                        type="text"
+                        inputMode="decimal"
+                        value={retIncPensionAnnual}
+                        onChange={(e) => setRetIncPensionAnnual(e.target.value)}
+                        placeholder="0"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Pension COLA (% per year)</label>
+                    <Input
+                      className="mt-2 h-12 rounded-none border border-blue-100 bg-white"
+                      type="text"
+                      inputMode="decimal"
+                      value={retIncPensionColaPct}
+                      onChange={(e) => setRetIncPensionColaPct(e.target.value)}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Other long-term income (annual start)</label>
+                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
+                      <span className="pl-4 text-lg font-medium text-slate-600">$</span>
+                      <Input
+                        className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
+                        type="text"
+                        inputMode="decimal"
+                        value={retIncOtherAnnual}
+                        onChange={(e) => setRetIncOtherAnnual(e.target.value)}
+                        placeholder="0"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">Other income growth (% per year)</label>
+                    <Input
+                      className="mt-2 h-12 rounded-none border border-blue-100 bg-white"
+                      type="text"
+                      inputMode="decimal"
+                      value={retIncOtherGrowthPct}
+                      onChange={(e) => setRetIncOtherGrowthPct(e.target.value)}
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+                <div className="space-y-2 rounded-none border border-slate-200 bg-white p-4">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Inflation on spending need</label>
+                  <Input
+                    className="h-11 rounded-none border border-blue-100 bg-white"
+                    value={retIncNeedInflationPct}
+                    onChange={(e) => setRetIncNeedInflationPct(e.target.value)}
+                    placeholder="3"
+                  />
+                  <p className="text-xs text-slate-500">Default 3% per year after both retire.</p>
+                </div>
+                <div className="space-y-2 rounded-none border border-slate-200 bg-white p-4">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">SS COLA</label>
+                  <Input
+                    className="h-11 rounded-none border border-blue-100 bg-white"
+                    value={retIncSsColaPct}
+                    onChange={(e) => setRetIncSsColaPct(e.target.value)}
+                    placeholder="2"
+                  />
+                  <p className="text-xs text-slate-500">Default 2% on benefits while in pay status.</p>
+                </div>
+                <div className="space-y-2 rounded-none border border-slate-200 bg-white p-4">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Portfolio return</label>
+                  <Select
+                    value={retIncReturnMode}
+                    onValueChange={(v) => setRetIncReturnMode(v as "snapshot" | "proposed" | "custom")}
+                  >
+                    <SelectTrigger className="h-11 rounded-none">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="snapshot">
+                        Current holdings ({formatTenYearScenarioPercent(retIncomeSnapshotReturnDec)} CAGR)
+                      </SelectItem>
+                      <SelectItem value="proposed">
+                        Proposed mix ({formatTenYearScenarioPercent(retIncomeProposedReturnDec)} CAGR)
+                      </SelectItem>
+                      <SelectItem value="custom">Custom annual %</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {retIncReturnMode === "custom" ? (
+                    <Input
+                      className="h-11 rounded-none border border-blue-100 bg-white"
+                      placeholder="e.g. 5.5"
+                      value={retIncCustomReturnPct}
+                      onChange={(e) => setRetIncCustomReturnPct(e.target.value)}
+                    />
+                  ) : null}
+                  <p className="text-xs text-slate-500">Table runs through client age 95.</p>
+                </div>
+              </div>
+
+              <div className="rounded-none border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                <span className="font-semibold text-slate-800">Starting balances (from Confirm)</span>
+                <span className="mx-2">·</span>
+                Total portfolio {currency(totalValue)} · Traditional (RMD base) {currency(traditionalQualifiedTotal)}
+              </div>
+
+              {retIncomeClientAgeStart <= 0 ? (
+                <div className="rounded-none border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+                  Enter the client&apos;s current age (or date of birth on Client Profile) so the projection can run.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-none border border-slate-200 bg-white shadow-sm">
+                  <table className="min-w-[1040px] w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                        <th className="px-3 py-3">Year</th>
+                        <th className="px-3 py-3">Age (C / S)</th>
+                        <th className="px-3 py-3 text-right">Income need</th>
+                        <th className="px-3 py-3 text-right">Earned</th>
+                        <th className="px-3 py-3 text-right">Soc Sec</th>
+                        <th className="px-3 py-3 text-right">Pension</th>
+                        <th className="px-3 py-3 text-right">Other</th>
+                        <th className="px-3 py-3 text-right">RMD</th>
+                        <th className="px-3 py-3 text-right">Income Gap W/D</th>
+                        <th className="px-3 py-3 text-right">Total W/D Pre-Tax</th>
+                        <th className="px-3 py-3 text-right">Portfolio end</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {retIncomeProjectionRows.map((r) => (
+                        <tr key={r.yearOffset} className="border-b border-slate-100 odd:bg-white even:bg-slate-50/60">
+                          <td className="px-3 py-2 tabular-nums text-slate-800">{r.calendarYear}</td>
+                          <td className="px-3 py-2 text-slate-700">
+                            {r.clientAge}
+                            {r.spouseAge != null ? ` / ${r.spouseAge}` : ""}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums">{currency(r.incomeNeed)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{currency(r.earnedIncome)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{currency(r.socialSecurity)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{currency(r.pension)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{currency(r.otherIncome)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{r.rmd > 0 ? currency(r.rmd) : "—"}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">
+                            {r.portfolioWithdrawalBeyondRmd > 0 ? currency(r.portfolioWithdrawalBeyondRmd) : "—"}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-800">
+                            {r.totalPortfolioWithdrawal > 0 ? currency(r.totalPortfolioWithdrawal) : "—"}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-900">
+                            {currency(r.endingPortfolio)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                <Button
+                  variant="outline"
+                  className="h-12 rounded-none touch-manipulation"
+                  onClick={() => setStep(showRothOptionReport ? "roth" : "fia")}
+                >
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  {showRothOptionReport ? "Back to Roth worksheet" : "Back to FIA calculator"}
+                </Button>
+                <div className="flex flex-wrap gap-2 sm:justify-end">
+                  <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => void saveCurrentReview()}>
+                    <Save className="mr-2 h-4 w-4" />
+                    Save client profile
+                  </Button>
+                  <Button className="h-12 rounded-none ap-cta-solid touch-manipulation" onClick={() => setStep("report")}>
+                    <Download className="mr-2 h-4 w-4" />
+                    Wrap-up: PDFs and email
                   </Button>
                 </div>
               </div>
@@ -6002,6 +7227,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         <ArrowRight className="ml-2 h-4 w-4" />
                       </Button>
                     ) : null}
+                    <Button
+                      variant="outline"
+                      className="h-12 justify-start rounded-none border-sky-200 bg-sky-50/90 touch-manipulation hover:bg-sky-100/90"
+                      onClick={() => setStep("retIncome")}
+                    >
+                      <Landmark className="mr-2 h-4 w-4" />
+                      Ret. Inc Calculator
+                      <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
                     <Button variant="outline" className="h-12 justify-start rounded-none bg-white/85 touch-manipulation" onClick={buildFollowUpEmail}>
                       <Mail className="mr-2 h-4 w-4" />
                       Follow-up email (copy)
