@@ -145,7 +145,10 @@ export function resolveVoiceSelection(settings: VoiceSettings): {
     model:
       settings.voiceModel ??
       process.env.LLM_VOICE_MODEL ??
-      "gemini-2.5-flash-live-preview-09-2025",
+      // Athena production default (gemini-adapter.ts:48). Other current
+      // candidates: 'gemini-2.5-flash-preview-native-audio-dialog' (native
+      // audio dialog tier).
+      "gemini-3.1-flash-live-preview",
     voice: settings.voiceName ?? process.env.LLM_VOICE_NAME ?? "Aoede",
   };
 }

@@ -76,6 +76,12 @@ export class VoiceSession {
   private mint: MintResponse | null = null;
   private speakingForResponse = false;
   private volumeRafScheduled = false;
+  /**
+   * True once the WS is open and ready for audio frames. Flipped false on
+   * close / error / explicit teardown so the mic-frame fan-out stops
+   * spamming `sendRealtimeInput` against a CLOSING WebSocket.
+   */
+  private sendReady = false;
 
   constructor(actions: VoiceAppActions, events: SessionEvents = {}) {
     this.actions = actions;
@@ -112,13 +118,16 @@ export class VoiceSession {
     }, maxMinutes * 60 * 1000);
 
     this.capture = await startMicCapture((b64) => {
-      const session = this.session;
-      if (!session) return;
+      // Guard: only send when the WS is open. ScriptProcessor keeps firing
+      // after disconnect; without this gate we'd spam "WebSocket is already
+      // in CLOSING or CLOSED state" errors and drown the console.
+      if (!this.session || !this.sendReady) return;
       try {
-        session.sendRealtimeInput({
+        this.session.sendRealtimeInput({
           audio: { data: b64, mimeType: "audio/pcm;rate=16000" },
         });
       } catch (err) {
+        this.sendReady = false;
         if (this.events.onError) this.events.onError(err as Error);
       }
     });
@@ -156,20 +165,24 @@ export class VoiceSession {
       sessionConfig.sessionResumption = { handle: this.resumptionHandle };
     }
 
+    this.sendReady = false;
     this.session = await ai.live.connect({
       model: mint.model,
       config: sessionConfig,
       callbacks: {
         onopen: () => {
+          this.sendReady = true;
           this.speakingForResponse = false;
           this.setState("listening");
         },
         onmessage: (msg: unknown) => this.handleMessage(msg as ServerMessage),
         onerror: (err: unknown) => {
+          this.sendReady = false;
           const e = err instanceof Error ? err : new Error(String(err));
           if (this.events.onError) this.events.onError(e);
         },
         onclose: () => {
+          this.sendReady = false;
           this.setState("disconnected");
           if (this.events.onClose) this.events.onClose();
         },
@@ -279,6 +292,7 @@ export class VoiceSession {
   }
 
   async close(): Promise<void> {
+    this.sendReady = false;
     if (this.autoCloseTimer) {
       clearTimeout(this.autoCloseTimer);
       this.autoCloseTimer = null;

@@ -12,7 +12,7 @@
  * single mount-point.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { MODEL_CATALOG, modelOptionsForProvider } from "@/lib/llm/model-catalog";
 import { advisorFetch } from "@/lib/advisor-fetch";
 import type { LlmPass, LlmProvider, ResearchTier } from "@/lib/llm";
@@ -136,13 +136,24 @@ export function LlmSettingsDrawer({ open, onClose, onSaved }: LlmSettingsDrawerP
 
   if (!open) return null;
 
+  // Inline color + color-scheme: the host page sets a dark inherited text
+  // color on its root container; without an explicit fence here the
+  // drawer's nested labels render white-on-white. `color-scheme: light`
+  // also fixes form controls (radio dot, checkbox check) being invisible
+  // against the light panel.
+  const panelStyle: React.CSSProperties = {
+    color: "#0c1929",
+    colorScheme: "light",
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/40"
       onClick={onClose}
     >
       <div
-        className="flex h-full w-full max-w-xl flex-col overflow-y-auto bg-white shadow-2xl"
+        className="flex h-full w-full max-w-xl flex-col overflow-y-auto bg-white text-slate-900 shadow-2xl"
+        style={panelStyle}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">

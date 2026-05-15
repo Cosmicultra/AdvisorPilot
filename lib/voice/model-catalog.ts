@@ -13,14 +13,14 @@ export interface VoiceModelOption {
 
 export const VOICE_MODELS: VoiceModelOption[] = [
   {
-    id: "gemini-2.5-flash-live-preview-09-2025",
-    label: "Gemini 2.5 Flash Live",
-    description: "Fast, conversational. Default.",
+    id: "gemini-3.1-flash-live-preview",
+    label: "Gemini 3.1 Flash Live",
+    description: "Fast, conversational. Production default (matches Athena).",
   },
   {
-    id: "gemini-2.5-flash-native-audio-preview-09-2025",
-    label: "Gemini 2.5 Flash (Native Audio)",
-    description: "Async non-blocking tool support; ideal for later background-research tools.",
+    id: "gemini-2.5-flash-preview-native-audio-dialog",
+    label: "Gemini 2.5 Flash (Native Audio Dialog)",
+    description: "Native-audio dialog tier; supports NON_BLOCKING tools.",
   },
 ];
 
