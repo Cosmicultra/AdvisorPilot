@@ -1,17 +1,8 @@
-import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { buildRegistrationSummaryForAnalysis } from "@/lib/holding-registration";
-import {
-  analysisJsonModel,
-  analysisResearchModel,
-  logOpenAiPass,
-} from "@/lib/openai-route-models";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { complete, research, resolveAdvisorLlmSelection } from "@/lib/llm";
 
 export async function POST(req: Request) {
   try {
@@ -42,6 +33,8 @@ export async function POST(req: Request) {
     const registrationSummary = buildRegistrationSummaryForAnalysis(
       Array.isArray(holdings) ? holdings : []
     );
+
+    const selection = await resolveAdvisorLlmSelection(identity?.email);
 
     const researchPrompt = `
 Research current market conditions for an advisor-facing portfolio review.
@@ -75,16 +68,26 @@ ${totalValue}
 Write concise research notes only. Do not return JSON.
 `;
 
-    const researchModel = analysisResearchModel();
-    logOpenAiPass("generate-analysis", "research", researchModel);
+    const researchResult = await research(
+      {
+        tier: selection.defaultResearchTier ?? "agentic-research",
+        user: researchPrompt,
+      },
+      { request: req, selection }
+    );
 
-    const researchResponse = await openai.responses.create({
-      model: researchModel,
-      tools: [{ type: "web_search_preview" }],
-      input: researchPrompt,
-    });
+    const researchNotes = researchResult.text;
+    const researchCitations = researchResult.citations;
 
-    const researchNotes = researchResponse.output_text || "";
+    // Surface the real sources to the synthesis pass so its output references
+    // actual research instead of model memory. The previous behavior discarded
+    // citations entirely.
+    const citationsBlock = researchCitations.length
+      ? `\n\nResearch Sources (use only these when referencing external evidence; do not invent URLs):
+${researchCitations
+  .map((c, i) => `[${i + 1}] ${c.title ? `${c.title} — ` : ""}${c.uri}`)
+  .join("\n")}\n`
+      : "";
 
     const jsonPrompt = `
 You are AdvisorPilot, an elite portfolio analysis assistant for licensed financial advisors.
@@ -110,7 +113,7 @@ ${totalValue}
 
 Market Research Notes:
 ${researchNotes}
-
+${citationsBlock}
 Return ONLY valid JSON. No markdown. No code fences.
 
 Use this exact JSON shape:
@@ -276,20 +279,16 @@ RISK INTAKE AND QUESTIONNAIRE (use Client JSON fields riskIntakeKnown, riskIntak
 - If riskProfileSuggested is present and differs from riskProfile, you may add at most one neutral clause that the advisor chose a different tier than the quick assessment suggested—no suitability or "correct profile" language.
 `;
 
-    const jsonModel = analysisJsonModel();
-    logOpenAiPass("generate-analysis", "json", jsonModel);
-
-    const jsonResponse = await openai.responses.create({
-      model: jsonModel,
-      input: jsonPrompt,
-      text: {
-        format: {
-          type: "json_object",
-        },
+    const synthesisResult = await complete<Record<string, unknown>>(
+      {
+        pass: "synthesis.json",
+        user: jsonPrompt,
+        jsonSchema: { type: "object" },
       },
-    });
+      { request: req, selection }
+    );
 
-    const parsed = JSON.parse(jsonResponse.output_text || "{}");
+    const parsed = (synthesisResult.json ?? {}) as Record<string, unknown>;
 
     const clientId = typeof body?.clientId === "string" ? body.clientId : null;
     const holdingsLen = Array.isArray(holdings) ? holdings.length : 0;
@@ -304,8 +303,10 @@ RISK INTAKE AND QUESTIONNAIRE (use Client JSON fields riskIntakeKnown, riskIntak
       metadata: {
         demoMode,
         holdingsCount: holdingsLen,
-        researchModel: researchModel,
-        jsonModel: jsonModel,
+        provider: synthesisResult.context.provider,
+        researchModel: researchResult.context.model,
+        jsonModel: synthesisResult.context.model,
+        researchCitationCount: researchCitations.length,
         unauthenticated: !identity,
       },
     });
@@ -335,6 +336,13 @@ RISK INTAKE AND QUESTIONNAIRE (use Client JSON fields riskIntakeKnown, riskIntak
       objectionHandling: Array.isArray(parsed.objectionHandling)
         ? parsed.objectionHandling
         : [],
+      /**
+       * Real citations harvested from the research pass. Today's PDF route
+       * does not yet render these; persisted now so the UI / report can
+       * surface "Sources" in a follow-up PR without re-running the call.
+       */
+      citations: researchCitations,
+      searchSuggestionsHtml: researchResult.searchSuggestionsHtml ?? null,
     });
   } catch (err: unknown) {
     console.error("ANALYSIS ERROR:", err);

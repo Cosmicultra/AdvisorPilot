@@ -24,6 +24,10 @@ type AdvisorProfileRecord = {
   website?: string | null;
   disclosures_text?: string | null;
   disclosures_image_url?: string | null;
+  // LLM preferences — all nullable; NULL → "use firm/env default."
+  llm_provider?: string | null;
+  llm_model_overrides?: Record<string, string> | null;
+  default_research_tier?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -56,9 +60,46 @@ function mapProfile(record: AdvisorProfileRecord) {
     website: record.website || "",
     disclosuresText: record.disclosures_text || "",
     disclosuresImageUrl: record.disclosures_image_url || "",
+    llmProvider: record.llm_provider || null,
+    llmModelOverrides: record.llm_model_overrides || {},
+    defaultResearchTier: record.default_research_tier || null,
     createdAt: record.created_at,
     updatedAt: record.updated_at,
   };
+}
+
+const ALLOWED_PROVIDERS = new Set(["openai", "gemini", "grok"]);
+const ALLOWED_TIERS = new Set(["fast-grounded", "agentic-research", "deep-research"]);
+
+function sanitizeProvider(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase();
+  return ALLOWED_PROVIDERS.has(t) ? t : null;
+}
+function sanitizeTier(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return ALLOWED_TIERS.has(t) ? t : null;
+}
+function sanitizeModelOverrides(v: unknown): Record<string, string> | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const allowed = new Set([
+    "extraction",
+    "intake.turn",
+    "research.fast-grounded",
+    "research.agentic",
+    "research.deep",
+    "synthesis.json",
+    "tts",
+    "stt",
+  ]);
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (allowed.has(k) && typeof val === "string" && val.trim()) {
+      out[k] = val.trim();
+    }
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 export const GET = async (req: Request) => {
@@ -79,6 +120,29 @@ export const GET = async (req: Request) => {
       .maybeSingle();
 
     if (error) {
+      // If a new column is missing in the user's deployment, the SELECT *
+      // can fail. Fall back to a minimal SELECT so the profile UI still
+      // loads.
+      const msg = error.message || "";
+      const missingLlmColumn = /Could not find the '(llm_provider|llm_model_overrides|default_research_tier)'/i.test(
+        msg
+      );
+      if (missingLlmColumn) {
+        const retry = await supabaseAdmin
+          .from("advisorpilot_advisor_profiles")
+          .select(
+            "owner_email, email_signature, logo_url, advisor_name, advisor_title, advisor_license, calendar_link, office_address, office_phone, cell_phone, website, disclosures_text, disclosures_image_url, created_at, updated_at"
+          )
+          .eq("owner_email", identity.email)
+          .maybeSingle();
+        if (retry.error) {
+          return NextResponse.json({ error: retry.error.message }, { status: 400 });
+        }
+        return NextResponse.json({
+          profile: retry.data ? mapProfile(retry.data as AdvisorProfileRecord) : null,
+          migrationRequired: "supabase/advisorpilot_advisor_profiles_llm_columns.sql",
+        });
+      }
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
@@ -118,6 +182,9 @@ export const POST = async (req: Request) => {
       website: String(body?.website || "").trim() || null,
       disclosures_text: String(body?.disclosuresText || "").trim() || null,
       disclosures_image_url: nullableTrim(body?.disclosuresImageUrl),
+      llm_provider: sanitizeProvider(body?.llmProvider),
+      llm_model_overrides: sanitizeModelOverrides(body?.llmModelOverrides),
+      default_research_tier: sanitizeTier(body?.defaultResearchTier),
     };
 
     const { data, error } = await supabaseAdmin
@@ -127,6 +194,33 @@ export const POST = async (req: Request) => {
       .single();
 
     if (error) {
+      // Common case: the new LLM-preference columns haven't been added yet.
+      // Detect "Could not find the '...' column" / PGRST204 and retry with
+      // the legacy payload so existing profile fields still save, then
+      // surface a clear migration nag.
+      const msg = error.message || "";
+      const missingLlmColumn =
+        /Could not find the '(llm_provider|llm_model_overrides|default_research_tier)'/i.test(msg);
+      if (missingLlmColumn) {
+        const fallback: Record<string, unknown> = { ...payload };
+        delete fallback.llm_provider;
+        delete fallback.llm_model_overrides;
+        delete fallback.default_research_tier;
+        const retry = await supabaseAdmin
+          .from("advisorpilot_advisor_profiles")
+          .upsert(fallback, { onConflict: "owner_email" })
+          .select("*")
+          .single();
+        if (retry.error) {
+          return NextResponse.json({ error: retry.error.message }, { status: 400 });
+        }
+        return NextResponse.json({
+          profile: mapProfile(retry.data as AdvisorProfileRecord),
+          message:
+            "Profile saved, but AI model preferences could NOT be persisted because the schema migration hasn't been applied yet. Run supabase/advisorpilot_advisor_profiles_llm_columns.sql in the Supabase SQL editor.",
+          migrationRequired: "supabase/advisorpilot_advisor_profiles_llm_columns.sql",
+        });
+      }
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 

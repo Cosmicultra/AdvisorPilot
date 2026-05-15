@@ -1,12 +1,9 @@
-import OpenAI from "openai";
+import { Buffer } from "buffer";
 import { NextResponse } from "next/server";
+import { stt } from "@/lib/llm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-const STT_MODEL = process.env.OPENAI_STT_MODEL || "whisper-1";
 
 /**
  * Transcribe an audio blob from the Live Intake overlay.
@@ -14,36 +11,20 @@ const STT_MODEL = process.env.OPENAI_STT_MODEL || "whisper-1";
  */
 export async function POST(req: Request) {
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: "Missing OPENAI_API_KEY in .env.local" },
-        { status: 500 }
-      );
-    }
-
     const form = await req.formData();
     const audio = form.get("audio");
     if (!audio || !(audio instanceof Blob)) {
       return NextResponse.json({ error: "Missing audio file." }, { status: 400 });
     }
 
-    const filename =
-      typeof (audio as File).name === "string" && (audio as File).name
-        ? (audio as File).name
-        : "speech.webm";
-
-    const file = new File([audio], filename, {
-      type: audio.type || "audio/webm",
-    });
-
-    const result = await openai.audio.transcriptions.create({
-      file,
-      model: STT_MODEL,
+    const arrayBuf = await audio.arrayBuffer();
+    const text = await stt({
+      audio: Buffer.from(arrayBuf),
+      mime: audio.type || "audio/webm",
       language: "en",
     });
 
-    const text = String(result.text ?? "").trim();
-    return NextResponse.json({ text });
+    return NextResponse.json({ text: String(text).trim() });
   } catch (e) {
     console.error("intake-stt error", e);
     const msg = e instanceof Error ? e.message : "Transcription failed.";

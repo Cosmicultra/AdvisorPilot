@@ -20,6 +20,8 @@ import {
   resolveFromSecuritiesMaster,
   securitiesMasterFeatureEnabled,
 } from "@/lib/securities-master";
+import { enforceUploadSize } from "@/lib/llm/attachments";
+import { LlmAttachmentError } from "@/lib/llm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,7 +32,6 @@ const supabaseAdmin = createClient(
 );
 
 const MAX_UPLOADS_PER_TOKEN = 25;
-const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 function missingEnv() {
   return !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -144,9 +145,13 @@ export async function POST(request: Request) {
     }
 
     for (const file of files) {
-      const size = file.size ?? 0;
-      if (size > MAX_FILE_BYTES) {
-        return NextResponse.json({ error: `${file.name || "File"} is too large (max 25 MB).` }, { status: 400 });
+      try {
+        enforceUploadSize(file.size ?? 0, file.name);
+      } catch (err) {
+        if (err instanceof LlmAttachmentError) {
+          return NextResponse.json({ error: err.message }, { status: 413 });
+        }
+        throw err;
       }
     }
 
@@ -346,6 +351,9 @@ export async function POST(request: Request) {
       reviewId: inserted?.id,
     });
   } catch (err: unknown) {
+    if (err instanceof LlmAttachmentError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
     console.error("CLIENT UPLOAD INGEST:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Upload failed. Try again or use a different file." },

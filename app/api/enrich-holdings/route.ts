@@ -1,13 +1,10 @@
-﻿import OpenAI from "openai";
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { enrichOneHolding, type EnrichmentInputHolding } from "@/lib/holding-enrichment";
 import { createSupabaseAdminForEnrichmentCache } from "@/lib/security-enrichment-cache";
+import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import { resolveAdvisorLlmSelection } from "@/lib/llm";
 
 export const runtime = "nodejs";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 function toInput(row: Record<string, unknown>): EnrichmentInputHolding {
   return {
@@ -76,6 +73,8 @@ export async function POST(req: Request) {
     const enrichedFull: Record<string, unknown>[] = [];
 
     const supabaseCache = createSupabaseAdminForEnrichmentCache();
+    const identity = await resolveAdvisorIdentity(req);
+    const selection = await resolveAdvisorLlmSelection(identity?.email);
 
     for (let step = 0; step < indicesToProcess.length; step++) {
       const i = indicesToProcess[step];
@@ -86,10 +85,12 @@ export async function POST(req: Request) {
           : {};
       const base = { ...row };
 
-      const { patch, cacheHit } = await enrichOneHolding(openai, toInput(base), {
+      const { patch, cacheHit } = await enrichOneHolding(toInput(base), {
         openfigiApiKey,
         supabaseCache,
         supabaseMaster: supabaseCache,
+        selection,
+        request: req,
       });
       const suggested = String(patch.suggested || "");
       const merged = {

@@ -1,14 +1,10 @@
-﻿import OpenAI from "openai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ASSET_CLASSES, canonicalizeAssetClass, isCashLikeHolding } from "./asset-classes";
 import type { EnrichmentInputHolding, EnrichmentPatch } from "./enrichment-types";
 import { extractLikelyCusip, extractLikelySymbol } from "./holding-validation";
 import { SYNTHETIC_CASH_TICKER } from "./cash-holding-constants";
-import {
-  enrichmentJsonModel,
-  enrichmentResearchModel,
-  logOpenAiPass,
-} from "./openai-route-models";
+import { complete, research, type AdvisorLlmSelection } from "./llm";
+import { filterUrlsToCitations } from "./llm/citation-filter";
 import { mapHoldingToOpenFigi } from "./openfigi";
 import {
   insertMasterFromWebEnrichment,
@@ -33,15 +29,6 @@ function detectProprietaryHint(h: EnrichmentInputHolding): boolean {
   return /annuity|fixed index|fia\b|non-?traded|private placement|limited partnership|interval fund|proprietary|buffer index|myga|spia|structured note|hedge fund|private equity/i.test(
     b
   );
-}
-
-function parseJsonObject(text: string): Record<string, unknown> {
-  const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-  try {
-    return JSON.parse(cleaned) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
 }
 
 function str(v: unknown): string {
@@ -97,8 +84,13 @@ function patchFromCachedPayload(
   };
 }
 
+/**
+ * Run the per-holding enrichment passes (web research + JSON synthesis)
+ * through the multi-provider LLM abstraction. The OpenAI client parameter
+ * from the legacy signature has been removed; provider + model selection now
+ * lives in `lib/llm/registry.ts`.
+ */
 export async function enrichOneHolding(
-  openai: OpenAI,
   holding: EnrichmentInputHolding,
   opts: {
     openfigiApiKey?: string;
@@ -106,6 +98,10 @@ export async function enrichOneHolding(
     supabaseCache?: SupabaseClient | null;
     /** When `ADVISORPILOT_SECURITIES_MASTER=1`, Nasdaq seed / firm catalog lookups skip OpenFIGI + OpenAI hits. */
     supabaseMaster?: SupabaseClient | null;
+    /** Optional: advisor's persisted LLM selection (provider + per-pass models). */
+    selection?: AdvisorLlmSelection;
+    /** Optional: incoming HTTP request — used for header-based provider override. */
+    request?: Request;
   }
 ): Promise<EnrichOneHoldingResult> {
   const now = new Date().toISOString();
@@ -201,19 +197,26 @@ Rules:
 
 - For ETFs and mutual funds, confirm the underlying sleeve (equity vs bond vs cash / money-market) from prospectus summaries or fund profiles — this drives accurate allocation math.
 
-Write concise research bullets (max 8). Cite no URLs in this step — facts only.
+Write concise research bullets (max 8). Cite the public sources you used; the system will capture them automatically from your web search.
 `;
 
-  const researchModel = enrichmentResearchModel();
-  logOpenAiPass("enrich-holdings", "research", researchModel);
+  const researchResult = await research(
+    {
+      tier: "fast-grounded",
+      user: researchPrompt,
+    },
+    { request: opts.request, selection: opts.selection }
+  );
 
-  const researchResponse = await openai.responses.create({
-    model: researchModel,
-    tools: [{ type: "web_search_preview" }],
-    input: researchPrompt,
-  });
+  const researchNotes = researchResult.text;
+  const researchCitations = researchResult.citations;
 
-  const researchNotes = researchResponse.output_text || "";
+  const allowedSourcesBlock = researchCitations.length
+    ? `\nAllowed source URLs (only these may appear in "sourceUrls"; the system will silently drop anything else):
+${researchCitations.map((c, i) => `[${i + 1}] ${c.uri}`).join("\n")}
+`
+    : `\nNo public source URLs were captured by web search. "sourceUrls" must therefore be empty (the system will drop anything else).
+`;
 
   const jsonPrompt = `
 Map the holding to AdvisorPilot fields using the research notes. Return ONLY JSON.
@@ -231,7 +234,7 @@ ${figiSummary}
 
 Research notes:
 ${researchNotes}
-
+${allowedSourcesBlock}
 JSON shape:
 {
   "resolvedTicker": "uppercase symbol or empty if none / proprietary",
@@ -248,19 +251,19 @@ JSON shape:
 
 needsAdvisorReview=true if: sources weak, ticker conflicts OpenFIGI (${figi.ticker || ""}), multiple share classes plausible, proprietary with sparse data, or ETF/mutual-fund sleeve (equity vs bond vs cash) is still ambiguous after research.
 resolvedTicker must be empty if proprietary/no public symbol.
-sourceUrls must include at least one https URL whenever you claim a ticker/CUSIP mapping for a public instrument. For proprietary-only, URLs may be carrier/product pages or empty with needsAdvisorReview=true.
+sourceUrls: include ONLY URLs from the "Allowed source URLs" list above. Do not invent URLs from memory; the system will drop any URL that is not in the allowed list.
 `;
 
-  const jsonModel = enrichmentJsonModel();
-  logOpenAiPass("enrich-holdings", "json", jsonModel);
+  const jsonResult = await complete<Record<string, unknown>>(
+    {
+      pass: "synthesis.json",
+      user: jsonPrompt,
+      jsonSchema: { type: "object" },
+    },
+    { request: opts.request, selection: opts.selection }
+  );
 
-  const jsonResponse = await openai.responses.create({
-    model: jsonModel,
-    input: jsonPrompt,
-    text: { format: { type: "json_object" } },
-  });
-
-  const parsed = parseJsonObject(jsonResponse.output_text || "{}");
+  const parsed = (jsonResult.json ?? {}) as Record<string, unknown>;
 
   const mapped = canonicalizeAssetClass(str(parsed.mappedAssetClass) || holding.assetClass);
   const resolvedTicker = str(parsed.resolvedTicker).toUpperCase();
@@ -271,7 +274,17 @@ sourceUrls must include at least one https URL whenever you claim a ticker/CUSIP
     needsReview = true;
   }
 
-  const urls = strArr(parsed.sourceUrls);
+  // Bug fix: the JSON pass historically returned `sourceUrls` from model
+  // memory. Pin them to the actual research citations.
+  const proposedUrls = strArr(parsed.sourceUrls);
+  const { kept: urls, dropped } = filterUrlsToCitations(proposedUrls, researchCitations);
+  if (dropped.length > 0) {
+    console.warn(
+      `[enrich-holdings] dropped ${dropped.length} hallucinated URL(s) not in research citations:`,
+      dropped
+    );
+  }
+
   const thin = Boolean(parsed.isProprietaryOrThinData) || proprietaryHint;
   if (!thin && resolvedTicker && urls.length === 0) {
     needsReview = true;

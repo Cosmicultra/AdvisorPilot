@@ -6,6 +6,22 @@ import type { Session } from "next-auth";
 import { signIn, signOut } from "next-auth/react";
 import { DropdownMenu } from "radix-ui";
 import { LogoBlock } from "@/components/logo-block";
+import { LlmSettingsButton } from "@/components/llm-settings-button";
+import {
+  AP_ONBOARDING_DISMISSED_AT,
+  OnboardingDialog,
+} from "@/components/onboarding-dialog";
+import { VoiceAgent } from "@/components/voice/voice-agent";
+import type { VoiceAppActions } from "@/lib/voice/tool-handlers";
+import type { AppStep } from "@/lib/voice/types";
+import type { VoiceAppState as VoiceFocusState } from "@/lib/voice/focus";
+import {
+  buildAllocationSummary,
+  buildHoldingsBreakdown,
+  parseClientAge,
+  resolveVoiceTargetReview,
+  sumHoldingsValue,
+} from "@/lib/voice/page-helpers";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -613,6 +629,7 @@ function AppTopNav({
   advisorDisplayName,
   onNewReview,
   setShowSignatureSetup,
+  onOpenOnboarding,
   handleEmailPasswordLogout,
   analysisReady,
 }: {
@@ -626,6 +643,8 @@ function AppTopNav({
   advisorDisplayName: string;
   onNewReview: () => void | Promise<void>;
   setShowSignatureSetup: (v: boolean) => void;
+  /** Re-opens the first-run wizard from the account menu. */
+  onOpenOnboarding: () => void;
   handleEmailPasswordLogout: () => void;
   analysisReady: boolean;
 }) {
@@ -652,7 +671,7 @@ function AppTopNav({
         </div>
 
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-y-2 pl-2 sm:gap-x-2 sm:pl-0 md:gap-x-3">
-          <nav className="flex min-w-0 flex-wrap items-center justify-end pb-1" aria-label="Primary">
+          <nav className="flex min-w-0 flex-wrap items-center justify-end gap-2 pb-1" aria-label="Primary">
             <button
               type="button"
               className={`ap-nav-link ${navNewReview ? "ap-nav-link-active" : ""}`}
@@ -660,6 +679,7 @@ function AppTopNav({
             >
               New review
             </button>
+            <LlmSettingsButton />
           </nav>
           {analysisReady ? (
             <span className="hidden rounded-none border border-white/20 bg-white/5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300 lg:inline">
@@ -698,6 +718,12 @@ function AppTopNav({
                 align="end"
                 className="z-[300] min-w-[13rem] overflow-hidden rounded-none border border-[var(--ap-border-strong)] bg-white py-1 text-slate-900 shadow-lg shadow-slate-900/15"
               >
+                <DropdownMenu.Item
+                  className="cursor-pointer px-3 py-2.5 text-sm outline-none data-[highlighted]:bg-[#f0f4fa] data-[highlighted]:text-[var(--ap-navy)]"
+                  onSelect={() => onOpenOnboarding()}
+                >
+                  Setup wizard
+                </DropdownMenu.Item>
                 <DropdownMenu.Item
                   className="cursor-pointer px-3 py-2.5 text-sm outline-none data-[highlighted]:bg-[#f0f4fa] data-[highlighted]:text-[var(--ap-navy)]"
                   onSelect={() => setShowSignatureSetup(true)}
@@ -988,6 +1014,11 @@ export default function AdvisorPilotPage() {
   const [activeReviewId, setActiveReviewId] = useState<string | null>(null);
   const [emailSignature, setEmailSignature] = useState("");
   const [showSignatureSetup, setShowSignatureSetup] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  /** Flips true after the first /api/advisor-profile call completes (success or error). */
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  /** Mutex so the auto-trigger fires at most once per mount. */
+  const onboardingDecidedRef = useRef(false);
   const [signatureName, setSignatureName] = useState("");
   const [signatureTitle, setSignatureTitle] = useState("");
   const [signatureLicense, setSignatureLicense] = useState("");
@@ -2967,16 +2998,26 @@ export default function AdvisorPilotPage() {
     const ownerEmail =
       ownerEmailOverride ||
       String(session?.user?.email || emailAuthUser?.email || "").trim().toLowerCase();
-    if (!ownerEmail) return;
+    if (!ownerEmail) {
+      // Defensive: still mark profile as "loaded" so the onboarding effect
+      // doesn't hang forever waiting for a fetch that won't happen.
+      setProfileLoaded(true);
+      return;
+    }
 
     try {
       const res = await advisorFetch("/api/advisor-profile", {
         headers: {},
         onEmailSessionExpired: handleEmailSessionExpired,
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
-      if (!res.ok) return;
+      if (!res.ok) {
+        // Profile load failed — leave local state empty so the onboarding
+        // effect treats this as a first-run user. The in-page Card is never
+        // auto-shown anymore; only the wizard is.
+        return;
+      }
 
       const profile = data?.profile || {};
       const savedSignature = profile.emailSignature || "";
@@ -2999,12 +3040,51 @@ export default function AdvisorPilotPage() {
       setSignatureLogoUrl(profile.logoUrl || "");
       setSignatureDisclosuresText(profile.disclosuresText || "");
       setSignatureDisclosuresImageUrl(profile.disclosuresImageUrl || "");
-
-      setShowSignatureSetup(!savedSignature && !profile.advisorName);
     } catch {
       // Non-blocking. The app can still run without a saved advisor profile.
+    } finally {
+      // Always signal "we tried" so the onboarding-decision effect can fire
+      // exactly once — even when the API errors out for env / network reasons.
+      setProfileLoaded(true);
     }
   }, [emailAuthUser?.email, handleEmailSessionExpired, session?.user?.email]);
+
+  // Decide once per mount whether to auto-pop the first-run wizard. Runs
+  // AFTER auth + profile load complete (success or failure). Re-opening the
+  // wizard from the account menu lives elsewhere — that path forcibly clears
+  // the localStorage dismissal flag.
+  useEffect(() => {
+    if (onboardingDecidedRef.current) return;
+    if (!authLoaded) return;
+    if (!profileLoaded) return;
+    const signedIn = Boolean(session?.user?.email || emailAuthUser?.email);
+    if (!signedIn) return;
+
+    onboardingDecidedRef.current = true;
+
+    const dismissed =
+      typeof window !== "undefined" &&
+      Boolean(window.localStorage.getItem(AP_ONBOARDING_DISMISSED_AT));
+    if (dismissed) return;
+
+    // Truly first-run = nothing filled in on this account yet. We deliberately
+    // ignore llm_provider here because some advisors may have set their model
+    // via the AI Models pill before we shipped the wizard — they should still
+    // be walked through the signature step.
+    const looksFirstRun = !emailSignature.trim() && !signatureName.trim();
+    if (!looksFirstRun) return;
+
+    setShowOnboarding(true);
+    // Defensive: hide the legacy in-page Card if some earlier path set it.
+    setShowSignatureSetup(false);
+  }, [
+    authLoaded,
+    profileLoaded,
+    session?.user?.email,
+    emailAuthUser?.email,
+    emailSignature,
+    signatureName,
+  ]);
 
   const uploadAdvisorSignatureAsset = useCallback(
     async (kind: "logo" | "disclosures", file: File) => {
@@ -3591,6 +3671,266 @@ async function downloadPDFReport(mode: "client" | "advisor") {
     );
   }
 
+  // Voice agent actions — exposes navigation + read-only client lookups to
+  // the Gemini Live agent. Tools never get raw setters; everything routes
+  // through these closures so the agent surface stays narrow.
+  const voiceActions: VoiceAppActions = {
+    getState: (): VoiceFocusState => ({
+      step: step as AppStep,
+      intakeStep,
+      activeReviewId,
+      clientFirstName: client.firstName || null,
+      clientLastName: client.lastName || null,
+      clientAge: typeof client.age === "string" && client.age ? Number(client.age) : null,
+      clientRiskProfile: client.riskProfile || null,
+      holdingsCount: holdings.length,
+      totalValue: holdings.reduce((sum, h) => sum + (Number(h.value) || 0), 0) || null,
+      incomeReadinessScore:
+        (analysis as { incomeReadinessScore?: number } | null | undefined)?.incomeReadinessScore ?? null,
+      redFlagCount:
+        Array.isArray((analysis as { redFlags?: unknown[] } | null | undefined)?.redFlags)
+          ? ((analysis as { redFlags: unknown[] }).redFlags.length)
+          : null,
+      recentClientCount: savedReviews.length,
+      savedReviewCount: savedReviews.length,
+    }),
+    navigate: (next) => setStep(next),
+    navigateIntakeStep: (n) => {
+      setStep("intake");
+      setIntakeStep(n);
+    },
+    openClient: (id) => {
+      const found = savedReviews.find((r) => r.id === id);
+      if (found) {
+        setActiveReviewId(found.id);
+        updateAnalysisFromDatabase(found);
+        setStep("analysis");
+      }
+    },
+    startNewClient: (confirmed) => {
+      if (!confirmed && (holdings.length > 0 || activeReviewId)) {
+        // Defensive: agent is supposed to confirm verbally before calling,
+        // but we double-check here so a slip doesn't wipe unsaved work.
+        return;
+      }
+      startBlankReview();
+    },
+    listClients: async (filter) => {
+      const q = filter?.search?.toLowerCase().trim() ?? "";
+      const stale = filter?.staleDays;
+      const statusFilter = filter?.status?.toLowerCase();
+      const now = Date.now();
+      return savedReviews
+        .filter((r) => {
+          const name = `${r.client.firstName ?? ""} ${r.client.lastName ?? ""}`
+            .trim()
+            .toLowerCase();
+          if (q && !name.includes(q)) return false;
+          if (statusFilter && (r.status ?? "").toLowerCase() !== statusFilter) return false;
+          if (typeof stale === "number" && r.lastContactedAt) {
+            const ageDays = (now - new Date(r.lastContactedAt).getTime()) / (24 * 3600 * 1000);
+            if (ageDays < stale) return false;
+          }
+          return true;
+        })
+        .map((r) => ({
+          id: r.id,
+          firstName: r.client.firstName ?? "",
+          lastName: r.client.lastName ?? "",
+          age:
+            typeof r.client.age === "string" && r.client.age
+              ? Number(r.client.age)
+              : null,
+          riskProfile: r.client.riskProfile ?? null,
+          status: r.status ?? null,
+          lastContactedAt: r.lastContactedAt ?? null,
+        }));
+    },
+    getClientDetails: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const tv = sumHoldingsValue(target.holdings);
+      return {
+        id: target.id,
+        firstName: target.client.firstName ?? "",
+        lastName: target.client.lastName ?? "",
+        age: parseClientAge(target.client.age),
+        riskProfile: target.client.riskProfile ?? null,
+        status: target.status ?? null,
+        lastContactedAt: target.lastContactedAt ?? null,
+        totalValue: tv || null,
+        incomeReadinessScore:
+          (target.analysis as { incomeReadinessScore?: number } | null | undefined)
+            ?.incomeReadinessScore ?? null,
+        holdingsCount: target.holdings?.length ?? 0,
+        redFlags:
+          (target.analysis as { redFlags?: string[] } | null | undefined)?.redFlags ?? [],
+      };
+    },
+    getHoldingsBreakdown: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      return buildHoldingsBreakdown(target);
+    },
+    getAllocationSummary: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      return buildAllocationSummary(target);
+    },
+    getMeetingGuide: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const a = (target.analysis ?? {}) as {
+        advisorOpeningScript?: string;
+        talkingPoints?: string[];
+        objectionHandling?: string[];
+      };
+      return {
+        clientId: target.id,
+        advisorOpeningScript: a.advisorOpeningScript ?? "",
+        talkingPoints: Array.isArray(a.talkingPoints) ? a.talkingPoints : [],
+        objectionHandling: Array.isArray(a.objectionHandling) ? a.objectionHandling : [],
+      };
+    },
+    getRecommendations: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const recs = (target.analysis as { recommendations?: string[] } | null | undefined)
+        ?.recommendations;
+      return Array.isArray(recs) ? recs : [];
+    },
+    getRedFlags: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const flags = (target.analysis as { redFlags?: string[] } | null | undefined)?.redFlags;
+      return Array.isArray(flags) ? flags : [];
+    },
+    getOverlapInsights: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const overlaps = (target.analysis as { overlapInsights?: string[] } | null | undefined)
+        ?.overlapInsights;
+      return Array.isArray(overlaps) ? overlaps : [];
+    },
+    getRothSummary: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const r = target.rothWorksheet as
+        | {
+            conversionAmount?: number;
+            yearsToBreakeven?: number;
+            recommendation?: string;
+          }
+        | null
+        | undefined;
+      return {
+        clientId: target.id,
+        hasWorksheet: Boolean(r),
+        conversionAmount: r?.conversionAmount ?? null,
+        yearsToBreakeven: r?.yearsToBreakeven ?? null,
+        recommendation: r?.recommendation ?? null,
+      };
+    },
+    getClientOverview: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const breakdown = buildHoldingsBreakdown(target);
+      const allocation = buildAllocationSummary(target);
+      const analysis = (target.analysis ?? {}) as {
+        incomeReadinessScore?: number;
+        diversificationScore?: number;
+        redFlags?: string[];
+        recommendations?: string[];
+        synopsis?: string;
+      };
+      const name = `${target.client.firstName ?? ""} ${target.client.lastName ?? ""}`.trim();
+      const age = parseClientAge(target.client.age);
+      const risk = target.client.riskProfile ?? null;
+      const tv = sumHoldingsValue(target.holdings);
+      const irs = analysis.incomeReadinessScore ?? null;
+      const flags = Array.isArray(analysis.redFlags) ? analysis.redFlags.slice(0, 3) : [];
+      const recs = Array.isArray(analysis.recommendations)
+        ? analysis.recommendations.slice(0, 3)
+        : [];
+
+      const moneyShort = (n: number) =>
+        n >= 1_000_000
+          ? `$${(n / 1_000_000).toFixed(1)}M`
+          : n >= 1_000
+            ? `$${Math.round(n / 1_000)}k`
+            : `$${Math.round(n)}`;
+      const topPos = breakdown.topPositions[0];
+      const spokenParts: string[] = [];
+      if (name) spokenParts.push(name);
+      if (age != null) spokenParts.push(`age ${age}`);
+      if (risk) spokenParts.push(`${risk.toLowerCase()} risk`);
+      let openingLine = spokenParts.join(", ") + ".";
+      if (tv) openingLine += ` Portfolio about ${moneyShort(tv)}.`;
+      if (topPos) {
+        openingLine += ` Top position ${topPos.ticker || topPos.name} at ${topPos.weightPct.toFixed(0)}%.`;
+      }
+      if (irs != null) openingLine += ` Income readiness ${irs}.`;
+      if (flags.length) openingLine += ` ${flags.length} red flag${flags.length === 1 ? "" : "s"} on file.`;
+
+      return {
+        clientId: target.id,
+        name: name || "Unnamed client",
+        age,
+        riskProfile: risk,
+        retirementAge: target.client.retirementAge ?? null,
+        totalValue: tv || null,
+        incomeReadinessScore: irs,
+        diversificationScore: analysis.diversificationScore ?? null,
+        topHoldings: breakdown.topPositions,
+        allocation: allocation.buckets,
+        topRedFlags: flags,
+        topRecommendations: recs,
+        spokenSummary: openingLine,
+      };
+    },
+    findClientsByCriteria: async (filter) => {
+      const q = filter.search?.toLowerCase().trim() ?? "";
+      const now = Date.now();
+      const matches = savedReviews.filter((r) => {
+        const first = r.client.firstName ?? "";
+        const last = r.client.lastName ?? "";
+        const name = `${first} ${last}`.toLowerCase().trim();
+        if (q && !name.includes(q)) return false;
+        if (filter.riskProfile && (r.client.riskProfile ?? "").toLowerCase() !== filter.riskProfile.toLowerCase()) return false;
+        const age = parseClientAge(r.client.age);
+        if (filter.minAge != null && (age == null || age < filter.minAge)) return false;
+        if (filter.maxAge != null && (age == null || age > filter.maxAge)) return false;
+        const tv = sumHoldingsValue(r.holdings);
+        if (filter.minTotalValue != null && tv < filter.minTotalValue) return false;
+        if (filter.maxTotalValue != null && tv > filter.maxTotalValue) return false;
+        if (typeof filter.staleDays === "number" && r.lastContactedAt) {
+          const ageDays = (now - new Date(r.lastContactedAt).getTime()) / (24 * 3600 * 1000);
+          if (ageDays < filter.staleDays) return false;
+        }
+        const irs = (r.analysis as { incomeReadinessScore?: number } | null | undefined)?.incomeReadinessScore;
+        if (filter.maxIncomeReadinessScore != null && (irs == null || irs > filter.maxIncomeReadinessScore)) return false;
+        const flagsArr = (r.analysis as { redFlags?: string[] } | null | undefined)?.redFlags;
+        const hasFlags = Array.isArray(flagsArr) && flagsArr.length > 0;
+        if (filter.hasRedFlags === true && !hasFlags) return false;
+        if (filter.hasRedFlags === false && hasFlags) return false;
+        if (filter.status && (r.status ?? "").toLowerCase() !== filter.status.toLowerCase()) return false;
+        return true;
+      });
+      return matches.map((r) => ({
+        id: r.id,
+        firstName: r.client.firstName ?? "",
+        lastName: r.client.lastName ?? "",
+        age: parseClientAge(r.client.age),
+        riskProfile: r.client.riskProfile ?? null,
+        status: r.status ?? null,
+        lastContactedAt: r.lastContactedAt ?? null,
+        totalValue: sumHoldingsValue(r.holdings) || null,
+        incomeReadinessScore:
+          (r.analysis as { incomeReadinessScore?: number } | null | undefined)?.incomeReadinessScore ?? null,
+      }));
+    },
+  };
+
   return (
     <div className="ap-app-bg min-h-screen text-slate-950 print:bg-white">
       <style jsx global>{`
@@ -3614,8 +3954,45 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         advisorDisplayName={advisorVoiceName}
         onNewReview={handleNewReviewIntent}
         setShowSignatureSetup={setShowSignatureSetup}
+        onOpenOnboarding={() => {
+          // Re-opening from the menu deliberately clears the per-browser
+          // dismissal flag so the wizard behaves the same as it did on first run.
+          if (typeof window !== "undefined") {
+            window.localStorage.removeItem(AP_ONBOARDING_DISMISSED_AT);
+          }
+          setShowOnboarding(true);
+        }}
         handleEmailPasswordLogout={handleEmailPasswordLogout}
         analysisReady={Boolean(analysis)}
+      />
+      <OnboardingDialog
+        open={showOnboarding}
+        advisorEmail={session?.user?.email || emailAuthUser?.email || null}
+        onDismiss={() => {
+          // Persist per-browser so we don't re-pop next session. The menu can
+          // still reopen it explicitly.
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem(
+              AP_ONBOARDING_DISMISSED_AT,
+              new Date().toISOString()
+            );
+          }
+          setShowOnboarding(false);
+        }}
+        onFinish={async () => {
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem(
+              AP_ONBOARDING_DISMISSED_AT,
+              new Date().toISOString()
+            );
+          }
+          setShowOnboarding(false);
+          // Resync local state (signature fields, llm provider label) with what
+          // the dialog just persisted.
+          const ownerEmail =
+            session?.user?.email || emailAuthUser?.email || null;
+          if (ownerEmail) await loadAdvisorProfile(ownerEmail);
+        }}
       />
       <WizardStepRail wizardSteps={wizardSteps} step={step} setStep={setStep} loadSavedReviews={loadSavedReviews} />
 
@@ -7896,6 +8273,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
 
         </div>
       </div>
+      <VoiceAgent actions={voiceActions} />
     </div>
   );
 }

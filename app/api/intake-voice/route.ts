@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import {
   applyIntakePatch,
@@ -10,21 +9,16 @@ import {
   RISK_PROFILES,
   CALIBRATION_OPTIONS,
 } from "@/lib/intake-config";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-/** Small / cheap model is enough for structured JSON; override via .env if you want. */
-const MODEL = process.env.OPENAI_INTAKE_MODEL || "gpt-4o-mini";
+import { complete, resolveAdvisorLlmSelection } from "@/lib/llm";
+import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 
 function formatProviderError(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e);
   if (raw.includes("429") || raw.includes("rate limit") || raw.includes("Rate limit")) {
-    return `OpenAI rate limit. Wait a moment or check your plan. Model: ${MODEL}.`;
+    return `LLM rate limit. Wait a moment or check your plan.`;
   }
   if (raw.includes("insufficient_quota") || raw.includes("quota")) {
-    return `OpenAI billing or quota issue. Check your OpenAI account balance and limits. Model: ${MODEL}.`;
+    return `LLM billing or quota issue. Check the configured provider's account balance and limits.`;
   }
   return raw;
 }
@@ -101,16 +95,23 @@ function asPatch(obj: unknown): Partial<IntakeClient> & { name?: string } {
   return out;
 }
 
-async function completeJson(system: string, user: string): Promise<string> {
-  const res = await openai.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    response_format: { type: "json_object" },
-  });
-  return res.choices[0]?.message?.content ?? "";
+async function completeJson(
+  system: string,
+  user: string,
+  req: Request
+): Promise<string> {
+  const identity = await resolveAdvisorIdentity(req);
+  const selection = await resolveAdvisorLlmSelection(identity?.email);
+  const result = await complete(
+    {
+      pass: "intake.turn",
+      system,
+      user,
+      jsonSchema: { type: "object" },
+    },
+    { request: req, selection }
+  );
+  return result.text;
 }
 
 export async function POST(req: Request) {
@@ -145,7 +146,7 @@ They said:
 
 Return JSON: {"assistantMessage":"brief spoken reply or clarification","handoffAction":"paper"|"digital_email"|"advisor_upload"|"none"}`;
 
-      const text = await completeJson(system, user);
+      const text = await completeJson(system, user, req);
       const parsed = extractJsonObject(text);
       const assistantMessage =
         typeof parsed?.assistantMessage === "string" && parsed.assistantMessage.trim()
@@ -199,7 +200,7 @@ Write 2–4 short sentences. Introduce this step and ask the main question natur
 
 Return JSON with exactly this shape: {"assistantMessage":"your text here"}`;
 
-      const text = await completeJson(system, user);
+      const text = await completeJson(system, user, req);
       const parsed = extractJsonObject(text);
       const assistantMessage =
         typeof parsed?.assistantMessage === "string" && parsed.assistantMessage.trim()
@@ -251,7 +252,7 @@ Rules:
 Return JSON with exactly this shape:
 {"clientPatch":{},"assistantMessage":"...","advance":false,"handoffAction":null}`;
 
-    const text = await completeJson(system, user);
+    const text = await completeJson(system, user, req);
     const parsed = extractJsonObject(text);
 
     if (!parsed) {

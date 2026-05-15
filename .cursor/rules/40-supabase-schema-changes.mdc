@@ -1,0 +1,55 @@
+---
+description: Backwards-compatible Supabase schema changes for AdvisorPilot
+globs: supabase/**/*.sql
+alwaysApply: false
+---
+
+# Supabase schema changes must be backwards compatible
+
+This codebase ships to live databases. Every schema change must be safe to apply while older app code is still running, and safe to roll back without losing data.
+
+## Prefer a new sidecar table over new columns
+
+When tempted to add columns to an existing table, **default to a new table** keyed off the existing primary key. Examples already in the repo:
+
+- `advisorpilot_enrichment_provenance` is a sidecar to `advisorpilot_security_enrichment_cache`.
+- `advisorpilot_voice_settings` / `advisorpilot_voice_audit_log` are new tables, not new columns on `advisorpilot_advisor_profiles`.
+
+Sidecar tables don't bloat parent rows, are trivial to roll back, and let old code keep working unchanged.
+
+## When you must add a column
+
+- Use `add column if not exists` — **nullable**, **no `NOT NULL`**. Required new columns break existing `INSERT` paths.
+- **Never** rename, drop, or change the type of an existing column. Add a new column and migrate read paths in TypeScript.
+- **Never** widen or tighten a `CHECK` constraint on an existing column without dropping and re-adding it idempotently.
+- Migrations must be **idempotent** — re-running the same file must be a no-op. Pattern: `create table if not exists`, `add column if not exists`, `drop policy if exists` before `create policy`, `drop trigger if exists` before `create trigger`. See `supabase/_apply_all_new_migrations.sql`.
+- The TypeScript route that reads the new field must **gracefully handle the column missing** (`PGRST204` / "Could not find the '<col>' column"). See how `/api/advisor-profile` falls back when `llm_provider` isn't present yet.
+
+## Concrete examples
+
+```sql
+-- ❌ BAD: NOT NULL on existing table, not idempotent, breaks every INSERT
+-- in older app code that doesn't know about the column.
+alter table public.advisorpilot_clients
+  add column risk_score integer not null default 0;
+
+-- ⚠️ OK when truly small: additive, nullable, idempotent.
+alter table public.advisorpilot_clients
+  add column if not exists risk_score integer;
+
+-- ✅ PREFERRED: sidecar table. Trivial rollback, isolated RLS,
+-- no churn on advisorpilot_clients itself.
+create table if not exists public.advisorpilot_client_risk_scores (
+  client_id uuid primary key
+    references public.advisorpilot_clients(id) on delete cascade,
+  score integer,
+  computed_at timestamptz not null default now()
+);
+```
+
+## Don't forget
+
+- **RLS:** every new table needs `enable row level security` + ownership policies. Copy the standard pattern from `advisorpilot_full_schema_rls.sql`: `owner_user_id = auth.uid() OR lower(owner_email) = lower(coalesce(auth.jwt() ->> 'email', ''))`.
+- **Updated-at trigger:** if the table has an `updated_at`, attach the existing `public.set_advisorpilot_updated_at()` trigger.
+- **Bundle:** append the new migration to `supabase/_apply_all_new_migrations.sql` (or create a new dated bundle following its pattern) so a single paste in the Supabase SQL editor brings any environment forward.
+- **Docs:** update the Supabase schema sections in `CLAUDE.md` and `README.md` so deployers know which file to run.
