@@ -1,4 +1,4 @@
-# AdvisorPilot — In-person meeting roadmap
+# AdvisorPilot  -  In-person meeting roadmap
 
 This document captures the product goal, what the codebase already supports, gaps vs. that goal, and a phased plan to close them. It is grounded in the app as of the roadmap authoring date. **Stack context** (Next.js App Router, OpenAI, Supabase, NextAuth + Google OAuth for Gmail, email/password via Supabase) matches `[README.md](../README.md)` in the repo root.
 
@@ -25,13 +25,13 @@ Then the app should:
 
 The upload step supports a **file picker** and a mobile camera intent (`capture="environment"`). **Reliable on-device camera capture and ingestion for deep AI analysis is still a priority:** when the camera path is flaky or unfinished, treat **file upload** (saved attachment or exported PDF) as the working path for live meetings. Closing the camera → upload → extract loop is what unlocks “picture on the spot” for the full roadmap.
 
-**Where:** `app/page.tsx` — step `"upload"` (Statement Capture).
+**Where:** `app/page.tsx`  -  step `"upload"` (Statement Capture).
 
 ### 2. Human-in-the-loop: correct holdings before analysis
 
 You have a **Confirm Holdings** step: pick from AI options, override asset class, manual ticker/CUSIP, value override, and a visible “needs review” count. This is the right pattern for accuracy and compliance before any deep dive.
 
-**Where:** `app/page.tsx` — step `"confirm"`.
+**Where:** `app/page.tsx`  -  step `"confirm"`.
 
 ### 3. Deep AI analysis
 
@@ -49,9 +49,9 @@ Accepts `mode: "client" | "advisor"` and builds different PDFs (client snapshot 
 
 ### 5. Live meeting support
 
-**Meeting Mode** includes opening script, walkthrough, questions, objection handling, and closing—aligned with sitting across from the client.
+**Meeting Mode** includes opening script, walkthrough, questions, objection handling, and closing - aligned with sitting across from the client.
 
-**Where:** `app/page.tsx` — step `"meeting"`.
+**Where:** `app/page.tsx`  -  step `"meeting"`.
 
 ### 6. Delivery after the meeting
 
@@ -59,9 +59,9 @@ Accepts `mode: "client" | "advisor"` and builds different PDFs (client snapshot 
 - Optional **Gmail send** of client snapshot: `POST /api/email-client-snapshot`.  
 - Follow-up email helpers (copy, Gmail/Outlook compose links).
 
-**Constraint (from app behavior):** one-click **Gmail send** requires **Google sign-in** for that flow; advisors on **email/password** can still generate PDFs and copy/share manually (`[README.md](../README.md)` — “Notes / gotchas”).
+**Constraint (from app behavior):** one-click **Gmail send** requires **Google sign-in** for that flow; advisors on **email/password** can still generate PDFs and copy/share manually (`[README.md](../README.md)`  -  “Notes / gotchas”).
 
-**Product bar:** the **client snapshot** should stay **easy to find and send** after the meeting (minimal taps, clear recipient vs advisor identity—see Phase 1).
+**Product bar:** the **client snapshot** should stay **easy to find and send** after the meeting (minimal taps, clear recipient vs advisor identity - see Phase 1).
 
 ---
 
@@ -83,38 +83,38 @@ Accepts `mode: "client" | "advisor"` and builds different PDFs (client snapshot 
 
 ## Phased roadmap
 
-### Phase 1 — “Meeting-ready” polish (highest ROI, smaller changes)
+### Phase 1  -  “Meeting-ready” polish (highest ROI, smaller changes)
 
-**Objective:** Same room, same Wi‑Fi, client watching—you want confidence and clarity.
+**Objective:** Same room, same Wi‑Fi, client watching - you want confidence and clarity.
 
-- **Clarify UI copy / field names** so it is obvious which email is for **sending the client snapshot** vs advisor identity (today `client.advisorEmail` is used as the **recipient** for client snapshot email in places—easy to misread). **Goal:** client snapshot is **obvious to send** (right recipient, few steps, no ambiguity).  
+- **Clarify UI copy / field names** so it is obvious which email is for **sending the client snapshot** vs advisor identity (today `client.advisorEmail` is used as the **recipient** for client snapshot email in places - easy to misread). **Goal:** client snapshot is **obvious to send** (right recipient, few steps, no ambiguity).  
 - **Guardrails before analysis (confirmed):** **block “Run Analysis” until there are zero `review` holdings** (no deep AI until the table is clean). Optionally keep a separate path later for “I acknowledge remaining uncertainty” if compliance ever requires it.  
-- **Autosave to draft (confirmed):** persist work-in-progress (e.g. after Confirm Holdings) so a dropped connection or accidental navigation does not lose the meeting—**auto-save draft** to Supabase where it fits the current schema.  
+- **Autosave to draft (confirmed):** persist work-in-progress (e.g. after Confirm Holdings) so a dropped connection or accidental navigation does not lose the meeting - **auto-save draft** to Supabase where it fits the current schema.  
 - **Default happy path:** after analysis, steer the primary CTA toward **Meeting Mode**; treat PDFs as wrap-up / send-after.  
-- **Latency UX:** step-by-step status (“Uploading… extracting… generating review…”) and honest expectations (already directionally right—keep tightening).  
+- **Latency UX:** step-by-step status (“Uploading… extracting… generating review…”) and honest expectations (already directionally right - keep tightening).  
 - **Mobile layout pass:** larger tap targets, sticky primary actions on confirm/analysis, less vertical scroll on phone.
 
 **Exit criteria:** You can run a full first meeting on a phone without fighting the UI; holdings are explicitly confirmed before AI deep dive runs; snapshot send path feels frictionless.
 
 ---
 
-### Phase 2 — Ingestion: “email to me” without manual attachment handling
+### Phase 2  -  Ingestion: “email to me” without manual attachment handling
 
 **Objective:** Client sends a PDF; it appears in AdvisorPilot without you manually downloading from mail and re-uploading.
 
 Choose **one** path first (simplest wins):
 
-**Option A — Dedicated inbox + inbound processing**
+**Option A  -  Dedicated inbox + inbound processing**
 
 - Address like `statements+you@yourdomain` receives mail → provider webhook → API stores attachment (e.g. Supabase Storage) → creates a **pending review** record → you open it in the app at Confirm Holdings.  
 - **Pros:** Matches “email me the statement.”  
 - **Cons:** DNS, provider (SendGrid Inbound, Mailgun, Postmark, etc.), webhook auth, virus scanning policy.
 
-**Option B — Magic link first, QR optional (client uploads on their phone)**
+**Option B  -  Magic link first, QR optional (client uploads on their phone)**
 
-- **Primary UX: magic link** — you copy/send a **short link**; client opens it on their phone and uploads. Easier for **older or less technical clients** than “scan this QR code.”  
+- **Primary UX: magic link**  -  you copy/send a **short link**; client opens it on their phone and uploads. Easier for **older or less technical clients** than “scan this QR code.”  
 - **Optional:** show a **QR code** that encodes the **same link** for clients who prefer scan-to-open.  
-- **Advisor binding (required):** the link (and QR) must resolve to a **server-issued token tied to the advisor who is signed in** (e.g. your email session)—uploads must attach to **your** review queue only, never another advisor’s.  
+- **Advisor binding (required):** the link (and QR) must resolve to a **server-issued token tied to the advisor who is signed in** (e.g. your email session) - uploads must attach to **your** review queue only, never another advisor’s.  
 - **Pros:** No inbound email provider integration; predictable mapping from link → advisor.  
 - **Cons:** Token expiry, abuse prevention, and storage wiring need design (see Phase 5 for production-grade auth).
 
@@ -122,25 +122,25 @@ Choose **one** path first (simplest wins):
 
 ---
 
-### Phase 3 — Data quality: tickers, funds, completeness, tax context
+### Phase 3  -  Data quality: tickers, funds, completeness, tax context
 
 **Objective:** After AI extraction + advisor picks, the system **flags** bad or ambiguous symbols when possible, and captures **account context** when the statement supports it.
 
 - **Optional normalization API:** confirmed rows in → canonical symbol / security type / “unable to verify” out; **advisor review**, not auto-trading.  
 - **Completeness checks:** compare sum of holdings to statement total when the document exposes it; prompt for another page if counts look wrong.  
 - **Multi-page / multi-file on phone:** support **multiple pages or scans in one flow** (add page 2+, or multiple files) merged into **one** holdings table for the session.  
-- **Qualified vs non-qualified (when labeled):** when the statement names accounts (e.g. IRA, 401(k), brokerage, “taxable”), infer or extract **tax treatment** — **tax-deferred / qualified** vs **taxable / non-qualified** — so holdings and narrative align with how advisors actually talk about buckets. (Exact labels depend on document wording; advisor confirmation remains the source of truth.)
+- **Qualified vs non-qualified (when labeled):** when the statement names accounts (e.g. IRA, 401(k), brokerage, “taxable”), infer or extract **tax treatment**  -  **tax-deferred / qualified** vs **taxable / non-qualified**  -  so holdings and narrative align with how advisors actually talk about buckets. (Exact labels depend on document wording; advisor confirmation remains the source of truth.)
 
 **Exit criteria:** Fewer wrong-ticker surprises; explicit data-quality warnings before client-facing outputs; multi-page sessions workable on mobile; tax bucket signals when the PDF gives them.
 
 ---
 
-### Phase 4 — Analysis and reports: sharper client vs advisor split
+### Phase 4  -  Analysis and reports: sharper client vs advisor split
 
-**Objective:** **Advisor deep dive** is always **advisor-leaning** (playbook, nuance, recommendations, appendix). **Client report** stays a **stripped-down, digestible** snapshot—reassuring, not overloaded.
+**Objective:** **Advisor deep dive** is always **advisor-leaning** (playbook, nuance, recommendations, appendix). **Client report** stays a **stripped-down, digestible** snapshot - reassuring, not overloaded.
 
-- **Prompt tuning** so client-facing sections never read like advisor-only language; advisor PDF always leans on talking points, objections, recommendations, appendix (partially true today—tighten consistency).  
-- **Content direction (confirmed):** keep **Monte Carlo-style framing where applicable**, **holding types**, **allocation / proposed allocation changes**, and similar mechanics—these match how you want to present outcomes. “More bulletproof” usually means pairing narrative with **Phase 3 validation** (tickers, totals, tax buckets) and clear **disclaimers**, not necessarily new report sections.  
+- **Prompt tuning** so client-facing sections never read like advisor-only language; advisor PDF always leans on talking points, objections, recommendations, appendix (partially true today - tighten consistency).  
+- **Content direction (confirmed):** keep **Monte Carlo-style framing where applicable**, **holding types**, **allocation / proposed allocation changes**, and similar mechanics - these match how you want to present outcomes. “More bulletproof” usually means pairing narrative with **Phase 3 validation** (tickers, totals, tax buckets) and clear **disclaimers**, not necessarily new report sections.  
 - **Optional “post-meeting regenerate”:** feed `meetingNotes` into the analysis prompt so the written output reflects what was actually said.  
 - **Caching:** if holdings + key client fields are unchanged, avoid redundant OpenAI calls on repeated actions.
 
@@ -148,11 +148,11 @@ Choose **one** path first (simplest wins):
 
 ---
 
-### Phase 5 — Production hardening (when others use the app)
+### Phase 5  -  Production hardening (when others use the app)
 
-**If Supabase / server work is new to you:** this phase is mostly “make the backend enforce what the UI already *intends*.” You do not need to become a DBA overnight—work item by item with someone who knows NextAuth + Supabase, or follow official Supabase RLS tutorials scoped to your tables. Env and keys for local/prod are documented in `[README.md](../README.md)` (never commit `.env.local`; `SUPABASE_SERVICE_ROLE_KEY` stays server-only).
+**If Supabase / server work is new to you:** this phase is mostly “make the backend enforce what the UI already *intends*.” You do not need to become a DBA overnight - work item by item with someone who knows NextAuth + Supabase, or follow official Supabase RLS tutorials scoped to your tables. Env and keys for local/prod are documented in `[README.md](../README.md)` (never commit `.env.local`; `SUPABASE_SERVICE_ROLE_KEY` stays server-only).
 
-- **Two auth paths today:** Google OAuth (Gmail) and **email/password** via Supabase-backed routes—Phase 5 should treat **both** as first-class when enforcing “who owns this row” (not only Google sessions).  
+- **Two auth paths today:** Google OAuth (Gmail) and **email/password** via Supabase-backed routes - Phase 5 should treat **both** as first-class when enforcing “who owns this row” (not only Google sessions).  
 - **Server-side ownership:** derive advisor identity from **session/JWT** (the signed-in user); **do not trust** client-supplied `ownerEmail` (or any email in JSON bodies) for writes.  
 - **Supabase RLS:** row-level security so each authenticated user only reads/writes **their** rows (clients, drafts, uploads metadata).  
 - **Magic-link uploads (ties to Phase 2):** tokens map to **one advisor id**; uploads land in that advisor’s storage prefix + pending queue.  
@@ -166,11 +166,11 @@ Choose **one** path first (simplest wins):
 
 ## Suggested execution order
 
-1. **Phase 1** — meeting UX, guardrails, mobile; shippable to yourself quickly.
-2. **Phase 2** — if “email to me without re-upload” is mandatory, invest here next; otherwise **magic-link-first** client upload (advisor-scoped) is often faster to ship than inbound email parsing.
-3. **Phase 3** — as volume and accuracy pressure grow.
-4. **Phase 4** — differentiate outputs and tie analysis to meeting notes.
-5. **Phase 5** — when the product is not single-advisor-only.
+1. **Phase 1**  -  meeting UX, guardrails, mobile; shippable to yourself quickly.
+2. **Phase 2**  -  if “email to me without re-upload” is mandatory, invest here next; otherwise **magic-link-first** client upload (advisor-scoped) is often faster to ship than inbound email parsing.
+3. **Phase 3**  -  as volume and accuracy pressure grow.
+4. **Phase 4**  -  differentiate outputs and tie analysis to meeting notes.
+5. **Phase 5**  -  when the product is not single-advisor-only.
 
 ---
 
@@ -194,7 +194,7 @@ Choose **one** path first (simplest wins):
 ## Open decision (pick one to prioritize next 30 days)
 
 - **(A)** Faster, clearer **in-room meeting flow** (Phase 1).  
-- **(B)** **Email auto-import** (Option A) or **advisor-scoped magic link** (Option B — QR optional).  
+- **(B)** **Email auto-import** (Option A) or **advisor-scoped magic link** (Option B  -  QR optional).  
 - **(C)** **Ticker / data validation** + tax bucket / multi-page flow (Phase 3).
 
 Document owner: align the next sprint with whichever of A/B/C matters most for your first real client meetings.

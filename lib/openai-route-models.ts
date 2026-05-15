@@ -4,7 +4,7 @@
  * Capability notes (check OpenAI docs when upgrading SDK / models):
  * - JSON-only passes (`text.format: { type: "json_object" }`) are supported on `gpt-4o-mini`
  *   as well as `gpt-4o`; good candidate for cost savings after QA.
- * - Research passes here use `web_search_preview`; quality is sensitive—defaults stay on
+ * - Research passes here use `web_search_preview`; quality is sensitive, so defaults stay on
  *   `gpt-4o`. OpenAI documents dedicated search-capable snapshots (e.g. *-search-preview)
  *   if you experiment with cheaper research tiers.
  */
@@ -24,6 +24,11 @@ export function analysisResearchModel(): string {
 /** Structured portfolio review JSON (`/api/generate-analysis`). */
 export function analysisJsonModel(): string {
   return trimEnv("OPENAI_ANALYSIS_JSON_MODEL") ?? DEFAULT_MAIN;
+}
+
+/** Fund expense ratio estimates for fee analysis (`/api/fee-analysis`). */
+export function feeAnalysisJsonModel(): string {
+  return trimEnv("OPENAI_FEE_ANALYSIS_JSON_MODEL") ?? trimEnv("OPENAI_ANALYSIS_JSON_MODEL") ?? DEFAULT_MAIN;
 }
 
 /** Web-search bullets for one holding (`/api/enrich-holdings` → `lib/holding-enrichment`). */

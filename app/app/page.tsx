@@ -37,6 +37,7 @@ import {
   MessageSquareText,
   BookmarkPlus,
   BrainCircuit,
+  Percent,
   Link2,
   Copy,
   Check,
@@ -129,6 +130,11 @@ import type { LiveIntakeHandoffAction } from "@/lib/live-intake-scripts";
 import { LiveIntakeOverlay } from "@/components/live-intake-overlay";
 import { FiaScenarioReturnChart } from "@/components/fia-scenario-return-chart";
 import { ASSET_CLASSES, classifyAllocationBucket, isCanonicalAssetClass } from "@/lib/asset-classes";
+import {
+  groupFeeAnalysisFundRowsByAccount,
+  parseAdvisorFeePercentPoints,
+  type FeeAnalysisApiResponse,
+} from "@/lib/fee-analysis";
 import { bucketValuesToPercents, allocationForRiskModel } from "@/lib/allocation-math";
 import {
   TEN_YEAR_SCENARIOS,
@@ -140,6 +146,8 @@ import {
   scenarioProposedPortfolioSingleYearReturnDecimal,
 } from "@/lib/ten-year-scenario-models";
 import { buildRetirementIncomeProjection } from "@/lib/retirement-income-projection";
+import { mapRetirementIncomeProjectionToChartRows } from "@/lib/retirement-income-chart-data";
+import { RetirementIncomeAnalysisChart } from "@/components/retirement-income-analysis-chart";
 import {
   illustrativeSpouseMonthlyMaxOwnOrSpousal,
   illustrativeSsaRetirementBenefitMonthly,
@@ -197,20 +205,22 @@ const demoHoldings: Holding[] = [
     rawName: "VANG 500 IDX ADM",
     suggested: "VFIAX - Vanguard 500 Index Fund Admiral Shares",
     confidence: 96,
-    assetClass: "U.S. Large Cap Equity",
+    assetClass: "Equity Mutual Fund",
     value: 145000,
     status: "matched",
     registrationType: "qualified",
+    normalizedSymbol: "VFIAX",
     options: ["VFIAX - Vanguard 500 Index Fund Admiral Shares", "VOO - Vanguard S&P 500 ETF", "VFINX - Vanguard 500 Index Investor", "Manual ticker / CUSIP entry"],
   },
   {
     rawName: "PIMCO INCOME FD",
     suggested: "Needs advisor confirmation",
     confidence: 62,
-    assetClass: "Bond Fund",
+    assetClass: "Bond Mutual Fund",
     value: 82000,
     status: "review",
     registrationType: "qualified",
+    normalizedSymbol: "PIMIX",
     options: ["PONAX - PIMCO Income Fund Class A", "PIMIX - PIMCO Income Fund Institutional", "PONCX - PIMCO Income Fund Class C", "Manual ticker / CUSIP entry"],
   },
   {
@@ -588,6 +598,7 @@ function wizardRailLabel(item: string) {
   if (item === "intake") return "Client Profile";
   if (item === "fia") return "FIA calculator";
   if (item === "retIncome") return "Ret. Inc Calculator";
+  if (item === "feeAnalysis") return "Fee analysis";
   return item.charAt(0).toUpperCase() + item.slice(1);
 }
 
@@ -620,7 +631,7 @@ function AppTopNav({
 }) {
   const navNewReview =
     (step === "intake" && intakeStep > 0) ||
-    ["upload", "confirm", "analysis", "meeting", "fia", "roth", "retIncome", "report"].includes(step);
+    ["upload", "confirm", "analysis", "meeting", "fia", "roth", "retIncome", "feeAnalysis", "report"].includes(step);
 
   const initials = advisorNavInitials(
     signatureName,
@@ -1069,6 +1080,12 @@ export default function AdvisorPilotPage() {
   const [retIncReturnMode, setRetIncReturnMode] = useState<"snapshot" | "proposed" | "custom">("snapshot");
   const [retIncCustomReturnPct, setRetIncCustomReturnPct] = useState("");
 
+  /** All-in fee drag (ETF/MF + advisor wrap) — separate AI pass; not persisted on client JSON. */
+  const [feeAdvisorPctInput, setFeeAdvisorPctInput] = useState("1");
+  const [feeAnalysisBusy, setFeeAnalysisBusy] = useState(false);
+  const [feeAnalysisError, setFeeAnalysisError] = useState<string | null>(null);
+  const [feeAnalysisResult, setFeeAnalysisResult] = useState<FeeAnalysisApiResponse | null>(null);
+
   /** Supabase `client` JSON: intake + nested FIA worksheet + advisor UI to restore (FIA lives separately in React state). */
   const buildClientJsonForDatabase = useCallback((): Client => {
     return {
@@ -1117,8 +1134,8 @@ export default function AdvisorPilotPage() {
   const wizardSteps = useMemo(() => {
     const head = ["intake", "upload", "confirm", "analysis", "meeting", "fia"] as const;
     return showRothOptionReport
-      ? ([...head, "roth", "retIncome", "report", "saved"] as const)
-      : ([...head, "retIncome", "report", "saved"] as const);
+      ? ([...head, "roth", "retIncome", "feeAnalysis", "report", "saved"] as const)
+      : ([...head, "retIncome", "feeAnalysis", "report", "saved"] as const);
   }, [showRothOptionReport]);
 
   /** True when starting a new review could discard advisor work (prompt before reset). */
@@ -1176,6 +1193,54 @@ export default function AdvisorPilotPage() {
   }, [rothLiveAnalysisOpen, client, rothWorksheet, rothPdfQualifiedTotal]);
   const registrationTotals = useMemo(() => buildRegistrationSummaryForAnalysis(holdings), [holdings]);
   const accountRollups = useMemo(() => rollupAccounts(holdings), [holdings]);
+  const feeAnalysisGroups = useMemo(() => groupFeeAnalysisFundRowsByAccount(holdings), [holdings]);
+
+  const runFeeAnalysis = useCallback(async () => {
+    setFeeAnalysisError(null);
+    if (feeAnalysisGroups.length === 0) {
+      setFeeAnalysisError("No ETF or mutual fund positions are classified on the confirmed holdings.");
+      return;
+    }
+    if (totalValue <= 0) {
+      setFeeAnalysisError("Total portfolio value must be greater than zero.");
+      return;
+    }
+    const advisorAnnual = parseAdvisorFeePercentPoints(feeAdvisorPctInput);
+    setFeeAnalysisBusy(true);
+    setFeeAnalysisResult(null);
+    try {
+      const synopsis = String(analysis?.synopsis ?? "").trim().slice(0, 900);
+      const res = await advisorFetch("/api/fee-analysis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          demoMode,
+          totalValue,
+          advisorFeeAnnual: advisorAnnual,
+          accounts: feeAnalysisGroups,
+          portfolioSynopsisSnippet: synopsis || undefined,
+        }),
+        onEmailSessionExpired: handleEmailSessionExpired,
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string } & Partial<FeeAnalysisApiResponse>;
+      if (!res.ok) {
+        throw new Error(typeof data.error === "string" ? data.error : "Fee analysis request failed.");
+      }
+      setFeeAnalysisResult(data as FeeAnalysisApiResponse);
+    } catch (e) {
+      setFeeAnalysisResult(null);
+      setFeeAnalysisError(e instanceof Error ? e.message : "Fee analysis failed.");
+    } finally {
+      setFeeAnalysisBusy(false);
+    }
+  }, [
+    feeAnalysisGroups,
+    totalValue,
+    feeAdvisorPctInput,
+    analysis?.synopsis,
+    demoMode,
+    handleEmailSessionExpired,
+  ]);
 
   const reviewCount = holdings.filter((h) => holdingAdvisorReviewBlocking(h)).length;
   const duplicateCount = holdings.filter((h) => h.duplicateOfIndex !== undefined).length;
@@ -6347,6 +6412,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <Button
                     variant="outline"
                     className="h-12 rounded-none border-slate-300 touch-manipulation"
+                    onClick={() => setStep("feeAnalysis")}
+                  >
+                    <Percent className="mr-2 h-4 w-4" />
+                    Fee analysis
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-12 rounded-none border-slate-300 touch-manipulation"
                     onClick={() => setStep("report")}
                   >
                     <Download className="mr-2 h-4 w-4" />
@@ -7053,7 +7126,8 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   Enter the client&apos;s current age (or date of birth on Client Profile) so the projection can run.
                 </div>
               ) : (
-                <div className="overflow-x-auto rounded-none border border-slate-200 bg-white shadow-sm">
+                <>
+                  <div className="overflow-x-auto rounded-none border border-slate-200 bg-white shadow-sm">
                   <table className="min-w-[1040px] w-full border-collapse text-sm">
                     <thead>
                       <tr className="border-b border-slate-200 bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
@@ -7098,6 +7172,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     </tbody>
                   </table>
                 </div>
+                  <RetirementIncomeAnalysisChart
+                    className="mt-6"
+                    data={mapRetirementIncomeProjectionToChartRows(retIncomeProjectionRows)}
+                  />
+                </>
               )}
 
               <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
@@ -7113,6 +7192,243 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => void saveCurrentReview()}>
                     <Save className="mr-2 h-4 w-4" />
                     Save client profile
+                  </Button>
+                  <Button className="h-12 rounded-none ap-cta-solid touch-manipulation" onClick={() => setStep("feeAnalysis")}>
+                    <Percent className="mr-2 h-4 w-4" />
+                    Fee analysis
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {step === "feeAnalysis" && (
+          <Card className="rounded-none ap-glass border-0">
+            <CardContent className="space-y-8 p-6 md:p-8">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none border-violet-200 bg-violet-50">
+                    <Percent className="h-6 w-6 text-violet-900" />
+                  </div>
+                  <div>
+                    <h2 className="font-serif text-3xl font-bold">Fee analysis</h2>
+                    <p className="text-sm text-slate-500">
+                      Confirmed holdings already show ETF / mutual fund asset classes and tickers. This step sends a compact,
+                      deduped ticker list to a dedicated model pass (optional synopsis from Portfolio Review) and divides
+                      estimated fund fees plus your advisor wrap fee by the full portfolio value—including non-fund
+                      balances in the denominator.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-none border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-950">
+                <p className="font-semibold">Illustrative only</p>
+                <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                  Expense ratios are model estimates, not prospectus data. Confirm every ratio and fee on official documents
+                  before client-facing numbers.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:max-w-md">
+                <div>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Current advisor fee (% of total portfolio per year)
+                  </label>
+                  <Input
+                    className="mt-2 h-12 rounded-none bg-white"
+                    inputMode="decimal"
+                    value={feeAdvisorPctInput}
+                    onChange={(e) => setFeeAdvisorPctInput(e.target.value)}
+                    placeholder="1"
+                  />
+                  <p className="mt-1 text-xs text-slate-500">Enter 1 or 1% for a 1% annual wrap on total portfolio value.</p>
+                </div>
+              </div>
+
+              {feeAnalysisError ? (
+                <div className="rounded-none border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">{feeAnalysisError}</div>
+              ) : null}
+
+              <div className="text-sm text-slate-600">
+                Total portfolio (all holdings): <span className="font-semibold text-slate-900">{currency(totalValue)}</span>
+              </div>
+
+              {feeAnalysisGroups.length === 0 ? (
+                <div className="rounded-none border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                  No holdings are classified as ETF or mutual fund. Refine asset classes on Confirm Holdings to include fund
+                  wrappers here.
+                </div>
+              ) : (
+                <div className="space-y-8">
+                  {!feeAnalysisResult
+                    ? feeAnalysisGroups.map((grp) => {
+                        const rollup = accountRollups.find((r) => r.key === grp.key);
+                        const regHint =
+                          rollup?.dominantRegistration === "mixed"
+                            ? "Mixed registrations"
+                            : rollup
+                              ? registrationLabel(rollup.dominantRegistration)
+                              : "—";
+                        const acctLabel = grp.accountNumber ? `Account ${grp.accountNumber}` : "Unlabeled account";
+                        return (
+                          <div key={grp.key} className="space-y-2">
+                            <div className="flex flex-wrap items-baseline justify-between gap-2">
+                              <h3 className="font-serif text-lg font-semibold text-slate-900">{acctLabel}</h3>
+                              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                                {regHint} · Account total {currency(grp.totalAccountValue)}
+                              </span>
+                            </div>
+                            <div className="overflow-x-auto rounded-none border border-slate-200 bg-white shadow-sm">
+                              <table className="min-w-[720px] w-full border-collapse text-sm">
+                                <thead>
+                                  <tr className="border-b border-slate-200 bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                                    <th className="px-3 py-3">Ticker</th>
+                                    <th className="px-3 py-3">Name</th>
+                                    <th className="px-3 py-3">Asset class</th>
+                                    <th className="px-3 py-3 text-right">Value</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {grp.fundRows.map((row, idx) => (
+                                    <tr key={`${grp.key}-${idx}`} className="border-b border-slate-100 odd:bg-white even:bg-slate-50/60">
+                                      <td className="px-3 py-2 font-mono text-xs text-slate-900">{row.ticker || "—"}</td>
+                                      <td className="px-3 py-2 text-slate-800">{row.suggested || row.rawName}</td>
+                                      <td className="px-3 py-2 text-slate-600">{row.assetClass}</td>
+                                      <td className="px-3 py-2 text-right tabular-nums text-slate-900">{currency(row.value)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })
+                    : feeAnalysisResult.accounts.map((acct) => {
+                        const rollup = accountRollups.find((r) => r.key === acct.key);
+                        const regHint =
+                          rollup?.dominantRegistration === "mixed"
+                            ? "Mixed registrations"
+                            : rollup
+                              ? registrationLabel(rollup.dominantRegistration)
+                              : "—";
+                        const acctLabel = acct.accountNumber ? `Account ${acct.accountNumber}` : "Unlabeled account";
+                        return (
+                          <div key={acct.key} className="space-y-2">
+                            <div className="flex flex-wrap items-baseline justify-between gap-2">
+                              <h3 className="font-serif text-lg font-semibold text-slate-900">{acctLabel}</h3>
+                              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                                {regHint} · Account total {currency(acct.totalAccountValue)}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-600">
+                              Fund fees in account (est.): {currency(acct.fundFeesInAccount)} · Fund expense load vs account:{" "}
+                              {(acct.fundExpensePctOfAccount * 100).toFixed(3)}% · All-in vs account (fund + advisor share):{" "}
+                              {(acct.allInDragOnAccount * 100).toFixed(3)}%
+                            </p>
+                            <div className="overflow-x-auto rounded-none border border-slate-200 bg-white shadow-sm">
+                              <table className="min-w-[960px] w-full border-collapse text-sm">
+                                <thead>
+                                  <tr className="border-b border-slate-200 bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
+                                    <th className="px-3 py-3">Ticker</th>
+                                    <th className="px-3 py-3">Name</th>
+                                    <th className="px-3 py-3">Asset class</th>
+                                    <th className="px-3 py-3 text-right">Value</th>
+                                    <th className="px-3 py-3 text-right">Est. expense %</th>
+                                    <th className="px-3 py-3 text-right">Est. $ / yr</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {acct.lines.map((row, idx) => (
+                                    <tr key={`${acct.key}-r-${idx}`} className="border-b border-slate-100 odd:bg-white even:bg-slate-50/60">
+                                      <td className="px-3 py-2 font-mono text-xs text-slate-900">{row.ticker || "—"}</td>
+                                      <td className="px-3 py-2 text-slate-800">{row.suggested || row.rawName}</td>
+                                      <td className="px-3 py-2 text-slate-600">{row.assetClass}</td>
+                                      <td className="px-3 py-2 text-right tabular-nums text-slate-900">{currency(row.value)}</td>
+                                      <td className="px-3 py-2 text-right tabular-nums text-slate-800">
+                                        {row.expenseRatioAnnual != null ? `${(row.expenseRatioAnnual * 100).toFixed(3)}%` : "—"}
+                                      </td>
+                                      <td className="px-3 py-2 text-right tabular-nums text-slate-900">
+                                        {currency(row.estimatedAnnualFeeDollars)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            {acct.lines.some((l) => l.lookupNote) ? (
+                              <ul className="list-disc space-y-1 pl-5 text-xs text-slate-600">
+                                {acct.lines.map((row, idx) =>
+                                  row.lookupNote ? (
+                                    <li key={`note-${acct.key}-${idx}`}>
+                                      <span className="font-mono">{row.ticker || row.rawName || "—"}</span>: {row.lookupNote}
+                                    </li>
+                                  ) : null
+                                )}
+                              </ul>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                </div>
+              )}
+
+              {feeAnalysisResult ? (
+                <div className="space-y-4 rounded-none border border-violet-200 bg-violet-50/60 p-5 md:p-6">
+                  <h3 className="font-serif text-xl font-semibold text-violet-950">Portfolio totals</h3>
+                  <dl className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+                    <div className="flex justify-between gap-4 border-b border-violet-200/80 pb-2">
+                      <dt className="text-slate-600">Estimated fund fees (annual)</dt>
+                      <dd className="font-semibold tabular-nums text-slate-900">
+                        {currency(feeAnalysisResult.totalEstimatedFundFeesDollars)}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-4 border-b border-violet-200/80 pb-2">
+                      <dt className="text-slate-600">Advisor fee (annual)</dt>
+                      <dd className="font-semibold tabular-nums text-slate-900">
+                        {currency(feeAnalysisResult.advisorFeeDollarsPortfolio)}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-4 border-b border-violet-200/80 pb-2">
+                      <dt className="text-slate-600">Fund expense load vs full portfolio</dt>
+                      <dd className="font-semibold tabular-nums text-slate-900">
+                        {(feeAnalysisResult.weightedFundExpensePctOfPortfolio * 100).toFixed(3)}%
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-4 border-b border-violet-200/80 pb-2">
+                      <dt className="text-slate-600">All-in illustrative drag vs portfolio</dt>
+                      <dd className="font-semibold tabular-nums text-violet-950">
+                        {(feeAnalysisResult.allInIllustrativeDragPctAnnual * 100).toFixed(3)}%
+                      </dd>
+                    </div>
+                  </dl>
+                  <p className="text-xs leading-relaxed text-violet-950/90">{feeAnalysisResult.disclaimer}</p>
+                  <p className="text-xs text-slate-600">
+                    Unique tickers sent to the model: {feeAnalysisResult.uniqueTickerCount}. Holdings missing a ticker:{" "}
+                    {feeAnalysisResult.rowsMissingTicker}.
+                  </p>
+                </div>
+              ) : null}
+
+              <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => setStep("retIncome")}>
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  Back to Ret. Inc Calculator
+                </Button>
+                <div className="flex flex-wrap gap-2 sm:justify-end">
+                  <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => void saveCurrentReview()}>
+                    <Save className="mr-2 h-4 w-4" />
+                    Save client profile
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-12 rounded-none border-violet-300 bg-violet-50/90 touch-manipulation hover:bg-violet-100/90"
+                    disabled={feeAnalysisBusy || feeAnalysisGroups.length === 0 || totalValue <= 0}
+                    onClick={() => void runFeeAnalysis()}
+                  >
+                    <BrainCircuit className="mr-2 h-4 w-4" />
+                    {feeAnalysisBusy ? "Running…" : "Run fee analysis"}
                   </Button>
                   <Button className="h-12 rounded-none ap-cta-solid touch-manipulation" onClick={() => setStep("report")}>
                     <Download className="mr-2 h-4 w-4" />
@@ -7227,6 +7543,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         <ArrowRight className="ml-2 h-4 w-4" />
                       </Button>
                     ) : null}
+                    <Button
+                      variant="outline"
+                      className="h-12 justify-start rounded-none border-violet-200 bg-violet-50/90 touch-manipulation hover:bg-violet-100/90"
+                      onClick={() => setStep("feeAnalysis")}
+                    >
+                      <Percent className="mr-2 h-4 w-4" />
+                      Fee analysis
+                      <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
                     <Button
                       variant="outline"
                       className="h-12 justify-start rounded-none border-sky-200 bg-sky-50/90 touch-manipulation hover:bg-sky-100/90"

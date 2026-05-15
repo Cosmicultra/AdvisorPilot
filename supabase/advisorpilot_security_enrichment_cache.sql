@@ -1,6 +1,6 @@
 -- Requires public.set_advisorpilot_updated_at() from advisorpilot_full_schema_rls.sql (run main schema first if missing).
 -- =============================================================================
--- Step 1 — Supabase Dashboard → SQL Editor → paste → Run.
+-- Step 1  -  Supabase Dashboard → SQL Editor → paste → Run.
 -- Global cache for holding enrichment (shared across all advisors).
 -- Only server code using SUPABASE_SERVICE_ROLE_KEY should touch this table.
 -- RLS is enabled with no policies for authenticated users (deny); service role bypasses RLS.
@@ -24,5 +24,5 @@ for each row execute function public.set_advisorpilot_updated_at();
 
 alter table public.advisorpilot_security_enrichment_cache enable row level security;
 
--- Step 2 — Optional env (defaults shown):
+-- Step 2  -  Optional env (defaults shown):
 -- SECURITY_ENRICHMENT_CACHE_TTL_DAYS=90

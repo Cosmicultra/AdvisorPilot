@@ -11,10 +11,10 @@ From your **Usage → Spend categories** snapshot:
 
 - **Web search tool calls** were the largest line item (on the order of **~$5+ on the busy day** in that view), ahead of **gpt-4o** input/output.
 - In this codebase, **web search** is attached to:
-  - **Per-holding enrichment** — `[lib/holding-enrichment.ts](../lib/holding-enrichment.ts)`: each non–cash-like row processed runs `**responses.create` with `web_search_preview`**, then a second `**gpt-4o**` JSON pass.
-  - **Portfolio analysis** — `[app/api/generate-analysis/route.ts](../app/api/generate-analysis/route.ts)`: **one** research pass with `**web_search_preview`**, then one large JSON pass.
+  - **Per-holding enrichment**  -  `[lib/holding-enrichment.ts](../lib/holding-enrichment.ts)`: each non–cash-like row processed runs `**responses.create` with `web_search_preview`**, then a second `**gpt-4o**` JSON pass.
+  - **Portfolio analysis**  -  `[app/api/generate-analysis/route.ts](../app/api/generate-analysis/route.ts)`: **one** research pass with `**web_search_preview`**, then one large JSON pass.
 
-Statement extraction — `[lib/extract-statement-holdings.ts](../lib/extract-statement-holdings.ts)` — uses **multimodal `gpt-4o`** per file (separate from web search, still real cost).
+Statement extraction  -  `[lib/extract-statement-holdings.ts](../lib/extract-statement-holdings.ts)`  -  uses **multimodal `gpt-4o`** per file (separate from web search, still real cost).
 
 **Today:** after **Extract holdings**, `[app/page.tsx](../app/page.tsx)` automatically calls `**runHoldingsVerification`** → `**POST /api/enrich-holdings**` with **every** row, so cost scales ~**linearly with position count**.
 
@@ -48,12 +48,12 @@ However, `**canRunDeepAnalysis`** includes `(reviewCount === 0 || enrichmentSati
 
 **Include** a row in the batch sent to enrichment when **all** are true:
 
-1. **Not** cash-like — use existing `[isCashLikeHolding](../lib/asset-classes.ts)` (same idea as server skip in `enrichOneHolding`).
+1. **Not** cash-like  -  use existing `[isCashLikeHolding](../lib/asset-classes.ts)` (same idea as server skip in `enrichOneHolding`).
 2. At least one of:
   - `**confidence < 75`** OR `**status === "review"**` (matches existing `**reviewCount**` logic in `page.tsx`), and/or  
   - `**enrichmentNeedsReview === true**` (recommended so a prior flagged enrich can be retried without forcing low confidence).
 
-**Result:** `R` = count of included rows; historically enrichment processed `**N¬c`** ≈ non–cash-like count — **cost ratio ≈ `R / N¬c`** on the enrichment step.
+**Result:** `R` = count of included rows; historically enrichment processed `**N¬c`** ≈ non–cash-like count  -  **cost ratio ≈ `R / N¬c`** on the enrichment step.
 
 ---
 
@@ -85,7 +85,7 @@ However, `**canRunDeepAnalysis`** includes `(reviewCount === 0 || enrichmentSati
 Client: `setHoldings(prev => prev.map((h, i) => patchByIndex.get(i) ?? h))` (with defensive copy/validation).
 
 **File:** `[app/api/enrich-holdings/route.ts](../app/api/enrich-holdings/route.ts)`  
-**Core logic:** still `[enrichOneHolding](../lib/holding-enrichment.ts)` — no structural change required beyond **fewer invocations**.
+**Core logic:** still `[enrichOneHolding](../lib/holding-enrichment.ts)`  -  no structural change required beyond **fewer invocations**.
 
 ---
 
@@ -111,7 +111,7 @@ Client: `setHoldings(prev => prev.map((h, i) => patchByIndex.get(i) ?? h))` (wit
 `Verify uncertain holdings (AI)`  
 
 **Secondary line (dynamic):**  
-`N positions need AI verification` or `No uncertain positions — manual review only` when `N = 0`.
+`N positions need AI verification` or `No uncertain positions  -  manual review only` when `N = 0`.
 
 **States:**
 
@@ -124,7 +124,7 @@ Client: `setHoldings(prev => prev.map((h, i) => patchByIndex.get(i) ?? h))` (wit
 | **Error**   | Show `enrichError`; allow retry.                                                      |
 
 
-**Optional:** If you want **advisor control**, add a checkbox “Include high-confidence rows” later — **out of scope** for the minimal cost fix.
+**Optional:** If you want **advisor control**, add a checkbox “Include high-confidence rows” later  -  **out of scope** for the minimal cost fix.
 
 ---
 
@@ -168,7 +168,7 @@ C_after ≈ F × C_extract + R × C_enrich_line + C_analyze
 
 ## 9. Accuracy note (short)
 
-Rows **not** sent to enrichment keep **extraction output** as-is. Residual risk is concentrated in **ambiguous** lines — which stay in the eligible set via **low confidence**, `**review`**, or `**enrichmentNeedsReview**`.
+Rows **not** sent to enrichment keep **extraction output** as-is. Residual risk is concentrated in **ambiguous** lines  -  which stay in the eligible set via **low confidence**, `**review`**, or `**enrichmentNeedsReview**`.
 
 ---
 

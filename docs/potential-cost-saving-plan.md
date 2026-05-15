@@ -1,6 +1,6 @@
 # Potential cost saving plan (adaptive JSON model routing)
 
-**Status:** Planned — not implemented. This document preserves the design for automatic server-side routing between cheaper JSON models (e.g. `gpt-4o-mini`) and full-quality models (e.g. `gpt-4o`), with validation and a single escalation retry. Advisors get no in-app toggles.
+**Status:** Planned  -  not implemented. This document preserves the design for automatic server-side routing between cheaper JSON models (e.g. `gpt-4o-mini`) and full-quality models (e.g. `gpt-4o`), with validation and a single escalation retry. Advisors get no in-app toggles.
 
 **Related:** Per-pass OpenAI env vars and eval fixtures already exist from the earlier cost-tier work (`lib/openai-route-models.ts`, `README.md`). This plan adds **tier routing + validators** on top.
 
@@ -36,7 +36,7 @@ flowchart TD
 3. Automatically **jump straight to full `gpt-4o`** when signals say classification/narrative risk is elevated.
 4. If mini is attempted, **automatically retry once** with the **quality** JSON model after **cheap structural/compliance validators** fail (bounded cost).
 
-Research (`web_search_preview`) and multimodal extraction **remain unchanged** by default; they continue to use existing envs (`OPENAI_ANALYSIS_RESEARCH_MODEL`, `OPENAI_ENRICHMENT_RESEARCH_MODEL`, `OPENAI_EXTRACTION_MODEL`). Optional future hook: escalate research separately (out of scope for v1—adds latency/cost complexity).
+Research (`web_search_preview`) and multimodal extraction **remain unchanged** by default; they continue to use existing envs (`OPENAI_ANALYSIS_RESEARCH_MODEL`, `OPENAI_ENRICHMENT_RESEARCH_MODEL`, `OPENAI_EXTRACTION_MODEL`). Optional future hook: escalate research separately (out of scope for v1 - adds latency/cost complexity).
 
 ---
 
@@ -54,7 +54,7 @@ Keep today’s knobs, add explicit **quality** tiers so escalation is predictabl
 
 **Implementation note:** Default `ADVISORPILOT_JSON_TIER_ROUTING=1` only when economy ≠ quality; otherwise routing is a no-op. That preserves deployments that set only one model.
 
-**Thresholds (env):** e.g. `ADVISORPILOT_ANALYSIS_HARD_TOTAL_VALUE`, `ADVISORPILOT_ANALYSIS_HARD_HOLDING_COUNT`, `ADVISORPILOT_ANALYSIS_HARD_TOP_WEIGHT_PCT`, `ADVISORPILOT_ANALYSIS_HARD_ANY_REVIEW_STATUS`, `ADVISORPILOT_ANALYSIS_HARD_NONQUALIFIED_WITH_BASIS`. Example defaults (tune before ship): total value ≥ $2M **or** holdings ≥ 40 **or** top line ≥ 25% of total **or** any `status === "review"` **or** taxable cost-basis nuances from registration summary — reuse `buildRegistrationSummaryForAnalysis` in `lib/holding-registration.ts`.
+**Thresholds (env):** e.g. `ADVISORPILOT_ANALYSIS_HARD_TOTAL_VALUE`, `ADVISORPILOT_ANALYSIS_HARD_HOLDING_COUNT`, `ADVISORPILOT_ANALYSIS_HARD_TOP_WEIGHT_PCT`, `ADVISORPILOT_ANALYSIS_HARD_ANY_REVIEW_STATUS`, `ADVISORPILOT_ANALYSIS_HARD_NONQUALIFIED_WITH_BASIS`. Example defaults (tune before ship): total value ≥ $2M **or** holdings ≥ 40 **or** top line ≥ 25% of total **or** any `status === "review"` **or** taxable cost-basis nuances from registration summary  -  reuse `buildRegistrationSummaryForAnalysis` in `lib/holding-registration.ts`.
 
 ---
 
@@ -64,8 +64,8 @@ Keep today’s knobs, add explicit **quality** tiers so escalation is predictabl
 
 Add `lib/openai-json-tier-routing.ts`:
 
-- **`inferAnalysisJsonRoute(ctx)`** — inputs: `holdings[]`, `totalValue`, `registrationSummary` (or holdings + helper), normalized numbers (NaN → 0), empty holdings edge.
-- **`inferEnrichmentJsonRoute(signal)`** — per holding: `proprietaryHint`, `holding.status`, `holding.confidence`, `figiHasSkip`, **generic sleeve risk** (e.g. `assetClass` in `["ETF","Mutual Fund","Unknown"]` or suggested contains “Needs” / “MANUAL”; align with `detectProprietaryHint` in `holding-enrichment.ts` and `extractLikelySymbol` in `holding-validation.ts`).
+- **`inferAnalysisJsonRoute(ctx)`**  -  inputs: `holdings[]`, `totalValue`, `registrationSummary` (or holdings + helper), normalized numbers (NaN → 0), empty holdings edge.
+- **`inferEnrichmentJsonRoute(signal)`**  -  per holding: `proprietaryHint`, `holding.status`, `holding.confidence`, `figiHasSkip`, **generic sleeve risk** (e.g. `assetClass` in `["ETF","Mutual Fund","Unknown"]` or suggested contains “Needs” / “MANUAL”; align with `detectProprietaryHint` in `holding-enrichment.ts` and `extractLikelySymbol` in `holding-validation.ts`).
 - Output: `{ mode: "quality_first" | "economy_first"; reasons: string[] }` for logs.
 
 ### 2. Validators after each JSON Responses call
@@ -79,7 +79,7 @@ Add `lib/openai-analysis-json-validator.ts` and `lib/openai-enrichment-json-vali
 
 Add `lib/openai-responses-json.ts`:
 
-- **`callResponsesJsonWithTier`** — args: `openai`, `input`, `economyModel`, `qualityModel`, `mode`, `validate`, `logTag`.
+- **`callResponsesJsonWithTier`**  -  args: `openai`, `input`, `economyModel`, `qualityModel`, `mode`, `validate`, `logTag`.
 - Flow: first model from mode; if validator fails **and** economy ≠ quality **and** first attempt was economy → **one** quality retry; if still bad → throw for route → 500 JSON `{ error, reasonCodes }` without echoing prompts.
 
 ### 4. Wire `app/api/generate-analysis/route.ts`
@@ -133,7 +133,7 @@ Update `README.md` OpenAI section with plain-English routing, envs, and kill swi
 
 ## Implementation backlog
 
-1. **routing-module** — Add `openai-json-tier-routing.ts`; extend `openai-route-models`; kill switch.
-2. **validators-helper** — Validators + `callResponsesJsonWithTier`.
-3. **wire-routes** — Integrate `generate-analysis` + `holding-enrichment`; escalation logging.
-4. **tests-docs** — Vitest + README updates.
+1. **routing-module**  -  Add `openai-json-tier-routing.ts`; extend `openai-route-models`; kill switch.
+2. **validators-helper**  -  Validators + `callResponsesJsonWithTier`.
+3. **wire-routes**  -  Integrate `generate-analysis` + `holding-enrichment`; escalation logging.
+4. **tests-docs**  -  Vitest + README updates.

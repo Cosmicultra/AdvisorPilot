@@ -6,19 +6,19 @@
 -- Supabase is a separate website that hosts your database. You copy the SQL
 -- below and paste it into Supabase’s “SQL Editor”, then click Run once.
 --
--- STEP 1 — Open your project on the web
+-- STEP 1  -  Open your project on the web
 --   Go to https://supabase.com → sign in → click your AdvisorPilot project.
 --
--- STEP 2 — Open the SQL Editor
+-- STEP 2  -  Open the SQL Editor
 --   In the left sidebar, click “SQL” (or “SQL Editor”).
 --   Click “New query” (or a blank query tab).
 --
--- STEP 3 — Copy THIS entire file
+-- STEP 3  -  Copy THIS entire file
 --   In VS Code / Cursor: open this file, Select All (Ctrl+A), Copy (Ctrl+C).
 --   The file path on your computer is:
 --   docs/advisorpilot-database-reference.sql
 --
--- STEP 4 — Paste and run
+-- STEP 4  -  Paste and run
 --   Click in the big empty box in Supabase SQL Editor, Paste (Ctrl+V).
 --   Click the green “Run” button (or press Ctrl+Enter).
 --   Wait until it finishes. Green/success messages = good. Red errors = stop
@@ -29,7 +29,7 @@
 --       Running the whole file is OK. It creates tables, security rules, and
 --       storage buckets AdvisorPilot expects.
 --   • Project that ALREADY has your live data:
---       Do NOT run the whole file without checking first — it can change
+--       Do NOT run the whole file without checking first  -  it can change
 --       security policies and triggers. Ask whoever set up the DB, or only run
 --       small pieces a developer gives you after comparing to production.
 --
@@ -38,7 +38,7 @@
 --   Your app connects to Supabase using URL + keys in .env (not this file).
 --
 -- ============================================================================
--- AdvisorPilot — Supabase schema reference (not auto-applied).
+-- AdvisorPilot  -  Supabase schema reference (not auto-applied).
 -- Technical summary: merged “expected” shape for tables, RLS, and storage.
 --
 -- App touchpoints (server routes use service role and bypass RLS unless noted):
