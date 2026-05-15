@@ -16,6 +16,8 @@ import {
 } from "@/lib/securities-master";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
+import { enforceUploadSize } from "@/lib/llm/attachments";
+import { LlmAttachmentError } from "@/lib/llm";
 
 export const runtime = "nodejs";
 
@@ -119,6 +121,17 @@ export async function POST(request: Request) {
     const allHoldings: unknown[] = [];
 
     for (const [index, file] of files.entries()) {
+      // Per-file size cap before we even allocate the buffer. The model layer
+      // (`normalizeAttachment`) re-checks; this is a fast-fail at the edge so
+      // a 1 GB upload doesn't tie up extraction.
+      try {
+        enforceUploadSize(file.size, file.name);
+      } catch (err) {
+        if (err instanceof LlmAttachmentError) {
+          return NextResponse.json({ error: err.message }, { status: 413 });
+        }
+        throw err;
+      }
       const bytes = Buffer.from(await file.arrayBuffer());
       const mimeType = file.type || "application/pdf";
       const pageHint = filePageHints[index]?.trim() || "";
@@ -165,6 +178,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ holdings: allHoldings });
   } catch (error: unknown) {
+    if (error instanceof LlmAttachmentError) {
+      // Magic-byte sniff rejection, size cap, etc. — user-friendly 4xx.
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     console.error("ANALYZE ERROR:", error);
 
     return NextResponse.json(

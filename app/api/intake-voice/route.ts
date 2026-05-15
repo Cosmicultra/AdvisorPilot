@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import {
   applyIntakePatch,
@@ -10,21 +9,15 @@ import {
   RISK_PROFILES,
   CALIBRATION_OPTIONS,
 } from "@/lib/intake-config";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-/** Small / cheap model is enough for structured JSON; override via .env if you want. */
-const MODEL = process.env.OPENAI_INTAKE_MODEL || "gpt-4o-mini";
+import { complete } from "@/lib/llm";
 
 function formatProviderError(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e);
   if (raw.includes("429") || raw.includes("rate limit") || raw.includes("Rate limit")) {
-    return `OpenAI rate limit. Wait a moment or check your plan. Model: ${MODEL}.`;
+    return `LLM rate limit. Wait a moment or check your plan.`;
   }
   if (raw.includes("insufficient_quota") || raw.includes("quota")) {
-    return `OpenAI billing or quota issue. Check your OpenAI account balance and limits. Model: ${MODEL}.`;
+    return `LLM billing or quota issue. Check the configured provider's account balance and limits.`;
   }
   return raw;
 }
@@ -102,15 +95,13 @@ function asPatch(obj: unknown): Partial<IntakeClient> & { name?: string } {
 }
 
 async function completeJson(system: string, user: string): Promise<string> {
-  const res = await openai.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    response_format: { type: "json_object" },
+  const result = await complete({
+    pass: "intake.turn",
+    system,
+    user,
+    jsonSchema: { type: "object" },
   });
-  return res.choices[0]?.message?.content ?? "";
+  return result.text;
 }
 
 export async function POST(req: Request) {

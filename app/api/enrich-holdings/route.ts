@@ -1,13 +1,8 @@
-﻿import OpenAI from "openai";
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { enrichOneHolding, type EnrichmentInputHolding } from "@/lib/holding-enrichment";
 import { createSupabaseAdminForEnrichmentCache } from "@/lib/security-enrichment-cache";
 
 export const runtime = "nodejs";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 function toInput(row: Record<string, unknown>): EnrichmentInputHolding {
   return {
@@ -86,7 +81,7 @@ export async function POST(req: Request) {
           : {};
       const base = { ...row };
 
-      const { patch, cacheHit } = await enrichOneHolding(openai, toInput(base), {
+      const { patch, cacheHit } = await enrichOneHolding(toInput(base), {
         openfigiApiKey,
         supabaseCache,
         supabaseMaster: supabaseCache,

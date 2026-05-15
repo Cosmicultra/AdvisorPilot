@@ -1,24 +1,9 @@
-import OpenAI from "openai";
 import { Buffer } from "buffer";
 import { ASSET_CLASSES } from "./asset-classes";
-import {
-  clipPdfTextForPrompt,
-  isLikelyPdf,
-  tryExtractPdfText,
-  PDF_TEXT_PROMPT_DEFAULT_MAX_CHARS,
-} from "./extract-pdf-text-layer";
-import {
-  extractionMaxOutputTokens,
-  extractionModel,
-  logOpenAiPass,
-} from "./openai-route-models";
-import { assertStatementFileReadable } from "./statement-input-quality";
+import { complete } from "./llm";
+import { normalizeAttachment } from "./llm/attachments";
+import { extractionMaxOutputTokens } from "./openai-route-models";
 import { assertHoldingsReconcileToVerifiedTotal } from "./statement-extraction-verify";
-import { expandHoldingsPageSpec, slicePdfBytesToPages } from "./holdings-page-spec";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 /** Remove trailing commas before } or ] (common in LLM JSON). */
 function stripTrailingCommas(json: string): string {
@@ -36,10 +21,10 @@ function stripTrailingCommas(json: string): string {
  * Models sometimes add fences, prose, smart quotes, or invalid example fragments from prompts.
  */
 function extractHoldingsJsonBlob(text: string): string {
-  const trimmed = text.trim().replace(/^\uFEFF/, "");
+  const trimmed = text.trim().replace(/^﻿/, "");
   const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
   let body = fence ? fence[1].trim() : trimmed;
-  body = body.replace(/[\u201C\u201D]/g, '"');
+  body = body.replace(/[“”]/g, '"');
   const start = body.indexOf("{");
   const end = body.lastIndexOf("}");
   if (start >= 0 && end > start) {
@@ -100,36 +85,11 @@ export type ExtractedHolding = {
 };
 
 /**
- * Many consolidated PDFs repeat account shells (IRA + taxable + 401(k)). Embedded text lists each
- * `Account Number:` — surfacing that count up front sharply reduces “first table only” omissions.
- */
-function buildMultiAccountPdfHint(pdfText: string): string {
-  const ids = [...pdfText.matchAll(/Account Number:\s*([^\n\r]+)/gi)]
-    .map((m) => m[1].trim())
-    .filter(Boolean);
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const id of ids) {
-    if (!seen.has(id)) {
-      seen.add(id);
-      unique.push(id);
-    }
-  }
-  if (unique.length <= 1) return "";
-
-  const endingCount = [...pdfText.matchAll(/Ending Account Value:\s*\$[\d,]+\.\d{2}/gi)].length;
-
-  return `
-MULTI-ACCOUNT DOCUMENT (embedded PDF text lists ${unique.length} distinct account numbers — ${endingCount} printed ending-account totals):
-${unique.map((id, i) => `${i + 1}. ${id}`).join("\n")}
-Extract holdings[] for **every** position line under **each** account block above (every holdings table tied to each account number). Do not stop after the first account’s table.
-When the same ticker appears in two accounts, emit separate holdings[] rows and set accountNumber to the printed id for that row.
-
-`;
-}
-
-/**
- * Run the same OpenAI extraction as POST /api/analyze-statement (server-only).
+ * Run the OpenAI extraction pass via the multi-provider LLM abstraction
+ * (`lib/llm`). All intake normalization — magic-byte sniff, size cap, page
+ * slicing, text-layer extraction, multi-account hint — happens in
+ * `normalizeAttachment()`; this function only builds the prompt and
+ * dispatches the model call.
  */
 export async function extractHoldingsFromFileBuffer(params: {
   fileName: string;
@@ -137,92 +97,48 @@ export async function extractHoldingsFromFileBuffer(params: {
   bytes: Buffer;
   clientContext: Record<string, unknown>;
 }): Promise<{ holdings: ExtractedHolding[] }> {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("Missing OPENAI_API_KEY in environment.");
-  }
-
   const { fileName, mimeType, bytes, clientContext: clientContextIn } = params;
   const { holdingsPagesWithPositions: advisorHoldingsPagesRaw, ...clientContext } = clientContextIn;
   const advisorHoldingsPages =
     typeof advisorHoldingsPagesRaw === "string" ? advisorHoldingsPagesRaw.trim() : "";
 
-  await assertStatementFileReadable({ bytes, mimeType, fileName });
-
-  let workBytes = bytes;
-  let pdfPhysicallySliced = false;
-  if (
-    advisorHoldingsPages &&
-    !mimeType.toLowerCase().includes("image") &&
-    isLikelyPdf(mimeType, fileName)
-  ) {
-    const expanded = expandHoldingsPageSpec(advisorHoldingsPages);
-    if (expanded.length > 0) {
-      const sliced = await slicePdfBytesToPages(bytes, expanded);
-      if (sliced && sliced.length > 0) {
-        workBytes = sliced;
-        pdfPhysicallySliced = true;
-      }
-    }
-  }
-
-  const advisorPageScope = advisorHoldingsPages
-    ? pdfPhysicallySliced
-      ? `
-**PDF PAGE FILTER (server-applied):** This attachment contains **only** the original pages matching the advisor’s pattern **${advisorHoldingsPages}** (1-based; hyphen = inclusive). The PDF was trimmed before upload to the model — extract holdings from the **entire** file; there are no other pages to read.
-`
-      : `
-**ADVISOR PAGE SCOPE (hint only — full file still attached):** The advisor indicated holdings may appear only on pages matching **${advisorHoldingsPages}** (1-based: hyphen = inclusive range, commas separate pages/ranges). **Extract holdings only from those pages/sections** when you can identify them. Do not invent rows from other parts of the document.
-`
-    : "";
-
-  const base64 = workBytes.toString("base64");
-
-  const filePart = mimeType.includes("image")
-    ? {
-        type: "input_image" as const,
-        image_url: `data:${mimeType};base64,${base64}`,
-        // Avoid detail "high" — some gpt-4o Responses requests reject it (400).
-        detail: "auto" as const,
-      }
-    : {
-        type: "input_file" as const,
-        filename: fileName || "statement.pdf",
-        file_data: `data:${mimeType};base64,${base64}`,
-      };
-
-  const assetClassList = ASSET_CLASSES.join(", ");
-
-  const mimeLower = mimeType.toLowerCase();
-  const isImage = mimeLower.includes("image");
-
-  let embeddedPdfText: string | null = null;
-  let pdfTextLayerSection = "";
-  if (!isImage && isLikelyPdf(mimeType, fileName)) {
-    embeddedPdfText = await tryExtractPdfText(workBytes);
-    if (embeddedPdfText) {
-      const multiHint = buildMultiAccountPdfHint(embeddedPdfText);
-      const clipped = clipPdfTextForPrompt(
-        embeddedPdfText,
-        pdfPhysicallySliced ? Number.MAX_SAFE_INTEGER : PDF_TEXT_PROMPT_DEFAULT_MAX_CHARS
-      );
-      pdfTextLayerSection = `
-${multiHint}
-EMBEDDED PDF TEXT (order may differ from visuals — align rows using the PDF layout; **Mkt Val / Market value** column wins for **value**):
----
-${clipped}
----
-`;
-    }
-  }
+  const attachment = await normalizeAttachment({
+    bytes,
+    mime: mimeType,
+    fileName,
+    pageHint: advisorHoldingsPages || undefined,
+  });
 
   const visionOnlyStatement =
-    isImage || (isLikelyPdf(mimeType, fileName) && embeddedPdfText == null);
+    attachment.kind === "image" || (attachment.kind === "pdf" && !attachment.hasTextLayer);
+
+  const advisorPageScope =
+    advisorHoldingsPages && attachment.kind === "pdf"
+      ? attachment.pdfPhysicallySliced
+        ? `
+**PDF PAGE FILTER (server-applied):** This attachment contains **only** the original pages matching the advisor's pattern **${advisorHoldingsPages}** (1-based; hyphen = inclusive). The PDF was trimmed before upload to the model — extract holdings from the **entire** file; there are no other pages to read.
+`
+        : `
+**ADVISOR PAGE SCOPE (hint only — full file still attached):** The advisor indicated holdings may appear only on pages matching **${advisorHoldingsPages}** (1-based: hyphen = inclusive range, commas separate pages/ranges). **Extract holdings only from those pages/sections** when you can identify them. Do not invent rows from other parts of the document.
+`
+      : "";
+
+  const pdfTextLayerSection = attachment.textLayer
+    ? `
+${attachment.textLayer.multiAccountHint}EMBEDDED PDF TEXT (order may differ from visuals — align rows using the PDF layout; **Mkt Val / Market value** column wins for **value**):
+---
+${attachment.textLayer.clippedText}
+---
+`
+    : "";
 
   const visionOnlySection = visionOnlyStatement
     ? `
 (Image / scan / no selectable text.) Read the printed table visually. **value** = **Mkt Val / Market value**; **costBasis** = printed **Cost basis** for that row when present. Ignore qty, price, day change when choosing market value.
 `
     : "";
+
+  const assetClassList = ASSET_CLASSES.join(", ");
 
   const prompt = `
 Can you read this statement? Tell me the **account number**, the **holding name**, the **ticker** for that holding, the **value** of each holding **broken out line by line**, and **give me totals at the bottom** (portfolio-level total as **statementAccountEndingValue** when one headline number equals all positions). **List the cost basis for each holding if there is one**, and show it on each applicable holding as the JSON field **costBasis** (use 0 only when that row has no cost printed).
@@ -258,61 +174,46 @@ Example shape:
 {"statementAccountEndingValue":3500.84,"holdings":[{"rawName":"APPLE INC","suggested":"AAPL","confidence":90,"assetClass":"Individual Stock","value":250.01,"status":"matched","registrationType":"roth","accountNumber":"****023","options":["AAPL"],"costBasis":199.5}]}
 `;
 
-  const extractModel = extractionModel();
-  logOpenAiPass("analyze-statement", "extract", extractModel);
-
-  const response = await openai.responses.create({
-    model: extractModel,
-    instructions: visionOnlyStatement
-      ? "User-style task in prompt: holdings JSON line-by-line, market-value column only, minimal options. Prefer matching ChatGPT conversational clarity."
-      : "User-style holdings extract to JSON only; Schwab/account-summary totals must tie sum(values). Trust visual Mkt Val when text is scrambled.",
-    input: [
-      {
-        role: "user",
-        content: [
-          filePart,
-          {
-            type: "input_text",
-            text: prompt,
-          },
-        ],
-      },
-    ],
-    max_output_tokens: extractionMaxOutputTokens(),
-    text: {
-      format: {
-        type: "json_object",
-      },
-    },
-  });
-
-  const text = response.output_text || "";
-
-  if (!text) {
-    throw new Error("OpenAI returned an empty extraction response.");
+  // We pass `jsonSchema` solely to force `text.format: { type: "json_object" }`
+  // on the OpenAI adapter. The adapter's auto-parse would throw a generic
+  // SyntaxError on malformed output, so we re-parse `result.text` with our
+  // statement-specific parser below to preserve the helpful error messages
+  // and capture `statementAccountEndingValue`.
+  let result;
+  try {
+    result = await complete<unknown>({
+      pass: "extraction",
+      system: visionOnlyStatement
+        ? "User-style task in prompt: holdings JSON line-by-line, market-value column only, minimal options. Prefer matching ChatGPT conversational clarity."
+        : "User-style holdings extract to JSON only; Schwab/account-summary totals must tie sum(values). Trust visual Mkt Val when text is scrambled.",
+      user: prompt,
+      attachments: [attachment],
+      jsonSchema: { type: "object" },
+      maxOutputTokens: extractionMaxOutputTokens(),
+    });
+  } catch (err) {
+    // Adapter throws on incomplete-due-to-max-tokens or empty response with
+    // its own copy that mentions max-output-tokens. Re-throw unchanged so the
+    // route surfaces it.
+    throw err;
   }
 
-  if (response.status === "incomplete") {
-    const reason = response.incomplete_details?.reason;
-    console.warn("[analyze-statement] extract response incomplete:", reason);
-    if (reason === "max_output_tokens") {
-      throw new Error(
-        "Statement extraction stopped early because the response size limit was reached. Try uploading fewer pages at once, or set OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS higher if your model allows it."
-      );
-    }
-  }
+  const rawResponse = result.raw as {
+    status?: string;
+    incomplete_details?: { reason?: string };
+  };
 
   try {
-    const parsed = parseExtractedHoldingsResponse(text);
+    const parsed = parseExtractedHoldingsResponse(result.text);
     assertHoldingsReconcileToVerifiedTotal({
       holdings: parsed.holdings,
-      embeddedPdfText,
+      embeddedPdfText: attachment.textLayer?.fullText ?? null,
       modelStatementEndingValue: parsed.statementAccountEndingValue,
     });
     return { holdings: parsed.holdings };
   } catch (err) {
-    if (response.status === "incomplete") {
-      const reason = response.incomplete_details?.reason;
+    if (rawResponse.status === "incomplete") {
+      const reason = rawResponse.incomplete_details?.reason;
       throw new Error(
         reason === "max_output_tokens"
           ? "Statement extraction may have been cut off before all holdings were listed. Try a smaller PDF or fewer accounts per file, or increase OPENAI_EXTRACTION_MAX_OUTPUT_TOKENS."
