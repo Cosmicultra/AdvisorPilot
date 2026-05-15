@@ -39,27 +39,51 @@ Server routes resolve the advisor via `lib/advisor-auth.ts → resolveAdvisorIde
 
 Google-signed-in users have no Supabase `user_id`, so ownership is enforced by normalized email. Keep that in mind when adding queries against advisor-scoped tables.
 
-### OpenAI pipeline (per-pass models)
-Routes use different models for different passes. The mapping lives in `lib/openai-route-models.ts` and is configurable via `OPENAI_*_MODEL` env vars (see README). Typical flow:
-1. `POST /api/analyze-statement` — extraction model on the raw PDF/image → holdings JSON. If `ADVISORPILOT_SECURITIES_MASTER=1`, rows are reconciled against the Supabase `advisorpilot_securities_master` catalog (ticker-first, then a Jaccard name-overlap gate set by `ADVISORPILOT_MASTER_NAME_SCORE_THRESHOLD`).
-2. `POST /api/enrich-holdings` — web-search pass + JSON pass per holding; results are cached in `advisorpilot_security_enrichment_cache`.
-3. `POST /api/generate-analysis` — macro web-search pass + structured review JSON.
-4. `POST /api/generate-report` (or `/api/generate-roth-report`) — `pdf-lib` assembly; embeds `public/logo.png` when present.
+### Multi-provider LLM abstraction (`lib/llm/`)
+**Route handlers never instantiate provider SDKs directly.** They import only `complete()`, `research()`, `tts()`, `stt()` from `@/lib/llm` (facade in `lib/llm/index.ts`). The facade picks an adapter per request based on a fixed precedence chain:
 
-`/api/intake-voice`, `/api/intake-tts`, and `/api/intake-stt` power the **Live Intake** overlay (`components/live-intake-overlay.tsx`). It is pause-based dialogue (not the Realtime API): browser mic → Whisper STT → JSON-turn LLM → OpenAI TTS playback.
+1. Request header (`x-llm-provider`, `x-llm-model-<pass>`) — preview / power-user override.
+2. Per-advisor selection from `advisorpilot_advisor_profiles` (`llm_provider`, `llm_model_overrides`, `default_research_tier`), loaded by `resolveAdvisorLlmSelection(email)`. NULL columns fall through.
+3. New-style env vars: `LLM_<PROVIDER>_<PASS>_MODEL`, `ADVISORPILOT_DEFAULT_LLM_PROVIDER`.
+4. Legacy aliases (`OPENAI_EXTRACTION_MODEL`, `OPENAI_ANALYSIS_*_MODEL`, …) — still honored for backward compat, only for OpenAI.
+5. Hardcoded defaults in `lib/llm/registry.ts`.
+
+Providers: `openai` | `gemini` | `grok` (adapters in `lib/llm/providers/`). Passes: `extraction`, `intake.turn`, `research.fast-grounded`, `research.agentic`, `research.deep`, `synthesis.json`, `tts`, `stt`. `lib/llm/capabilities.ts` is the capability matrix; TTS/STT always fall back to OpenAI in v1. Citation hallucinations are filtered against the research pass's real URL list (`lib/llm/citation-filter.ts`).
+
+Attachment intake is centralized in `lib/llm/attachments.ts` (MIME sniff → size cap → PDF page-slice → text-layer extract → typed `Attachment`). Adapters never re-do this work.
+
+### AI pipeline (route → pass)
+1. `POST /api/analyze-statement` — `pass: "extraction"` on the raw PDF/image → holdings JSON. `assertHoldingsReconcileToVerifiedTotal()` rejects extractions where `sum(values)` doesn't match machine-parsed totals (~2% / $500). When `ADVISORPILOT_SECURITIES_MASTER=1`, rows are reconciled against the Supabase `advisorpilot_securities_master` catalog (ticker-first, then a Jaccard name-overlap gate set by `ADVISORPILOT_MASTER_NAME_SCORE_THRESHOLD`).
+2. `POST /api/enrich-holdings` — per holding: cache (`advisorpilot_security_enrichment_cache`) → OpenFIGI (`lib/openfigi.ts`) → `research({ tier: "fast-grounded" })` + `complete({ pass: "synthesis.json" })`. Selective re-runs via `enrichIndices: number[]`.
+3. `POST /api/generate-analysis` — `research({ tier: "agentic-research" })` then long `synthesis.json` prompt with strict section roles (synopsis / portfolioHighlights / strategies / redFlags / overlapInsights / displayWhatThisMeans / recommendations / talkingPoints / advisorOpeningScript / objectionHandling), plus normalized `citations[]`.
+4. `POST /api/generate-report` (or `/api/generate-roth-report`) — `pdf-lib` assembly; embeds `public/logo.png` when present.
+5. `POST /api/research/start` + `GET /api/research/[id]` + `GET /api/research/cron` — async deep-research jobs backed by `advisorpilot_deep_research_jobs` (OpenAI `background:true`, Gemini Interactions, Grok runs synchronously). Lifecycle in `lib/llm/deep-research-jobs.ts`.
+
+### Two voice surfaces (don't conflate them)
+- **Live Intake overlay** (`components/live-intake-overlay.tsx`) is a *pause-based* helper bound to the 10-question wizard. Mic → `MediaRecorder` → `/api/intake-stt` (Whisper) → `/api/intake-voice` (`pass: "intake.turn"`) returns an `IntakeClient` patch → `/api/intake-tts` plays back. Not the Realtime API.
+- **Voice Agent** (`components/voice/voice-agent.tsx` + `lib/voice/*`) is a global, app-wide Gemini Live agent. `/api/voice/token` mints `{ apiKey, model, voice, systemPrompt, tools }` for an authenticated advisor; the browser opens a Live WebSocket via `@google/genai`'s `live.connect`. Tool surface is read-only / navigational only (`navigate`, `open_client`, `search_clients`, `get_holdings_breakdown`, `client_overview`, etc. — see `lib/voice/token-config.ts`). Per-advisor settings live in `advisorpilot_voice_settings`; every tool call is logged to `advisorpilot_voice_audit_log`. `lib/voice/focus.ts` is the only function that serializes React state for the agent and is where PII redaction happens.
 
 ### Supabase schema
-SQL files in `supabase/` are the source of truth for tables; apply them in this order on a fresh database:
-- `advisorpilot_full_schema_rls.sql` — base schema with RLS (includes the `intake_snapshot` column on upload tokens).
-- `advisorpilot_securities_master.sql` — firm catalog (optional; only used when `ADVISORPILOT_SECURITIES_MASTER=1`).
-- `advisorpilot_security_enrichment_cache.sql` — enrichment cache.
-- `advisorpilot_upload_tokens.sql` / `advisorpilot_upload_tokens_add_intake_snapshot.sql` — only needed for older installs that predate the unified schema.
+SQL files in `supabase/` are the source of truth for tables; apply them in this order on a fresh database. **Any schema change you make must be backwards-compatible** — see `.cursor/rules/40-supabase-schema-changes.mdc` (prefer a new sidecar table; if you must add a column, it must be additive and nullable; migrations must be idempotent).
+
+1. `advisorpilot_full_schema_rls.sql` — base schema with RLS. Includes `advisorpilot_clients`, `advisorpilot_advisor_profiles`, `advisorpilot_upload_tokens` (with `intake_snapshot`), `advisorpilot_documents`, `advisorpilot_audit_events`, `advisorpilot_security_enrichment_cache`, plus storage buckets `advisorpilot-statements` (private) and `advisorpilot-advisor-branding` (public). Standalone enrichment-cache / upload-tokens files in `supabase/` are legacy and only needed for installs that predate this unified schema.
+2. `advisorpilot_securities_master.sql` — firm catalog (optional; only used when `ADVISORPILOT_SECURITIES_MASTER=1`).
+3. `_apply_all_new_migrations.sql` — idempotent bundle of the five most recent migrations. Adds:
+   - LLM-preference columns on `advisor_profiles` (`llm_provider`, `llm_model_overrides`, `default_research_tier`).
+   - `advisorpilot_enrichment_provenance` — sidecar to the enrichment cache, records which provider produced a cached row + citations.
+   - `advisorpilot_deep_research_jobs` — async job table for `/api/research/*`.
+   - `advisorpilot_voice_settings` — per-advisor voice agent prefs.
+   - `advisorpilot_voice_audit_log` — append-only tool-call log for the Gemini Live agent.
+
+Both `/api/advisor-profile` and `LlmSettingsDrawer` gracefully detect missing LLM columns (`PGRST204 / "Could not find the 'llm_provider' column"`) and surface a clear "run this migration" message — so the app still works against an old DB, it just can't persist LLM preferences.
 
 `docs/advisorpilot-database-reference.sql` is a reference dump, **not** something to apply.
 
 ### `lib/` conventions
 - Pure helpers with co-located `*.test.ts` (Vitest, node env). Prefer adding logic here rather than in `app/app/page.tsx` so it's testable.
 - `lib/supabaseClient.ts` is for browser/server contexts that have anon access; server routes that need elevated access build their own admin client with `SUPABASE_SERVICE_ROLE_KEY` (see `lib/advisor-auth.ts` for the pattern). Never import a service-role client from a `components/` file.
+- `lib/llm/` is the provider-agnostic AI surface. **Import only from `@/lib/llm`** — never `openai`, `@google/genai`, or a Grok client directly from a route or `components/` file. Adding a new pass means adding a string to `LlmPass` in `lib/llm/types.ts`, a default in `lib/llm/registry.ts`, and entries in `lib/llm/capabilities.ts`.
+- `lib/voice/` holds the Gemini Live session, tool dispatch, and focus serializer. The set of tools advertised in `lib/voice/token-config.ts` is the **complete agent surface** — adding a tool there is what enables the agent to call it.
 - Path alias `@/*` maps to repo root (see `tsconfig.json` and `vitest.config.ts`).
 
 ## Route handler conventions
@@ -69,6 +93,6 @@ SQL files in `supabase/` are the source of truth for tables; apply them in this 
 
 ## Gotchas
 - **This Next.js (16.x) differs from the public docs / training data.** Before changing framework-level behavior (caching, route segment config, middleware), read `node_modules/next/dist/docs/` and heed deprecations.
-- `NEXT_PUBLIC_*` env values **ship to the browser bundle**. `SUPABASE_SERVICE_ROLE_KEY` and `OPENAI_API_KEY` must stay server-side.
+- `NEXT_PUBLIC_*` env values **ship to the browser bundle**. `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, and `XAI_API_KEY` must stay server-side. **Exception:** `/api/voice/token` returns `GEMINI_API_KEY` directly to the authenticated advisor's browser so it can open a Gemini Live WebSocket — that's the documented design (see `lib/voice/session.ts` header comments).
 - `NEXT_PUBLIC_APP_URL` controls the host baked into generated magic links / QR codes. If unset, the app falls back to the incoming request host — fine in dev, wrong behind some proxies in prod.
 - When mutating advisor-scoped data, branch on `identity.provider`: Google users key by `email`, Supabase users key by `userId`.

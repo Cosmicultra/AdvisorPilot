@@ -7,6 +7,10 @@ import { signIn, signOut } from "next-auth/react";
 import { DropdownMenu } from "radix-ui";
 import { LogoBlock } from "@/components/logo-block";
 import { LlmSettingsButton } from "@/components/llm-settings-button";
+import {
+  AP_ONBOARDING_DISMISSED_AT,
+  OnboardingDialog,
+} from "@/components/onboarding-dialog";
 import { VoiceAgent } from "@/components/voice/voice-agent";
 import type { VoiceAppActions } from "@/lib/voice/tool-handlers";
 import type { AppStep } from "@/lib/voice/types";
@@ -614,6 +618,7 @@ function AppTopNav({
   advisorDisplayName,
   onNewReview,
   setShowSignatureSetup,
+  onOpenOnboarding,
   handleEmailPasswordLogout,
   analysisReady,
 }: {
@@ -627,6 +632,8 @@ function AppTopNav({
   advisorDisplayName: string;
   onNewReview: () => void | Promise<void>;
   setShowSignatureSetup: (v: boolean) => void;
+  /** Re-opens the first-run wizard from the account menu. */
+  onOpenOnboarding: () => void;
   handleEmailPasswordLogout: () => void;
   analysisReady: boolean;
 }) {
@@ -700,6 +707,12 @@ function AppTopNav({
                 align="end"
                 className="z-[300] min-w-[13rem] overflow-hidden rounded-none border border-[var(--ap-border-strong)] bg-white py-1 text-slate-900 shadow-lg shadow-slate-900/15"
               >
+                <DropdownMenu.Item
+                  className="cursor-pointer px-3 py-2.5 text-sm outline-none data-[highlighted]:bg-[#f0f4fa] data-[highlighted]:text-[var(--ap-navy)]"
+                  onSelect={() => onOpenOnboarding()}
+                >
+                  Setup wizard
+                </DropdownMenu.Item>
                 <DropdownMenu.Item
                   className="cursor-pointer px-3 py-2.5 text-sm outline-none data-[highlighted]:bg-[#f0f4fa] data-[highlighted]:text-[var(--ap-navy)]"
                   onSelect={() => setShowSignatureSetup(true)}
@@ -990,6 +1003,11 @@ export default function AdvisorPilotPage() {
   const [activeReviewId, setActiveReviewId] = useState<string | null>(null);
   const [emailSignature, setEmailSignature] = useState("");
   const [showSignatureSetup, setShowSignatureSetup] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  /** Flips true after the first /api/advisor-profile call completes (success or error). */
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  /** Mutex so the auto-trigger fires at most once per mount. */
+  const onboardingDecidedRef = useRef(false);
   const [signatureName, setSignatureName] = useState("");
   const [signatureTitle, setSignatureTitle] = useState("");
   const [signatureLicense, setSignatureLicense] = useState("");
@@ -2915,16 +2933,26 @@ export default function AdvisorPilotPage() {
     const ownerEmail =
       ownerEmailOverride ||
       String(session?.user?.email || emailAuthUser?.email || "").trim().toLowerCase();
-    if (!ownerEmail) return;
+    if (!ownerEmail) {
+      // Defensive: still mark profile as "loaded" so the onboarding effect
+      // doesn't hang forever waiting for a fetch that won't happen.
+      setProfileLoaded(true);
+      return;
+    }
 
     try {
       const res = await advisorFetch("/api/advisor-profile", {
         headers: {},
         onEmailSessionExpired: handleEmailSessionExpired,
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
-      if (!res.ok) return;
+      if (!res.ok) {
+        // Profile load failed — leave local state empty so the onboarding
+        // effect treats this as a first-run user. The in-page Card is never
+        // auto-shown anymore; only the wizard is.
+        return;
+      }
 
       const profile = data?.profile || {};
       const savedSignature = profile.emailSignature || "";
@@ -2947,12 +2975,51 @@ export default function AdvisorPilotPage() {
       setSignatureLogoUrl(profile.logoUrl || "");
       setSignatureDisclosuresText(profile.disclosuresText || "");
       setSignatureDisclosuresImageUrl(profile.disclosuresImageUrl || "");
-
-      setShowSignatureSetup(!savedSignature && !profile.advisorName);
     } catch {
       // Non-blocking. The app can still run without a saved advisor profile.
+    } finally {
+      // Always signal "we tried" so the onboarding-decision effect can fire
+      // exactly once — even when the API errors out for env / network reasons.
+      setProfileLoaded(true);
     }
   }, [emailAuthUser?.email, handleEmailSessionExpired, session?.user?.email]);
+
+  // Decide once per mount whether to auto-pop the first-run wizard. Runs
+  // AFTER auth + profile load complete (success or failure). Re-opening the
+  // wizard from the account menu lives elsewhere — that path forcibly clears
+  // the localStorage dismissal flag.
+  useEffect(() => {
+    if (onboardingDecidedRef.current) return;
+    if (!authLoaded) return;
+    if (!profileLoaded) return;
+    const signedIn = Boolean(session?.user?.email || emailAuthUser?.email);
+    if (!signedIn) return;
+
+    onboardingDecidedRef.current = true;
+
+    const dismissed =
+      typeof window !== "undefined" &&
+      Boolean(window.localStorage.getItem(AP_ONBOARDING_DISMISSED_AT));
+    if (dismissed) return;
+
+    // Truly first-run = nothing filled in on this account yet. We deliberately
+    // ignore llm_provider here because some advisors may have set their model
+    // via the AI Models pill before we shipped the wizard — they should still
+    // be walked through the signature step.
+    const looksFirstRun = !emailSignature.trim() && !signatureName.trim();
+    if (!looksFirstRun) return;
+
+    setShowOnboarding(true);
+    // Defensive: hide the legacy in-page Card if some earlier path set it.
+    setShowSignatureSetup(false);
+  }, [
+    authLoaded,
+    profileLoaded,
+    session?.user?.email,
+    emailAuthUser?.email,
+    emailSignature,
+    signatureName,
+  ]);
 
   const uploadAdvisorSignatureAsset = useCallback(
     async (kind: "logo" | "disclosures", file: File) => {
@@ -3822,8 +3889,45 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         advisorDisplayName={advisorVoiceName}
         onNewReview={handleNewReviewIntent}
         setShowSignatureSetup={setShowSignatureSetup}
+        onOpenOnboarding={() => {
+          // Re-opening from the menu deliberately clears the per-browser
+          // dismissal flag so the wizard behaves the same as it did on first run.
+          if (typeof window !== "undefined") {
+            window.localStorage.removeItem(AP_ONBOARDING_DISMISSED_AT);
+          }
+          setShowOnboarding(true);
+        }}
         handleEmailPasswordLogout={handleEmailPasswordLogout}
         analysisReady={Boolean(analysis)}
+      />
+      <OnboardingDialog
+        open={showOnboarding}
+        advisorEmail={session?.user?.email || emailAuthUser?.email || null}
+        onDismiss={() => {
+          // Persist per-browser so we don't re-pop next session. The menu can
+          // still reopen it explicitly.
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem(
+              AP_ONBOARDING_DISMISSED_AT,
+              new Date().toISOString()
+            );
+          }
+          setShowOnboarding(false);
+        }}
+        onFinish={async () => {
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem(
+              AP_ONBOARDING_DISMISSED_AT,
+              new Date().toISOString()
+            );
+          }
+          setShowOnboarding(false);
+          // Resync local state (signature fields, llm provider label) with what
+          // the dialog just persisted.
+          const ownerEmail =
+            session?.user?.email || emailAuthUser?.email || null;
+          if (ownerEmail) await loadAdvisorProfile(ownerEmail);
+        }}
       />
       <WizardStepRail wizardSteps={wizardSteps} step={step} setStep={setStep} loadSavedReviews={loadSavedReviews} />
 
