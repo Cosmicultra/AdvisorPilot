@@ -24,6 +24,10 @@ type AdvisorProfileRecord = {
   website?: string | null;
   disclosures_text?: string | null;
   disclosures_image_url?: string | null;
+  // LLM preferences — all nullable; NULL → "use firm/env default."
+  llm_provider?: string | null;
+  llm_model_overrides?: Record<string, string> | null;
+  default_research_tier?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -56,9 +60,46 @@ function mapProfile(record: AdvisorProfileRecord) {
     website: record.website || "",
     disclosuresText: record.disclosures_text || "",
     disclosuresImageUrl: record.disclosures_image_url || "",
+    llmProvider: record.llm_provider || null,
+    llmModelOverrides: record.llm_model_overrides || {},
+    defaultResearchTier: record.default_research_tier || null,
     createdAt: record.created_at,
     updatedAt: record.updated_at,
   };
+}
+
+const ALLOWED_PROVIDERS = new Set(["openai", "gemini", "grok"]);
+const ALLOWED_TIERS = new Set(["fast-grounded", "agentic-research", "deep-research"]);
+
+function sanitizeProvider(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase();
+  return ALLOWED_PROVIDERS.has(t) ? t : null;
+}
+function sanitizeTier(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  return ALLOWED_TIERS.has(t) ? t : null;
+}
+function sanitizeModelOverrides(v: unknown): Record<string, string> | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const allowed = new Set([
+    "extraction",
+    "intake.turn",
+    "research.fast-grounded",
+    "research.agentic",
+    "research.deep",
+    "synthesis.json",
+    "tts",
+    "stt",
+  ]);
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (allowed.has(k) && typeof val === "string" && val.trim()) {
+      out[k] = val.trim();
+    }
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 export const GET = async (req: Request) => {
@@ -118,6 +159,9 @@ export const POST = async (req: Request) => {
       website: String(body?.website || "").trim() || null,
       disclosures_text: String(body?.disclosuresText || "").trim() || null,
       disclosures_image_url: nullableTrim(body?.disclosuresImageUrl),
+      llm_provider: sanitizeProvider(body?.llmProvider),
+      llm_model_overrides: sanitizeModelOverrides(body?.llmModelOverrides),
+      default_research_tier: sanitizeTier(body?.defaultResearchTier),
     };
 
     const { data, error } = await supabaseAdmin

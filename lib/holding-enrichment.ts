@@ -3,7 +3,7 @@ import { ASSET_CLASSES, canonicalizeAssetClass, isCashLikeHolding } from "./asse
 import type { EnrichmentInputHolding, EnrichmentPatch } from "./enrichment-types";
 import { extractLikelyCusip, extractLikelySymbol } from "./holding-validation";
 import { SYNTHETIC_CASH_TICKER } from "./cash-holding-constants";
-import { complete, research } from "./llm";
+import { complete, research, type AdvisorLlmSelection } from "./llm";
 import { filterUrlsToCitations } from "./llm/citation-filter";
 import { mapHoldingToOpenFigi } from "./openfigi";
 import {
@@ -98,6 +98,10 @@ export async function enrichOneHolding(
     supabaseCache?: SupabaseClient | null;
     /** When `ADVISORPILOT_SECURITIES_MASTER=1`, Nasdaq seed / firm catalog lookups skip OpenFIGI + OpenAI hits. */
     supabaseMaster?: SupabaseClient | null;
+    /** Optional: advisor's persisted LLM selection (provider + per-pass models). */
+    selection?: AdvisorLlmSelection;
+    /** Optional: incoming HTTP request — used for header-based provider override. */
+    request?: Request;
   }
 ): Promise<EnrichOneHoldingResult> {
   const now = new Date().toISOString();
@@ -196,10 +200,13 @@ Rules:
 Write concise research bullets (max 8). Cite the public sources you used; the system will capture them automatically from your web search.
 `;
 
-  const researchResult = await research({
-    tier: "fast-grounded",
-    user: researchPrompt,
-  });
+  const researchResult = await research(
+    {
+      tier: "fast-grounded",
+      user: researchPrompt,
+    },
+    { request: opts.request, selection: opts.selection }
+  );
 
   const researchNotes = researchResult.text;
   const researchCitations = researchResult.citations;
@@ -247,11 +254,14 @@ resolvedTicker must be empty if proprietary/no public symbol.
 sourceUrls: include ONLY URLs from the "Allowed source URLs" list above. Do not invent URLs from memory; the system will drop any URL that is not in the allowed list.
 `;
 
-  const jsonResult = await complete<Record<string, unknown>>({
-    pass: "synthesis.json",
-    user: jsonPrompt,
-    jsonSchema: { type: "object" },
-  });
+  const jsonResult = await complete<Record<string, unknown>>(
+    {
+      pass: "synthesis.json",
+      user: jsonPrompt,
+      jsonSchema: { type: "object" },
+    },
+    { request: opts.request, selection: opts.selection }
+  );
 
   const parsed = (jsonResult.json ?? {}) as Record<string, unknown>;
 

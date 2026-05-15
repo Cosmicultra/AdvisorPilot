@@ -1,6 +1,6 @@
 import { Buffer } from "buffer";
 import { ASSET_CLASSES } from "./asset-classes";
-import { complete } from "./llm";
+import { complete, type AdvisorLlmSelection } from "./llm";
 import { normalizeAttachment } from "./llm/attachments";
 import { extractionMaxOutputTokens } from "./openai-route-models";
 import { assertHoldingsReconcileToVerifiedTotal } from "./statement-extraction-verify";
@@ -96,8 +96,12 @@ export async function extractHoldingsFromFileBuffer(params: {
   mimeType: string;
   bytes: Buffer;
   clientContext: Record<string, unknown>;
+  /** Optional: the advisor's persisted LLM selection (provider + per-pass overrides). */
+  selection?: AdvisorLlmSelection;
+  /** Optional: incoming HTTP request — used for header-based provider override. */
+  request?: Request;
 }): Promise<{ holdings: ExtractedHolding[] }> {
-  const { fileName, mimeType, bytes, clientContext: clientContextIn } = params;
+  const { fileName, mimeType, bytes, clientContext: clientContextIn, selection, request } = params;
   const { holdingsPagesWithPositions: advisorHoldingsPagesRaw, ...clientContext } = clientContextIn;
   const advisorHoldingsPages =
     typeof advisorHoldingsPagesRaw === "string" ? advisorHoldingsPagesRaw.trim() : "";
@@ -181,16 +185,19 @@ Example shape:
   // and capture `statementAccountEndingValue`.
   let result;
   try {
-    result = await complete<unknown>({
-      pass: "extraction",
-      system: visionOnlyStatement
-        ? "User-style task in prompt: holdings JSON line-by-line, market-value column only, minimal options. Prefer matching ChatGPT conversational clarity."
-        : "User-style holdings extract to JSON only; Schwab/account-summary totals must tie sum(values). Trust visual Mkt Val when text is scrambled.",
-      user: prompt,
-      attachments: [attachment],
-      jsonSchema: { type: "object" },
-      maxOutputTokens: extractionMaxOutputTokens(),
-    });
+    result = await complete<unknown>(
+      {
+        pass: "extraction",
+        system: visionOnlyStatement
+          ? "User-style task in prompt: holdings JSON line-by-line, market-value column only, minimal options. Prefer matching ChatGPT conversational clarity."
+          : "User-style holdings extract to JSON only; Schwab/account-summary totals must tie sum(values). Trust visual Mkt Val when text is scrambled.",
+        user: prompt,
+        attachments: [attachment],
+        jsonSchema: { type: "object" },
+        maxOutputTokens: extractionMaxOutputTokens(),
+      },
+      { request, selection }
+    );
   } catch (err) {
     // Adapter throws on incomplete-due-to-max-tokens or empty response with
     // its own copy that mentions max-output-tokens. Re-throw unchanged so the

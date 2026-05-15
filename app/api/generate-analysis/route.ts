@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { buildRegistrationSummaryForAnalysis } from "@/lib/holding-registration";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
-import { complete, research } from "@/lib/llm";
+import { complete, research, resolveAdvisorLlmSelection } from "@/lib/llm";
 
 export async function POST(req: Request) {
   try {
@@ -33,6 +33,8 @@ export async function POST(req: Request) {
     const registrationSummary = buildRegistrationSummaryForAnalysis(
       Array.isArray(holdings) ? holdings : []
     );
+
+    const selection = await resolveAdvisorLlmSelection(identity?.email);
 
     const researchPrompt = `
 Research current market conditions for an advisor-facing portfolio review.
@@ -66,10 +68,13 @@ ${totalValue}
 Write concise research notes only. Do not return JSON.
 `;
 
-    const researchResult = await research({
-      tier: "agentic-research",
-      user: researchPrompt,
-    });
+    const researchResult = await research(
+      {
+        tier: selection.defaultResearchTier ?? "agentic-research",
+        user: researchPrompt,
+      },
+      { request: req, selection }
+    );
 
     const researchNotes = researchResult.text;
     const researchCitations = researchResult.citations;
@@ -274,11 +279,14 @@ RISK INTAKE AND QUESTIONNAIRE (use Client JSON fields riskIntakeKnown, riskIntak
 - If riskProfileSuggested is present and differs from riskProfile, you may add at most one neutral clause that the advisor chose a different tier than the quick assessment suggested—no suitability or "correct profile" language.
 `;
 
-    const synthesisResult = await complete<Record<string, unknown>>({
-      pass: "synthesis.json",
-      user: jsonPrompt,
-      jsonSchema: { type: "object" },
-    });
+    const synthesisResult = await complete<Record<string, unknown>>(
+      {
+        pass: "synthesis.json",
+        user: jsonPrompt,
+        jsonSchema: { type: "object" },
+      },
+      { request: req, selection }
+    );
 
     const parsed = (synthesisResult.json ?? {}) as Record<string, unknown>;
 

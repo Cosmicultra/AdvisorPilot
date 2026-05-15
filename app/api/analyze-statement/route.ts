@@ -17,7 +17,7 @@ import {
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
 import { enforceUploadSize } from "@/lib/llm/attachments";
-import { LlmAttachmentError } from "@/lib/llm";
+import { LlmAttachmentError, resolveAdvisorLlmSelection } from "@/lib/llm";
 
 export const runtime = "nodejs";
 
@@ -92,6 +92,8 @@ export async function POST(request: Request) {
       );
     }
 
+    const selection = await resolveAdvisorLlmSelection(identity?.email);
+
     const files = formData
       .getAll("files")
       .filter((value): value is File => value instanceof File);
@@ -145,6 +147,8 @@ export async function POST(request: Request) {
           sourceFileIndex: index + 1,
           ...(pageHint ? { holdingsPagesWithPositions: pageHint } : {}),
         },
+        selection,
+        request,
       });
       const holdings = Array.isArray(data.holdings) ? data.holdings : [];
       const withMeta = holdings.map((holding) =>

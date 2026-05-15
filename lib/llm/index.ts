@@ -10,9 +10,12 @@
 
 import type { Buffer } from "buffer";
 import { effectiveProviderForPass } from "./capabilities";
+import { geminiAdapter } from "./providers/gemini";
+import { grokAdapter } from "./providers/grok";
 import { openaiAdapter } from "./providers/openai";
 import { resolveLlmContext } from "./registry";
 import type {
+  AdvisorLlmSelection,
   CompletionRequest,
   CompletionResponse,
   LlmAdapter,
@@ -30,6 +33,8 @@ import type {
 
 const ADAPTERS: Partial<Record<LlmProvider, LlmAdapter>> = {
   openai: openaiAdapter,
+  gemini: geminiAdapter,
+  grok: grokAdapter,
 };
 
 function getAdapter(provider: LlmProvider): LlmAdapter {
@@ -51,6 +56,12 @@ export interface LlmCallOptions {
   request?: Request;
   /** Force a specific provider (testing / preview tooling). */
   providerOverride?: LlmProvider;
+  /**
+   * Per-advisor provider + model selection loaded from
+   * `advisorpilot_advisor_profiles` via `resolveAdvisorLlmSelection()`.
+   * When omitted, the resolver falls through to env / hardcoded defaults.
+   */
+  selection?: AdvisorLlmSelection;
 }
 
 export async function complete<T = unknown>(
@@ -60,6 +71,7 @@ export async function complete<T = unknown>(
   const ctxResolved = resolveLlmContext(req.pass, {
     request: options.request,
     providerOverride: options.providerOverride ?? req.providerOverride,
+    selection: options.selection,
   });
   const effective = effectiveProviderForPass(ctxResolved.provider, req.pass);
   // Re-resolve model under the effective provider so TTS/STT fallbacks pick the
@@ -78,6 +90,7 @@ export async function research<T = unknown>(
   const ctxResolved = resolveLlmContext(pass, {
     request: options.request,
     providerOverride: options.providerOverride ?? req.providerOverride,
+    selection: options.selection,
   });
   const effective = effectiveProviderForPass(ctxResolved.provider, pass);
   const ctx = effective.fellBack
@@ -127,6 +140,7 @@ function researchTierToPass(tier: ResearchTier) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type {
+  AdvisorLlmSelection,
   Attachment,
   AttachmentKind,
   Citation,
@@ -149,3 +163,4 @@ export {
   LlmValidationError,
 } from "./types";
 export { resolveLlmContext, resolveProvider, resolveModel } from "./registry";
+export { resolveAdvisorLlmSelection } from "./advisor-selection";

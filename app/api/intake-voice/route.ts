@@ -9,7 +9,8 @@ import {
   RISK_PROFILES,
   CALIBRATION_OPTIONS,
 } from "@/lib/intake-config";
-import { complete } from "@/lib/llm";
+import { complete, resolveAdvisorLlmSelection } from "@/lib/llm";
+import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 
 function formatProviderError(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e);
@@ -94,13 +95,22 @@ function asPatch(obj: unknown): Partial<IntakeClient> & { name?: string } {
   return out;
 }
 
-async function completeJson(system: string, user: string): Promise<string> {
-  const result = await complete({
-    pass: "intake.turn",
-    system,
-    user,
-    jsonSchema: { type: "object" },
-  });
+async function completeJson(
+  system: string,
+  user: string,
+  req: Request
+): Promise<string> {
+  const identity = await resolveAdvisorIdentity(req);
+  const selection = await resolveAdvisorLlmSelection(identity?.email);
+  const result = await complete(
+    {
+      pass: "intake.turn",
+      system,
+      user,
+      jsonSchema: { type: "object" },
+    },
+    { request: req, selection }
+  );
   return result.text;
 }
 
@@ -136,7 +146,7 @@ They said:
 
 Return JSON: {"assistantMessage":"brief spoken reply or clarification","handoffAction":"paper"|"digital_email"|"advisor_upload"|"none"}`;
 
-      const text = await completeJson(system, user);
+      const text = await completeJson(system, user, req);
       const parsed = extractJsonObject(text);
       const assistantMessage =
         typeof parsed?.assistantMessage === "string" && parsed.assistantMessage.trim()
@@ -190,7 +200,7 @@ Write 2–4 short sentences. Introduce this step and ask the main question natur
 
 Return JSON with exactly this shape: {"assistantMessage":"your text here"}`;
 
-      const text = await completeJson(system, user);
+      const text = await completeJson(system, user, req);
       const parsed = extractJsonObject(text);
       const assistantMessage =
         typeof parsed?.assistantMessage === "string" && parsed.assistantMessage.trim()
@@ -242,7 +252,7 @@ Rules:
 Return JSON with exactly this shape:
 {"clientPatch":{},"assistantMessage":"...","advance":false,"handoffAction":null}`;
 
-    const text = await completeJson(system, user);
+    const text = await completeJson(system, user, req);
     const parsed = extractJsonObject(text);
 
     if (!parsed) {

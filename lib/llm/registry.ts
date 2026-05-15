@@ -15,7 +15,7 @@
  * see §9.7 of docs/multi-provider-llm-plan.md.
  */
 
-import type { LlmContext, LlmPass, LlmProvider } from "./types";
+import type { AdvisorLlmSelection, LlmContext, LlmPass, LlmProvider } from "./types";
 import { LlmConfigError } from "./types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -113,16 +113,16 @@ function legacyOpenAiAlias(pass: LlmPass): string | undefined {
 /**
  * Resolve provider for the current request.
  *
- * `request` is optional so server-only call sites (cron, queue workers) that
- * have no incoming HTTP request still resolve cleanly to the env / hardcoded
- * default.
+ * Precedence: header → advisor profile selection → env → hardcoded.
  */
-export function resolveProvider(request?: Request): LlmProvider {
+export function resolveProvider(
+  request?: Request,
+  selection?: AdvisorLlmSelection
+): LlmProvider {
   const headerOverride = request?.headers.get("x-llm-provider")?.trim().toLowerCase();
   if (headerOverride && isProvider(headerOverride)) return headerOverride;
 
-  // Profile-level override hooks in when Settings ships; resolver signature
-  // already accepts the request so we can read advisor identity then.
+  if (selection?.provider) return selection.provider;
 
   const envDefault = trimEnv("ADVISORPILOT_DEFAULT_LLM_PROVIDER")?.toLowerCase();
   if (envDefault && isProvider(envDefault)) return envDefault;
@@ -130,18 +130,25 @@ export function resolveProvider(request?: Request): LlmProvider {
   return HARDCODED_DEFAULT_PROVIDER;
 }
 
-/** Resolve model for a (provider, pass) combo. */
+/** Resolve model for a (provider, pass) combo.
+ *
+ * Precedence: header → advisor profile model override → env → legacy alias →
+ * hardcoded default.
+ */
 export function resolveModel(
   provider: LlmProvider,
   pass: LlmPass,
-  request?: Request
+  request?: Request,
+  selection?: AdvisorLlmSelection
 ): string {
   // 1. Per-pass header override (used by preview tools / power users)
   const headerName = `x-llm-model-${pass}`;
   const headerOverride = request?.headers.get(headerName)?.trim();
   if (headerOverride) return headerOverride;
 
-  // 2. Profile override (future — hook reserved here)
+  // 2. Advisor profile override
+  const profileOverride = selection?.models?.[pass];
+  if (profileOverride) return profileOverride;
 
   // 3. New-style env var
   const envVar = `LLM_${provider.toUpperCase()}_${PASS_TO_ENV[pass]}_MODEL`;
@@ -166,10 +173,15 @@ export function resolveModel(
  */
 export function resolveLlmContext(
   pass: LlmPass,
-  options: { request?: Request; providerOverride?: LlmProvider } = {}
+  options: {
+    request?: Request;
+    providerOverride?: LlmProvider;
+    selection?: AdvisorLlmSelection;
+  } = {}
 ): LlmContext {
-  const provider = options.providerOverride ?? resolveProvider(options.request);
-  const model = resolveModel(provider, pass, options.request);
+  const provider =
+    options.providerOverride ?? resolveProvider(options.request, options.selection);
+  const model = resolveModel(provider, pass, options.request, options.selection);
   return { provider, pass, model };
 }
 

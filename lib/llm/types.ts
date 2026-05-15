@@ -133,6 +133,22 @@ export interface LlmContext {
   model: string;
 }
 
+/**
+ * Per-advisor selection persisted in `advisorpilot_advisor_profiles`.
+ * Loaded from the DB on the server side and threaded through to
+ * `resolveLlmContext`. NULL columns in the DB → `undefined` here, signaling
+ * "fall through to env / hardcoded default."
+ */
+export interface AdvisorLlmSelection {
+  provider?: LlmProvider;
+  /** Per-pass model overrides. e.g. `{ "extraction": "gpt-4o" }`. */
+  models?: Partial<Record<LlmPass, string>>;
+  /** Default research tier (`fast-grounded`/`agentic-research`/`deep-research`). */
+  defaultResearchTier?: ResearchTier;
+}
+
+export type ResearchTier = "fast-grounded" | "agentic-research" | "deep-research";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Completion (plain or JSON)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -174,8 +190,6 @@ export interface CompletionResponse<T = unknown> {
 // ─────────────────────────────────────────────────────────────────────────────
 // Research (web/url grounded)
 // ─────────────────────────────────────────────────────────────────────────────
-
-export type ResearchTier = "fast-grounded" | "agentic-research" | "deep-research";
 
 export interface ResearchRequest {
   tier: ResearchTier;
