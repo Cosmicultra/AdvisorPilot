@@ -6,6 +6,7 @@ import type { Session } from "next-auth";
 import { signIn, signOut } from "next-auth/react";
 import { DropdownMenu } from "radix-ui";
 import { LogoBlock } from "@/components/logo-block";
+import { LlmSettingsButton } from "@/components/llm-settings-button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -641,7 +642,7 @@ function AppTopNav({
         </div>
 
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-y-2 pl-2 sm:gap-x-2 sm:pl-0 md:gap-x-3">
-          <nav className="flex min-w-0 flex-wrap items-center justify-end pb-1" aria-label="Primary">
+          <nav className="flex min-w-0 flex-wrap items-center justify-end gap-2 pb-1" aria-label="Primary">
             <button
               type="button"
               className={`ap-nav-link ${navNewReview ? "ap-nav-link-active" : ""}`}
@@ -649,6 +650,7 @@ function AppTopNav({
             >
               New review
             </button>
+            <LlmSettingsButton />
           </nav>
           {analysisReady ? (
             <span className="hidden rounded-none border border-white/20 bg-white/5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300 lg:inline">
