@@ -53,13 +53,13 @@ export function LlmSettingsButton() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+        className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/80 transition hover:border-white/40 hover:bg-white/10 hover:text-white"
         aria-label="AI model settings"
       >
-        <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
         <span>Model: {loaded ? label : "…"}</span>
         <svg
-          className="h-3 w-3 text-slate-400"
+          className="h-3 w-3 text-white/60"
           viewBox="0 0 12 12"
           fill="none"
           stroke="currentColor"

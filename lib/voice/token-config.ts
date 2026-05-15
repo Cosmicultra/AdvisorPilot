@@ -8,6 +8,10 @@
 
 import type { VoiceSettings } from "./settings";
 
+// Tool parameter shape follows Athena's convention: `type: "OBJECT"` /
+// `"STRING"` uppercase for Gemini schema, and `enum` is preserved verbatim
+// because Gemini's function-calling docs note it materially improves
+// accuracy on fixed-value params.
 export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
   {
     functionDeclarations: [
@@ -15,16 +19,17 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
         name: "get_context",
         description:
           "Snapshot what the advisor sees right now (active step, intake substep, active client, focus.description, last action). Always call this before answering 'where am I?' / 'what's this?'.",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "OBJECT", properties: {} },
       },
       {
         name: "navigate",
         description: "Switch the active top-level step in the advisor product.",
         parameters: {
-          type: "object",
+          type: "OBJECT",
           properties: {
             step: {
-              type: "string",
+              type: "STRING",
+              description: "The destination step.",
               enum: [
                 "intake",
                 "upload",
@@ -47,9 +52,9 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
         description:
           "Within the intake step, jump to a specific question by zero-based index (0..9).",
         parameters: {
-          type: "object",
+          type: "OBJECT",
           properties: {
-            index: { type: "integer", minimum: 0, maximum: 9 },
+            index: { type: "INTEGER", description: "Zero-based intake step index, 0..9." },
           },
           required: ["index"],
         },
@@ -59,8 +64,8 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
         description:
           "Find a saved client by name (fuzzy) and load them. Disambiguate aloud if multiple matches.",
         parameters: {
-          type: "object",
-          properties: { name: { type: "string" } },
+          type: "OBJECT",
+          properties: { name: { type: "STRING", description: "Client name or partial name." } },
           required: ["name"],
         },
       },
@@ -68,18 +73,18 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
         name: "start_new_client",
         description:
           "Reset the workflow and go to intake step 0. Confirm aloud first when unsaved changes are present.",
-        parameters: { type: "object", properties: {} },
+        parameters: { type: "OBJECT", properties: {} },
       },
       {
         name: "list_clients",
         description:
           "List saved clients with optional filters (search by name, staleDays for last-contacted age, status).",
         parameters: {
-          type: "object",
+          type: "OBJECT",
           properties: {
-            search: { type: "string" },
-            staleDays: { type: "integer", minimum: 0 },
-            status: { type: "string" },
+            search: { type: "STRING", description: "Match on first or last name." },
+            staleDays: { type: "INTEGER", description: "Minimum days since lastContactedAt." },
+            status: { type: "STRING", description: "Exact status value, e.g. 'Analyzed'." },
           },
         },
       },
@@ -88,8 +93,8 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
         description:
           "Return the active client's profile, holdings summary, allocation, and top analysis findings. clientId optional; defaults to the currently active client.",
         parameters: {
-          type: "object",
-          properties: { clientId: { type: "string" } },
+          type: "OBJECT",
+          properties: { clientId: { type: "STRING", description: "Saved review id." } },
         },
       },
       {
@@ -97,10 +102,11 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
         description:
           "Read aloud a specific section of the current analysis: synopsis | highlights | redFlags | recommendations | talkingPoints | objectionHandling.",
         parameters: {
-          type: "object",
+          type: "OBJECT",
           properties: {
             section: {
-              type: "string",
+              type: "STRING",
+              description: "Section name.",
               enum: [
                 "synopsis",
                 "highlights",
@@ -119,8 +125,8 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
         description:
           "Walk-through helper: explain what the current screen does and what action the user usually takes next. Falls back to the current step if topic is omitted.",
         parameters: {
-          type: "object",
-          properties: { topic: { type: "string" } },
+          type: "OBJECT",
+          properties: { topic: { type: "STRING", description: "Optional topic to explain." } },
         },
       },
     ],

@@ -26,7 +26,7 @@ const PROVIDERS: { id: LlmProvider; label: string }[] = [
 const RESEARCH_TIERS: { id: ResearchTier; label: string; hint: string }[] = [
   { id: "fast-grounded", label: "Fast", hint: "Single-call grounded search, under 30 seconds." },
   { id: "agentic-research", label: "Agentic (default)", hint: "Multi-step server-side research, 30s–3 min." },
-  { id: "deep-research", label: "Deep", hint: "Background, 5–60 minutes. Coming soon — runs synchronously on Grok." },
+  { id: "deep-research", label: "Deep", hint: "Background research, 5–60 minutes. Grok runs synchronously; OpenAI and Gemini run async via /api/research." },
 ];
 
 interface ProvidersAPIResponse {

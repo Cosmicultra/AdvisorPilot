@@ -1,16 +1,23 @@
 /**
  * Voice session wrapper around @google/genai's `live.connect`.
  *
- * Handles:
- *   - Ephemeral token mint via /api/voice/token.
- *   - Mic capture stream (16 kHz PCM16) → session.sendRealtimeInput.
- *   - Audio playback queue (24 kHz PCM16) from serverContent parts.
- *   - Barge-in: `interrupted` → stop playback.
- *   - Tool calls: dispatch to VOICE_TOOL_HANDLERS, reply via sendToolResponse.
- *   - GoAway: schedule a reconnect using the saved sessionResumption handle.
+ * Modeled directly on the Athena desktop agent's GeminiAdapter +
+ * voice-app-gateway pattern (see /Users/djperussina/Code/fragilepak-mcp-servers/
+ * athena-desktop-agent/src/voice). Key fidelity points:
+ *
+ *   1. API key passed straight to `new GoogleGenAI({apiKey})` and reused
+ *      across reconnects — no ephemeral-token dance in v1.
+ *   2. Audio sent via `sendRealtimeInput({audio:{data, mimeType:"audio/pcm;rate=16000"}})`.
+ *   3. Tool responses wrap output in `{result: stringifiedOutput}` per
+ *      Athena's `sendToolResult` shape — Gemini parses this most reliably.
+ *   4. `interrupted` on serverContent stops playback immediately.
+ *   5. `goAway` schedules a reconnect via the saved sessionResumption handle.
+ *   6. Mid-session text injection goes through `sendRealtimeInput({text})`
+ *      — `sendClientContent` returns 1007 on gemini-3.1-flash-live-preview.
  */
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality, type Session } from "@google/genai";
+import { advisorFetch } from "@/lib/advisor-fetch";
 import { PlaybackQueue, startMicCapture, type CaptureHandle } from "./audio";
 import { recordVoiceAudit } from "./audit-log";
 import { VOICE_TOOL_HANDLERS, type VoiceAppActions } from "./tool-handlers";
@@ -25,30 +32,33 @@ export interface SessionEvents {
 }
 
 interface MintResponse {
-  token: string;
+  apiKey: string;
   model: string;
   voice: string;
+  systemPrompt: string;
+  tools: Array<Record<string, unknown>>;
   maxSessionMinutes?: number;
 }
 
-type LiveSession = {
-  sendRealtimeInput: (data: { audio: { data: string; mimeType: string } }) => void;
-  sendToolResponse: (data: {
-    functionResponses: Array<{ id?: string; name: string; response: unknown }>;
-  }) => void;
-  close?: () => void;
-};
-
 interface ServerMessage {
   serverContent?: {
-    modelTurn?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string }; text?: string }> };
+    modelTurn?: {
+      parts?: Array<{
+        inlineData?: { mimeType?: string; data?: string };
+        text?: string;
+      }>;
+    };
     interrupted?: boolean;
     turnComplete?: boolean;
     inputTranscription?: { text?: string };
     outputTranscription?: { text?: string };
   };
   toolCall?: {
-    functionCalls?: Array<{ id?: string; name: string; args?: Record<string, unknown> }>;
+    functionCalls?: Array<{
+      id?: string;
+      name?: string;
+      args?: Record<string, unknown>;
+    }>;
   };
   goAway?: { timeLeft?: string };
   sessionResumptionUpdate?: { newHandle?: string; resumable?: boolean };
@@ -57,12 +67,15 @@ interface ServerMessage {
 export class VoiceSession {
   private capture: CaptureHandle | null = null;
   private playback = new PlaybackQueue();
-  private session: LiveSession | null = null;
+  private session: Session | null = null;
   private resumptionHandle: string | null = null;
   private state: VoiceSessionState = "idle";
   private events: SessionEvents;
   private actions: VoiceAppActions;
   private autoCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  private mint: MintResponse | null = null;
+  private speakingForResponse = false;
+  private volumeRafScheduled = false;
 
   constructor(actions: VoiceAppActions, events: SessionEvents = {}) {
     this.actions = actions;
@@ -80,69 +93,24 @@ export class VoiceSession {
 
   async start(): Promise<void> {
     this.setState("connecting");
-    const tokenRes = await fetch("/api/voice/token", { method: "POST" });
+
+    // advisorFetch attaches the Supabase JWT (when present) so email/password
+    // accounts authenticate alongside Google session cookies.
+    const tokenRes = await advisorFetch("/api/voice/token", { method: "POST" });
     if (!tokenRes.ok) {
       const body = await tokenRes.json().catch(() => ({}));
-      throw new Error(body?.error || "Failed to mint voice token.");
+      throw new Error(body?.error || `Voice token mint failed (${tokenRes.status})`);
     }
-    const mint = (await tokenRes.json()) as MintResponse;
+    this.mint = (await tokenRes.json()) as MintResponse;
 
-    // The browser-facing GoogleGenAI client accepts an apiKey field for the
-    // ephemeral token; we route through the v1alpha endpoint per the docs.
-    const ai = new GoogleGenAI({
-      apiKey: mint.token,
-      apiVersion: "v1alpha",
-    } as unknown as ConstructorParameters<typeof GoogleGenAI>[0]);
+    await this.openConnection();
 
-    // The Live API's `connect` method varies slightly across SDK versions;
-    // we treat it as `any` so the wire shape is the contract.
-    const live = (ai as unknown as {
-      live: {
-        connect: (opts: {
-          model: string;
-          config: Record<string, unknown>;
-          callbacks: {
-            onopen?: () => void;
-            onmessage?: (msg: ServerMessage) => void;
-            onerror?: (err: Error) => void;
-            onclose?: () => void;
-          };
-        }) => Promise<LiveSession>;
-      };
-    }).live;
-
-    this.session = await live.connect({
-      model: mint.model,
-      config: {
-        responseModalities: ["AUDIO"],
-        // Live ephemeral tokens lock the rest of the config server-side; the
-        // browser cannot widen the tool surface or change the voice/system
-        // prompt. Here we only specify modality + (optional) resumption.
-        sessionResumption: this.resumptionHandle ? { handle: this.resumptionHandle } : {},
-      },
-      callbacks: {
-        onopen: () => {
-          this.setState("listening");
-        },
-        onmessage: (msg) => this.handleMessage(msg),
-        onerror: (err) => {
-          if (this.events.onError) this.events.onError(err);
-        },
-        onclose: () => {
-          this.setState("disconnected");
-          if (this.events.onClose) this.events.onClose();
-        },
-      },
-    });
-
-    // Auto-close before the configured cap to avoid surprise mid-call drops.
-    const maxMinutes = mint.maxSessionMinutes ?? 15;
+    const maxMinutes = this.mint.maxSessionMinutes ?? 15;
     this.autoCloseTimer = setTimeout(() => {
       this.setState("expiring");
       void this.close();
     }, maxMinutes * 60 * 1000);
 
-    // Start mic capture and fan frames to the session.
     this.capture = await startMicCapture((b64) => {
       const session = this.session;
       if (!session) return;
@@ -155,10 +123,13 @@ export class VoiceSession {
       }
     });
 
-    // Pump the volume meter to the listener.
-    if (this.events.onVolume) {
+    if (this.events.onVolume && !this.volumeRafScheduled) {
+      this.volumeRafScheduled = true;
       const tick = () => {
-        if (!this.capture || this.state === "disconnected") return;
+        if (!this.capture || this.state === "disconnected") {
+          this.volumeRafScheduled = false;
+          return;
+        }
         this.events.onVolume?.(this.capture.volumeRef.current);
         requestAnimationFrame(tick);
       };
@@ -166,14 +137,73 @@ export class VoiceSession {
     }
   }
 
+  private async openConnection(): Promise<void> {
+    if (!this.mint) throw new Error("Voice session has no mint payload.");
+    const mint = this.mint;
+
+    const ai = new GoogleGenAI({ apiKey: mint.apiKey });
+
+    const sessionConfig: Record<string, unknown> = {
+      responseModalities: [Modality.AUDIO],
+      systemInstruction: mint.systemPrompt,
+      speechConfig: {
+        voiceConfig: { prebuiltVoiceConfig: { voiceName: mint.voice } },
+      },
+      tools: mint.tools,
+      contextWindowCompression: { slidingWindow: {} },
+    };
+    if (this.resumptionHandle) {
+      sessionConfig.sessionResumption = { handle: this.resumptionHandle };
+    }
+
+    this.session = await ai.live.connect({
+      model: mint.model,
+      config: sessionConfig,
+      callbacks: {
+        onopen: () => {
+          this.speakingForResponse = false;
+          this.setState("listening");
+        },
+        onmessage: (msg: unknown) => this.handleMessage(msg as ServerMessage),
+        onerror: (err: unknown) => {
+          const e = err instanceof Error ? err : new Error(String(err));
+          if (this.events.onError) this.events.onError(e);
+        },
+        onclose: () => {
+          this.setState("disconnected");
+          if (this.events.onClose) this.events.onClose();
+        },
+      } as Parameters<typeof ai.live.connect>[0]["callbacks"],
+    } as Parameters<typeof ai.live.connect>[0]);
+  }
+
+  private async reconnect(): Promise<void> {
+    try {
+      const old = this.session;
+      await this.openConnection();
+      try {
+        old?.close?.();
+      } catch {
+        // ignore
+      }
+    } catch (err) {
+      if (this.events.onError) this.events.onError(err as Error);
+    }
+  }
+
   private async handleMessage(msg: ServerMessage): Promise<void> {
     if (msg.serverContent?.interrupted) {
       this.playback.stop();
+      this.speakingForResponse = false;
+      this.setState("listening");
     }
     const parts = msg.serverContent?.modelTurn?.parts ?? [];
     for (const part of parts) {
       if (part.inlineData?.data) {
-        this.setState("speaking");
+        if (!this.speakingForResponse) {
+          this.speakingForResponse = true;
+          this.setState("speaking");
+        }
         this.playback.pushPcm16Base64(part.inlineData.data);
       }
       if (part.text && this.events.onTranscript) {
@@ -187,56 +217,64 @@ export class VoiceSession {
       this.events.onTranscript("assistant", msg.serverContent.outputTranscription.text);
     }
     if (msg.serverContent?.turnComplete) {
+      this.speakingForResponse = false;
       this.setState("listening");
     }
     if (msg.toolCall?.functionCalls?.length) {
       this.setState("tool");
-      const responses = await Promise.all(
-        msg.toolCall.functionCalls.map(async (call) => {
-          const handler = VOICE_TOOL_HANDLERS[call.name];
-          if (!handler) {
-            const response = { error: `Unknown tool "${call.name}"` };
-            void recordVoiceAudit({
-              tool: call.name,
-              args: call.args ?? {},
-              result: response,
-              success: false,
-              error: response.error,
-            });
-            return { id: call.id, name: call.name, response };
-          }
+      // Send each tool response separately so Gemini matches `id` -> response.
+      for (const call of msg.toolCall.functionCalls) {
+        const callId = call.id || `gemini-fc-${Date.now()}`;
+        const name = call.name || "unknown";
+        const handler = VOICE_TOOL_HANDLERS[name];
+        let output: string;
+        let success = true;
+        let error: string | undefined;
+
+        if (!handler) {
+          output = `Unknown tool: ${name}`;
+          success = false;
+          error = output;
+        } else {
           try {
-            const response = await handler(call.args ?? {}, this.actions);
-            void recordVoiceAudit({
-              tool: call.name,
-              args: call.args ?? {},
-              result: response,
-              success: true,
-            });
-            return { id: call.id, name: call.name, response };
+            const result = await handler(call.args ?? {}, this.actions);
+            output = typeof result === "string" ? result : JSON.stringify(result);
+            if (output.length > 2000) output = output.slice(0, 2000) + "…[truncated]";
           } catch (err) {
-            const errMsg = err instanceof Error ? err.message : "tool error";
-            const response = { error: errMsg };
-            void recordVoiceAudit({
-              tool: call.name,
-              args: call.args ?? {},
-              result: response,
-              success: false,
-              error: errMsg,
-            });
-            return { id: call.id, name: call.name, response };
+            success = false;
+            error = err instanceof Error ? err.message : "tool error";
+            output = `Error: ${error}`;
           }
-        })
-      );
-      try {
-        this.session?.sendToolResponse({ functionResponses: responses });
-      } catch (err) {
-        if (this.events.onError) this.events.onError(err as Error);
+        }
+        void recordVoiceAudit({
+          tool: name,
+          args: call.args ?? {},
+          result: { output: output.slice(0, 200) },
+          success,
+          error,
+        });
+        try {
+          this.session?.sendToolResponse({
+            functionResponses: [
+              {
+                id: callId,
+                name,
+                response: { result: output },
+              },
+            ],
+          });
+        } catch (err) {
+          if (this.events.onError) this.events.onError(err as Error);
+        }
       }
       this.setState("listening");
     }
     if (msg.sessionResumptionUpdate?.newHandle) {
       this.resumptionHandle = msg.sessionResumptionUpdate.newHandle;
+    }
+    if (msg.goAway) {
+      // Reconnect with the saved handle — Gemini gives ~30s notice.
+      setTimeout(() => void this.reconnect(), 1000);
     }
   }
 
@@ -248,7 +286,7 @@ export class VoiceSession {
     try {
       this.session?.close?.();
     } catch {
-      // Ignore — close() is best-effort.
+      // ignore
     }
     this.session = null;
     if (this.capture) {

@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
@@ -8,16 +7,6 @@ import { VOICE_NAV_TOOLS, resolveVoiceSelection } from "@/lib/voice/token-config
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-let _client: GoogleGenAI | null = null;
-function getClient(): GoogleGenAI {
-  if (!process.env.GEMINI_API_KEY) {
-    throw new Error("Missing GEMINI_API_KEY for voice agent token mint.");
-  }
-  if (_client) return _client;
-  _client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  return _client;
-}
 
 let _systemPromptCache: string | null = null;
 async function loadSystemPrompt(): Promise<string> {
@@ -32,9 +21,17 @@ async function loadSystemPrompt(): Promise<string> {
 }
 
 /**
- * Mint a Gemini Live ephemeral token bound to (model, voice, tools, system
- * instruction). The browser receives only the token name and connects
- * directly to Gemini Live via WSS; the API key never leaves the server.
+ * Mint the configuration the browser needs to open a Gemini Live session.
+ *
+ * Follows the Athena desktop agent pattern (apiKey + config + tools sent
+ * to the client, which then calls `new GoogleGenAI({apiKey}).live.connect`).
+ * The Google-docs alternative is ephemeral tokens via authTokens.create —
+ * still preview as of this writing and not universally enabled per-key.
+ *
+ * Security posture: the API key is only returned to authenticated advisors
+ * over HTTPS. For higher-security deployments, swap this for a server-side
+ * WSS relay or migrate to ephemeral tokens once GA. Vertex AI Live needs a
+ * different flow entirely (OAuth + service-account token).
  */
 export async function POST(req: Request) {
   const identity = await resolveAdvisorIdentity(req);
@@ -42,6 +39,13 @@ export async function POST(req: Request) {
     return NextResponse.json(
       { error: "Sign in to use the voice agent." },
       { status: 401 }
+    );
+  }
+
+  if (!process.env.GEMINI_API_KEY) {
+    return NextResponse.json(
+      { error: "Voice agent not configured: GEMINI_API_KEY missing." },
+      { status: 500 }
     );
   }
 
@@ -57,45 +61,16 @@ export async function POST(req: Request) {
     const { model, voice } = resolveVoiceSelection(settings);
     const systemPrompt = await loadSystemPrompt();
 
-    const client = getClient();
-    const now = Date.now();
-
-    // Cast — the SDK's authTokens.create types vary slightly across versions
-    // but the runtime accepts the documented liveConnectConstraints shape.
-    const token = await (client.authTokens as unknown as {
-      create: (req: { config: Record<string, unknown> }) => Promise<{ name?: string }>;
-    }).create({
-      config: {
-        uses: 1,
-        expireTime: new Date(now + 30 * 60_000).toISOString(),
-        newSessionExpireTime: new Date(now + 60_000).toISOString(),
-        liveConnectConstraints: {
-          model,
-          config: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-              voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } },
-            },
-            systemInstruction: { parts: [{ text: systemPrompt }] },
-            tools: VOICE_NAV_TOOLS,
-            sessionResumption: {},
-            contextWindowCompression:
-              process.env.LLM_VOICE_CONTEXT_COMPRESSION === "false"
-                ? undefined
-                : { slidingWindow: {} },
-          },
-        },
-      },
-    });
-
     return NextResponse.json({
-      token: token.name,
+      apiKey: process.env.GEMINI_API_KEY,
       model,
       voice,
+      systemPrompt,
+      tools: VOICE_NAV_TOOLS,
       maxSessionMinutes: Number(process.env.LLM_VOICE_MAX_SESSION_MINUTES) || 15,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Token mint failed.";
+    const msg = err instanceof Error ? err.message : "Voice config mint failed.";
     console.error("[voice/token] error:", msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
