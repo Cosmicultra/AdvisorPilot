@@ -32,6 +32,7 @@ const HARDCODED_MODEL_DEFAULTS: Record<LlmProvider, Record<LlmPass, string>> = {
     "research.agentic": "gpt-4o",
     "research.deep": "gpt-4o",
     "synthesis.json": "gpt-4o",
+    "fee-analysis": "gpt-4o-mini",
     tts: "gpt-4o-mini-tts",
     stt: "whisper-1",
   },
@@ -42,6 +43,7 @@ const HARDCODED_MODEL_DEFAULTS: Record<LlmProvider, Record<LlmPass, string>> = {
     "research.agentic": "gemini-3.1-pro-preview",
     "research.deep": "deep-research-preview-04-2026",
     "synthesis.json": "gemini-3.1-flash-lite",
+    "fee-analysis": "gemini-3.1-flash-lite",
     tts: "gemini-3.1-flash-tts-preview",
     stt: "gemini-3-flash-preview",
   },
@@ -52,6 +54,7 @@ const HARDCODED_MODEL_DEFAULTS: Record<LlmProvider, Record<LlmPass, string>> = {
     "research.agentic": "grok-4.3",
     "research.deep": "grok-4.3",
     "synthesis.json": "grok-4.3",
+    "fee-analysis": "grok-4.3",
     tts: "grok-4.3",
     stt: "grok-4.3",
   },
@@ -69,6 +72,7 @@ const PASS_TO_ENV: Record<LlmPass, string> = {
   "research.agentic": "RESEARCH_AGENTIC",
   "research.deep": "RESEARCH_DEEP",
   "synthesis.json": "SYNTHESIS",
+  "fee-analysis": "FEE_ANALYSIS",
   tts: "TTS",
   stt: "STT",
 };
@@ -95,6 +99,10 @@ function legacyOpenAiAlias(pass: LlmPass): string | undefined {
       return trimEnv("OPENAI_ANALYSIS_RESEARCH_MODEL");
     case "synthesis.json":
       return trimEnv("OPENAI_ANALYSIS_JSON_MODEL") ?? trimEnv("OPENAI_ENRICHMENT_JSON_MODEL");
+    case "fee-analysis":
+      // Existing route used OPENAI_FEE_ANALYSIS_JSON_MODEL with a
+      // fallback to OPENAI_ANALYSIS_JSON_MODEL — preserve both.
+      return trimEnv("OPENAI_FEE_ANALYSIS_JSON_MODEL") ?? trimEnv("OPENAI_ANALYSIS_JSON_MODEL");
     case "tts":
       return trimEnv("OPENAI_TTS_MODEL");
     case "stt":

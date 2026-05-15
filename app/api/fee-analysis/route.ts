@@ -1,15 +1,10 @@
-import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
 import type { FeeAnalysisApiResponse } from "@/lib/fee-analysis";
-import { feeAnalysisJsonModel, logOpenAiPass } from "@/lib/openai-route-models";
+import { complete, resolveAdvisorLlmSelection } from "@/lib/llm";
 
 export const runtime = "nodejs";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 type FundRowIn = {
   ticker?: unknown;
@@ -40,15 +35,11 @@ function clipSynopsis(raw: unknown): string {
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+    const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
     const demoMode = Boolean(body?.demoMode);
     const identity = await resolveAdvisorIdentity(req);
     if (!demoMode && !identity) {
       return NextResponse.json({ error: "Sign in to run fee analysis." }, { status: 401 });
-    }
-
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json({ error: "Missing OPENAI_API_KEY in .env.local" }, { status: 500 });
     }
 
     const totalValue = num(body?.totalValue);
@@ -137,8 +128,11 @@ export async function POST(req: Request) {
     const uniqueFunds = [...uniqueByTicker.values()];
     const synopsisSnippet = clipSynopsis(body?.portfolioSynopsisSnippet);
 
-    const model = feeAnalysisJsonModel();
+    const selection = await resolveAdvisorLlmSelection(identity?.email);
+
     let parsed: { byTicker?: unknown; disclaimer?: unknown };
+    let usedProvider = "openai";
+    let usedModel = "";
 
     if (uniqueFunds.length === 0) {
       parsed = {
@@ -180,22 +174,17 @@ Rules:
 - Do not fabricate precise ratios if uncertain — prefer null with an honest note.
 `;
 
-      logOpenAiPass("fee-analysis", "json", model);
-
-      const jsonResponse = await openai.responses.create({
-        model,
-        input: jsonPrompt,
-        text: {
-          format: {
-            type: "json_object",
-          },
+      const result = await complete<{ byTicker?: unknown; disclaimer?: unknown }>(
+        {
+          pass: "fee-analysis",
+          user: jsonPrompt,
+          jsonSchema: { type: "object" },
         },
-      });
-
-      parsed = JSON.parse(jsonResponse.output_text || "{}") as {
-        byTicker?: unknown;
-        disclaimer?: unknown;
-      };
+        { request: req, selection }
+      );
+      parsed = result.json ?? {};
+      usedProvider = result.context.provider;
+      usedModel = result.context.model;
     }
 
     const ratioByTicker = new Map<string, { expenseRatioAnnual: number | null; note: string }>();
@@ -276,7 +265,8 @@ Rules:
         demoMode,
         totalValue,
         uniqueTickerCount: uniqueFunds.length,
-        model,
+        provider: usedProvider,
+        model: usedModel,
         rowsMissingTicker,
         unauthenticated: !identity,
       },

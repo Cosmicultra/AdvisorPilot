@@ -35,6 +35,7 @@ export type LlmPass =
   | "research.agentic" // multi-step server-side tool loop, 30s–3min
   | "research.deep" // async background, minutes
   | "synthesis.json" // narrative + structured JSON consuming research result
+  | "fee-analysis" // ETF/fund expense-ratio lookup → byTicker JSON
   | "tts"
   | "stt";
 
