@@ -201,14 +201,35 @@ export const VOICE_TOOL_HANDLERS: Record<string, VoiceToolHandler> = {
     return { ok: true, confirmed };
   },
 
+  // Kept as an alias for backward-compat with any in-flight sessions /
+  // audit logs that recorded the old tool name. The exposed tool surface
+  // is now just `search_clients`.
   list_clients: async (args, actions) => {
-    const filter: ListClientsFilter = {};
     const a = args as Record<string, unknown>;
+    const filter: FindClientsCriteria = {};
     if (typeof a.search === "string") filter.search = a.search;
     if (typeof a.staleDays === "number") filter.staleDays = a.staleDays;
     if (typeof a.status === "string") filter.status = a.status;
-    const list = await actions.listClients(filter);
-    return { clients: list.slice(0, 25) };
+    const list = await actions.findClientsByCriteria(filter);
+    return { count: list.length, clients: list.slice(0, 25) };
+  },
+
+  search_clients: async (args, actions) => {
+    const filter: FindClientsCriteria = {};
+    const a = args as Record<string, unknown>;
+    if (typeof a.search === "string") filter.search = a.search;
+    if (typeof a.riskProfile === "string") filter.riskProfile = a.riskProfile;
+    if (typeof a.minAge === "number") filter.minAge = a.minAge;
+    if (typeof a.maxAge === "number") filter.maxAge = a.maxAge;
+    if (typeof a.minTotalValue === "number") filter.minTotalValue = a.minTotalValue;
+    if (typeof a.maxTotalValue === "number") filter.maxTotalValue = a.maxTotalValue;
+    if (typeof a.staleDays === "number") filter.staleDays = a.staleDays;
+    if (typeof a.maxIncomeReadinessScore === "number")
+      filter.maxIncomeReadinessScore = a.maxIncomeReadinessScore;
+    if (typeof a.hasRedFlags === "boolean") filter.hasRedFlags = a.hasRedFlags;
+    if (typeof a.status === "string") filter.status = a.status;
+    const matches = await actions.findClientsByCriteria(filter);
+    return { count: matches.length, clients: matches.slice(0, 25) };
   },
 
   get_client_details: async (args, actions) => {
@@ -310,22 +331,9 @@ export const VOICE_TOOL_HANDLERS: Record<string, VoiceToolHandler> = {
     return o ?? { error: "No active client to summarize." };
   },
 
+  // Old name kept as alias — same behavior as `search_clients`.
   find_clients_by_criteria: async (args, actions) => {
-    const filter: FindClientsCriteria = {};
-    const a = args as Record<string, unknown>;
-    if (typeof a.search === "string") filter.search = a.search;
-    if (typeof a.riskProfile === "string") filter.riskProfile = a.riskProfile;
-    if (typeof a.minAge === "number") filter.minAge = a.minAge;
-    if (typeof a.maxAge === "number") filter.maxAge = a.maxAge;
-    if (typeof a.minTotalValue === "number") filter.minTotalValue = a.minTotalValue;
-    if (typeof a.maxTotalValue === "number") filter.maxTotalValue = a.maxTotalValue;
-    if (typeof a.staleDays === "number") filter.staleDays = a.staleDays;
-    if (typeof a.maxIncomeReadinessScore === "number")
-      filter.maxIncomeReadinessScore = a.maxIncomeReadinessScore;
-    if (typeof a.hasRedFlags === "boolean") filter.hasRedFlags = a.hasRedFlags;
-    if (typeof a.status === "string") filter.status = a.status;
-    const matches = await actions.findClientsByCriteria(filter);
-    return { count: matches.length, clients: matches.slice(0, 25) };
+    return await VOICE_TOOL_HANDLERS.search_clients(args, actions);
   },
 
   explain_ui: (args, actions) => {

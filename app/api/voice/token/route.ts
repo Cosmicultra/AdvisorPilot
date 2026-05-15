@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
@@ -7,6 +8,35 @@ import { VOICE_NAV_TOOLS, resolveVoiceSelection } from "@/lib/voice/token-config
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+async function buildRuntimeContextBlock(advisorEmail: string): Promise<string> {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return "";
+  }
+  try {
+    const admin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+    const { count } = await admin
+      .from("advisorpilot_clients")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_email", advisorEmail.toLowerCase());
+    const today = new Date().toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    return `Today: ${today}
+Saved-client count for this advisor: ${count ?? "unknown"}
+Default screen on app load: intake (the 10-question questionnaire)
+
+The advisor is currently signed in and on the advisor product. You can search their full client database via search_clients (returns up to 25 matches), open any specific client via open_client, or navigate top-level screens via navigate.`;
+  } catch {
+    return "";
+  }
+}
 
 let _systemPromptCache: string | null = null;
 async function loadSystemPrompt(): Promise<string> {
@@ -59,7 +89,15 @@ export async function POST(req: Request) {
     }
 
     const { model, voice } = resolveVoiceSelection(settings);
-    const systemPrompt = await loadSystemPrompt();
+    const baseSystemPrompt = await loadSystemPrompt();
+
+    // Inject live runtime context the agent can speak about without
+    // calling get_context first (matches Athena's per-session prompt
+    // pattern). Best-effort — failures don't block the mint.
+    const runtimeBlock = await buildRuntimeContextBlock(identity.email);
+    const systemPrompt = runtimeBlock
+      ? `${baseSystemPrompt}\n\n================================================================\nLIVE CONTEXT (at session start — call get_context to refresh)\n================================================================\n${runtimeBlock}`
+      : baseSystemPrompt;
 
     return NextResponse.json({
       apiKey: process.env.GEMINI_API_KEY,

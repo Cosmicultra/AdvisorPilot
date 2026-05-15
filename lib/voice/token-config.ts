@@ -23,13 +23,14 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
       },
       {
         name: "navigate",
-        description: "Switch the active top-level step in the advisor product.",
+        description:
+          "Switch the active top-level screen in the advisor product. Map advisor phrases as follows:\n  - 'client database' / 'my clients' / 'client list' / 'saved clients' / 'show all clients' → step='saved'\n  - 'intake' / 'new client questions' → step='intake'\n  - 'upload' / 'statement upload' / 'attach a statement' → step='upload'\n  - 'confirm holdings' / 'review holdings' → step='confirm'\n  - 'analysis' / 'portfolio review' / 'scores' → step='analysis'\n  - 'meeting guide' / 'meeting prep' / 'talking points page' → step='meeting'\n  - 'FIA' / 'annuity calculator' → step='fia'\n  - 'Roth' / 'Roth conversion' → step='roth'\n  - 'retirement income' / 'projection' → step='retIncome'\n  - 'report' / 'PDF report' → step='report'",
         parameters: {
           type: "OBJECT",
           properties: {
             step: {
               type: "STRING",
-              description: "The destination step.",
+              description: "The destination screen.",
               enum: [
                 "intake",
                 "upload",
@@ -62,7 +63,7 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
       {
         name: "open_client",
         description:
-          "Find a saved client by name (fuzzy) and load them. Disambiguate aloud if multiple matches.",
+          "OPEN a specific saved client. Use this when the advisor says 'open <name>', 'pull up <name>', 'show me <name>', 'go to <name>'. Loads the client and navigates to their analysis screen. If multiple clients match the name, the tool returns the matches and you should disambiguate aloud ('Robert Garcia or Maria Garcia?').",
         parameters: {
           type: "OBJECT",
           properties: { name: { type: "STRING", description: "Client name or partial name." } },
@@ -76,15 +77,22 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
         parameters: { type: "OBJECT", properties: {} },
       },
       {
-        name: "list_clients",
+        name: "search_clients",
         description:
-          "List saved clients with optional filters (search by name, staleDays for last-contacted age, status).",
+          "SEARCH THE CLIENT DATABASE. Returns up to 25 saved clients matching the given filters. Use this whenever the advisor wants to find, list, search, look up, or filter their client list — e.g. 'show me my clients', 'find John', 'who haven't I contacted in 90 days', 'who's conservative and over 65', 'who has portfolios over $1M with red flags', 'who's at risk'. Use `search` for name match; combine other filters freely. With NO filters it returns the full list of saved clients (the entire client database).",
         parameters: {
           type: "OBJECT",
           properties: {
-            search: { type: "STRING", description: "Match on first or last name." },
-            staleDays: { type: "INTEGER", description: "Minimum days since lastContactedAt." },
-            status: { type: "STRING", description: "Exact status value, e.g. 'Analyzed'." },
+            search: { type: "STRING", description: "Substring match on first or last name." },
+            riskProfile: { type: "STRING", description: "Exact risk profile tier (e.g. 'Conservative')." },
+            minAge: { type: "INTEGER", description: "Inclusive minimum age." },
+            maxAge: { type: "INTEGER", description: "Inclusive maximum age." },
+            minTotalValue: { type: "NUMBER", description: "Inclusive minimum portfolio value (USD)." },
+            maxTotalValue: { type: "NUMBER", description: "Inclusive maximum portfolio value (USD)." },
+            staleDays: { type: "INTEGER", description: "Minimum days since lastContactedAt — finds clients overdue for contact." },
+            maxIncomeReadinessScore: { type: "INTEGER", description: "Max income-readiness score — finds at-risk clients (e.g. 50 for 'who's at risk')." },
+            hasRedFlags: { type: "BOOLEAN", description: "True → only clients with at least one analysis red flag." },
+            status: { type: "STRING", description: "Exact saved-review status." },
           },
         },
       },
@@ -182,26 +190,6 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
         parameters: {
           type: "OBJECT",
           properties: { clientId: { type: "STRING", description: "Saved review id; defaults to active." } },
-        },
-      },
-      {
-        name: "find_clients_by_criteria",
-        description:
-          "Search saved clients by structured criteria. Use for questions like 'who haven't I contacted in 90 days?' or 'who's conservative and over 65?' or 'who has portfolios over $1M with red flags?'.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            search: { type: "STRING", description: "Substring match on first or last name." },
-            riskProfile: { type: "STRING", description: "Exact risk profile tier." },
-            minAge: { type: "INTEGER", description: "Inclusive minimum age." },
-            maxAge: { type: "INTEGER", description: "Inclusive maximum age." },
-            minTotalValue: { type: "NUMBER", description: "Inclusive minimum portfolio value (USD)." },
-            maxTotalValue: { type: "NUMBER", description: "Inclusive maximum portfolio value (USD)." },
-            staleDays: { type: "INTEGER", description: "Minimum days since lastContactedAt." },
-            maxIncomeReadinessScore: { type: "INTEGER", description: "Max income-readiness score (find at-risk)." },
-            hasRedFlags: { type: "BOOLEAN", description: "True → only clients with ≥1 analysis red flag." },
-            status: { type: "STRING", description: "Exact saved-review status." },
-          },
         },
       },
     ],

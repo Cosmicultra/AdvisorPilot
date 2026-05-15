@@ -223,11 +223,25 @@ export class VoiceSession {
         this.events.onTranscript("assistant", part.text);
       }
     }
-    if (msg.serverContent?.inputTranscription?.text && this.events.onTranscript) {
-      this.events.onTranscript("user", msg.serverContent.inputTranscription.text);
+    if (msg.serverContent?.inputTranscription?.text) {
+      const text = msg.serverContent.inputTranscription.text;
+      try {
+        // eslint-disable-next-line no-console
+        console.info(`[voice:user] ${text}`);
+      } catch {
+        // ignore
+      }
+      if (this.events.onTranscript) this.events.onTranscript("user", text);
     }
-    if (msg.serverContent?.outputTranscription?.text && this.events.onTranscript) {
-      this.events.onTranscript("assistant", msg.serverContent.outputTranscription.text);
+    if (msg.serverContent?.outputTranscription?.text) {
+      const text = msg.serverContent.outputTranscription.text;
+      try {
+        // eslint-disable-next-line no-console
+        console.info(`[voice:agent] ${text}`);
+      } catch {
+        // ignore
+      }
+      if (this.events.onTranscript) this.events.onTranscript("assistant", text);
     }
     if (msg.serverContent?.turnComplete) {
       this.speakingForResponse = false;
@@ -240,9 +254,25 @@ export class VoiceSession {
         const callId = call.id || `gemini-fc-${Date.now()}`;
         const name = call.name || "unknown";
         const handler = VOICE_TOOL_HANDLERS[name];
+        const startTs = performance.now();
         let output: string;
+        let parsedResult: unknown = null;
         let success = true;
         let error: string | undefined;
+
+        // ── Browser-console diagnostics ──────────────────────────────
+        // Visible in DevTools so you can watch the agent reason step by
+        // step. Logs the raw arguments the model sent.
+        try {
+          // eslint-disable-next-line no-console
+          console.info(
+            `[voice:tool] call → ${name}`,
+            call.args ?? {},
+            `(id=${callId})`
+          );
+        } catch {
+          // ignore console issues
+        }
 
         if (!handler) {
           output = `Unknown tool: ${name}`;
@@ -251,6 +281,7 @@ export class VoiceSession {
         } else {
           try {
             const result = await handler(call.args ?? {}, this.actions);
+            parsedResult = result;
             output = typeof result === "string" ? result : JSON.stringify(result);
             if (output.length > 2000) output = output.slice(0, 2000) + "…[truncated]";
           } catch (err) {
@@ -259,6 +290,25 @@ export class VoiceSession {
             output = `Error: ${error}`;
           }
         }
+        const durationMs = Math.round(performance.now() - startTs);
+
+        try {
+          // eslint-disable-next-line no-console
+          if (success) {
+            console.info(
+              `[voice:tool] result ← ${name} (${durationMs}ms)`,
+              parsedResult
+            );
+          } else {
+            console.warn(
+              `[voice:tool] error ← ${name} (${durationMs}ms)`,
+              error
+            );
+          }
+        } catch {
+          // ignore
+        }
+
         void recordVoiceAudit({
           tool: name,
           args: call.args ?? {},
