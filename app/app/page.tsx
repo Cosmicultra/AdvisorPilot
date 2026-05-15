@@ -11,6 +11,13 @@ import { VoiceAgent } from "@/components/voice/voice-agent";
 import type { VoiceAppActions } from "@/lib/voice/tool-handlers";
 import type { AppStep } from "@/lib/voice/types";
 import type { VoiceAppState as VoiceFocusState } from "@/lib/voice/focus";
+import {
+  buildAllocationSummary,
+  buildHoldingsBreakdown,
+  parseClientAge,
+  resolveVoiceTargetReview,
+  sumHoldingsValue,
+} from "@/lib/voice/page-helpers";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -3608,25 +3615,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         }));
     },
     getClientDetails: async (clientId) => {
-      const target =
-        clientId && savedReviews.find((r) => r.id === clientId)
-          ? savedReviews.find((r) => r.id === clientId)!
-          : activeReviewId
-            ? savedReviews.find((r) => r.id === activeReviewId)
-            : null;
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
       if (!target) return null;
-      const tv = (target.holdings ?? []).reduce(
-        (sum, h) => sum + (Number((h as { value?: unknown }).value) || 0),
-        0
-      );
+      const tv = sumHoldingsValue(target.holdings);
       return {
         id: target.id,
         firstName: target.client.firstName ?? "",
         lastName: target.client.lastName ?? "",
-        age:
-          typeof target.client.age === "string" && target.client.age
-            ? Number(target.client.age)
-            : null,
+        age: parseClientAge(target.client.age),
         riskProfile: target.client.riskProfile ?? null,
         status: target.status ?? null,
         lastContactedAt: target.lastContactedAt ?? null,
@@ -3638,6 +3634,168 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         redFlags:
           (target.analysis as { redFlags?: string[] } | null | undefined)?.redFlags ?? [],
       };
+    },
+    getHoldingsBreakdown: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      return buildHoldingsBreakdown(target);
+    },
+    getAllocationSummary: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      return buildAllocationSummary(target);
+    },
+    getMeetingGuide: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const a = (target.analysis ?? {}) as {
+        advisorOpeningScript?: string;
+        talkingPoints?: string[];
+        objectionHandling?: string[];
+      };
+      return {
+        clientId: target.id,
+        advisorOpeningScript: a.advisorOpeningScript ?? "",
+        talkingPoints: Array.isArray(a.talkingPoints) ? a.talkingPoints : [],
+        objectionHandling: Array.isArray(a.objectionHandling) ? a.objectionHandling : [],
+      };
+    },
+    getRecommendations: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const recs = (target.analysis as { recommendations?: string[] } | null | undefined)
+        ?.recommendations;
+      return Array.isArray(recs) ? recs : [];
+    },
+    getRedFlags: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const flags = (target.analysis as { redFlags?: string[] } | null | undefined)?.redFlags;
+      return Array.isArray(flags) ? flags : [];
+    },
+    getOverlapInsights: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const overlaps = (target.analysis as { overlapInsights?: string[] } | null | undefined)
+        ?.overlapInsights;
+      return Array.isArray(overlaps) ? overlaps : [];
+    },
+    getRothSummary: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const r = target.rothWorksheet as
+        | {
+            conversionAmount?: number;
+            yearsToBreakeven?: number;
+            recommendation?: string;
+          }
+        | null
+        | undefined;
+      return {
+        clientId: target.id,
+        hasWorksheet: Boolean(r),
+        conversionAmount: r?.conversionAmount ?? null,
+        yearsToBreakeven: r?.yearsToBreakeven ?? null,
+        recommendation: r?.recommendation ?? null,
+      };
+    },
+    getClientOverview: async (clientId) => {
+      const target = resolveVoiceTargetReview(savedReviews, clientId, activeReviewId);
+      if (!target) return null;
+      const breakdown = buildHoldingsBreakdown(target);
+      const allocation = buildAllocationSummary(target);
+      const analysis = (target.analysis ?? {}) as {
+        incomeReadinessScore?: number;
+        diversificationScore?: number;
+        redFlags?: string[];
+        recommendations?: string[];
+        synopsis?: string;
+      };
+      const name = `${target.client.firstName ?? ""} ${target.client.lastName ?? ""}`.trim();
+      const age = parseClientAge(target.client.age);
+      const risk = target.client.riskProfile ?? null;
+      const tv = sumHoldingsValue(target.holdings);
+      const irs = analysis.incomeReadinessScore ?? null;
+      const flags = Array.isArray(analysis.redFlags) ? analysis.redFlags.slice(0, 3) : [];
+      const recs = Array.isArray(analysis.recommendations)
+        ? analysis.recommendations.slice(0, 3)
+        : [];
+
+      const moneyShort = (n: number) =>
+        n >= 1_000_000
+          ? `$${(n / 1_000_000).toFixed(1)}M`
+          : n >= 1_000
+            ? `$${Math.round(n / 1_000)}k`
+            : `$${Math.round(n)}`;
+      const topPos = breakdown.topPositions[0];
+      const spokenParts: string[] = [];
+      if (name) spokenParts.push(name);
+      if (age != null) spokenParts.push(`age ${age}`);
+      if (risk) spokenParts.push(`${risk.toLowerCase()} risk`);
+      let openingLine = spokenParts.join(", ") + ".";
+      if (tv) openingLine += ` Portfolio about ${moneyShort(tv)}.`;
+      if (topPos) {
+        openingLine += ` Top position ${topPos.ticker || topPos.name} at ${topPos.weightPct.toFixed(0)}%.`;
+      }
+      if (irs != null) openingLine += ` Income readiness ${irs}.`;
+      if (flags.length) openingLine += ` ${flags.length} red flag${flags.length === 1 ? "" : "s"} on file.`;
+
+      return {
+        clientId: target.id,
+        name: name || "Unnamed client",
+        age,
+        riskProfile: risk,
+        retirementAge: target.client.retirementAge ?? null,
+        totalValue: tv || null,
+        incomeReadinessScore: irs,
+        diversificationScore: analysis.diversificationScore ?? null,
+        topHoldings: breakdown.topPositions,
+        allocation: allocation.buckets,
+        topRedFlags: flags,
+        topRecommendations: recs,
+        spokenSummary: openingLine,
+      };
+    },
+    findClientsByCriteria: async (filter) => {
+      const q = filter.search?.toLowerCase().trim() ?? "";
+      const now = Date.now();
+      const matches = savedReviews.filter((r) => {
+        const first = r.client.firstName ?? "";
+        const last = r.client.lastName ?? "";
+        const name = `${first} ${last}`.toLowerCase().trim();
+        if (q && !name.includes(q)) return false;
+        if (filter.riskProfile && (r.client.riskProfile ?? "").toLowerCase() !== filter.riskProfile.toLowerCase()) return false;
+        const age = parseClientAge(r.client.age);
+        if (filter.minAge != null && (age == null || age < filter.minAge)) return false;
+        if (filter.maxAge != null && (age == null || age > filter.maxAge)) return false;
+        const tv = sumHoldingsValue(r.holdings);
+        if (filter.minTotalValue != null && tv < filter.minTotalValue) return false;
+        if (filter.maxTotalValue != null && tv > filter.maxTotalValue) return false;
+        if (typeof filter.staleDays === "number" && r.lastContactedAt) {
+          const ageDays = (now - new Date(r.lastContactedAt).getTime()) / (24 * 3600 * 1000);
+          if (ageDays < filter.staleDays) return false;
+        }
+        const irs = (r.analysis as { incomeReadinessScore?: number } | null | undefined)?.incomeReadinessScore;
+        if (filter.maxIncomeReadinessScore != null && (irs == null || irs > filter.maxIncomeReadinessScore)) return false;
+        const flagsArr = (r.analysis as { redFlags?: string[] } | null | undefined)?.redFlags;
+        const hasFlags = Array.isArray(flagsArr) && flagsArr.length > 0;
+        if (filter.hasRedFlags === true && !hasFlags) return false;
+        if (filter.hasRedFlags === false && hasFlags) return false;
+        if (filter.status && (r.status ?? "").toLowerCase() !== filter.status.toLowerCase()) return false;
+        return true;
+      });
+      return matches.map((r) => ({
+        id: r.id,
+        firstName: r.client.firstName ?? "",
+        lastName: r.client.lastName ?? "",
+        age: parseClientAge(r.client.age),
+        riskProfile: r.client.riskProfile ?? null,
+        status: r.status ?? null,
+        lastContactedAt: r.lastContactedAt ?? null,
+        totalValue: sumHoldingsValue(r.holdings) || null,
+        incomeReadinessScore:
+          (r.analysis as { incomeReadinessScore?: number } | null | undefined)?.incomeReadinessScore ?? null,
+      }));
     },
   };
 

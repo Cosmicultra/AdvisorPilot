@@ -10,6 +10,7 @@
 
 import type { Buffer } from "buffer";
 import { effectiveProviderForPass } from "./capabilities";
+import { advisorEmailHint, llmDebug, logLlmCall } from "./observability";
 import { geminiAdapter } from "./providers/gemini";
 import { grokAdapter } from "./providers/grok";
 import { openaiAdapter } from "./providers/openai";
@@ -74,12 +75,37 @@ export async function complete<T = unknown>(
     selection: options.selection,
   });
   const effective = effectiveProviderForPass(ctxResolved.provider, req.pass);
-  // Re-resolve model under the effective provider so TTS/STT fallbacks pick the
-  // right OpenAI model regardless of what the advisor selected.
   const ctx = effective.fellBack
     ? resolveLlmContext(req.pass, { ...options, providerOverride: effective.provider })
     : ctxResolved;
-  return getAdapter(ctx.provider).complete(req, ctx);
+  if (effective.fellBack) {
+    llmDebug(`fallback ${ctxResolved.provider} → ${effective.provider} (${effective.reason ?? ""})`, {
+      pass: req.pass,
+    });
+  }
+  const advisor = advisorEmailHint(options.request, undefined);
+  const start = performance.now();
+  try {
+    const result = await getAdapter(ctx.provider).complete<T>(req, ctx);
+    logLlmCall({
+      ctx,
+      durationMs: performance.now() - start,
+      usage: result.usage,
+      advisorEmail: advisor,
+      fallbackFrom: effective.fellBack ? ctxResolved.provider : undefined,
+      extra: { hasJson: result.json !== undefined ? 1 : 0, attachments: req.attachments?.length ?? 0 },
+    });
+    return result;
+  } catch (err) {
+    logLlmCall({
+      ctx,
+      durationMs: performance.now() - start,
+      advisorEmail: advisor,
+      fallbackFrom: effective.fellBack ? ctxResolved.provider : undefined,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 export async function research<T = unknown>(
@@ -96,11 +122,42 @@ export async function research<T = unknown>(
   const ctx = effective.fellBack
     ? resolveLlmContext(pass, { ...options, providerOverride: effective.provider })
     : ctxResolved;
-  return getAdapter(ctx.provider).research<T>(req, ctx);
+  if (effective.fellBack) {
+    llmDebug(`research fallback ${ctxResolved.provider} → ${effective.provider} (${effective.reason ?? ""})`, {
+      tier: req.tier,
+    });
+  }
+  const advisor = advisorEmailHint(options.request, undefined);
+  const start = performance.now();
+  try {
+    const result = await getAdapter(ctx.provider).research<T>(req, ctx);
+    logLlmCall({
+      ctx,
+      durationMs: performance.now() - start,
+      usage: result.usage,
+      advisorEmail: advisor,
+      fallbackFrom: effective.fellBack ? ctxResolved.provider : undefined,
+      extra: {
+        tier: req.tier,
+        citations: result.citations.length,
+        async: result.asyncHandle ? 1 : 0,
+      },
+    });
+    return result;
+  } catch (err) {
+    logLlmCall({
+      ctx,
+      durationMs: performance.now() - start,
+      advisorEmail: advisor,
+      fallbackFrom: effective.fellBack ? ctxResolved.provider : undefined,
+      error: err instanceof Error ? err.message : String(err),
+      extra: { tier: req.tier },
+    });
+    throw err;
+  }
 }
 
 export async function tts(req: TtsRequest, options: LlmCallOptions = {}): Promise<Buffer> {
-  // TTS always falls back to OpenAI in v1 — effectiveProviderForPass enforces this.
   const ctxResolved = resolveLlmContext("tts", {
     request: options.request,
     providerOverride: options.providerOverride,
@@ -109,7 +166,28 @@ export async function tts(req: TtsRequest, options: LlmCallOptions = {}): Promis
   const ctx = effective.fellBack
     ? resolveLlmContext("tts", { ...options, providerOverride: effective.provider })
     : ctxResolved;
-  return getAdapter(ctx.provider).tts(req, ctx);
+  const advisor = advisorEmailHint(options.request, undefined);
+  const start = performance.now();
+  try {
+    const out = await getAdapter(ctx.provider).tts(req, ctx);
+    logLlmCall({
+      ctx,
+      durationMs: performance.now() - start,
+      advisorEmail: advisor,
+      fallbackFrom: effective.fellBack ? ctxResolved.provider : undefined,
+      extra: { chars: req.text.length, bytes: out.length },
+    });
+    return out;
+  } catch (err) {
+    logLlmCall({
+      ctx,
+      durationMs: performance.now() - start,
+      advisorEmail: advisor,
+      fallbackFrom: effective.fellBack ? ctxResolved.provider : undefined,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 export async function stt(req: SttRequest, options: LlmCallOptions = {}): Promise<string> {
@@ -121,7 +199,28 @@ export async function stt(req: SttRequest, options: LlmCallOptions = {}): Promis
   const ctx = effective.fellBack
     ? resolveLlmContext("stt", { ...options, providerOverride: effective.provider })
     : ctxResolved;
-  return getAdapter(ctx.provider).stt(req, ctx);
+  const advisor = advisorEmailHint(options.request, undefined);
+  const start = performance.now();
+  try {
+    const text = await getAdapter(ctx.provider).stt(req, ctx);
+    logLlmCall({
+      ctx,
+      durationMs: performance.now() - start,
+      advisorEmail: advisor,
+      fallbackFrom: effective.fellBack ? ctxResolved.provider : undefined,
+      extra: { audioBytes: req.audio.length, chars: text.length },
+    });
+    return text;
+  } catch (err) {
+    logLlmCall({
+      ctx,
+      durationMs: performance.now() - start,
+      advisorEmail: advisor,
+      fallbackFrom: effective.fellBack ? ctxResolved.provider : undefined,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 function researchTierToPass(tier: ResearchTier) {

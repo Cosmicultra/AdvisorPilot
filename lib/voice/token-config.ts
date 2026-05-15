@@ -129,6 +129,81 @@ export const VOICE_NAV_TOOLS: Array<Record<string, unknown>> = [
           properties: { topic: { type: "STRING", description: "Optional topic to explain." } },
         },
       },
+      // ── Phase 2 voice expansion: deeper client lenses ────────────────
+      {
+        name: "get_holdings_breakdown",
+        description:
+          "Get holdings + top 5 positions by weight for the active or specified client. Use when asked 'what does Sarah hold?' / 'what are her top positions?'.",
+        parameters: {
+          type: "OBJECT",
+          properties: { clientId: { type: "STRING", description: "Saved review id; defaults to active." } },
+        },
+      },
+      {
+        name: "get_allocation_summary",
+        description:
+          "Get bucketed allocation (equity / fixed / cash / alts / etc.) with dollar values + percentages for the active or specified client.",
+        parameters: {
+          type: "OBJECT",
+          properties: { clientId: { type: "STRING", description: "Saved review id; defaults to active." } },
+        },
+      },
+      {
+        name: "get_meeting_guide",
+        description:
+          "Get the advisor opening script, talking points, and objection-handling notes for the active or specified client. Use when prepping for a meeting.",
+        parameters: {
+          type: "OBJECT",
+          properties: { clientId: { type: "STRING", description: "Saved review id; defaults to active." } },
+        },
+      },
+      {
+        name: "get_overlap_insights",
+        description:
+          "Get hidden concentration / fund-overlap notes from the active or specified client's analysis.",
+        parameters: {
+          type: "OBJECT",
+          properties: { clientId: { type: "STRING", description: "Saved review id; defaults to active." } },
+        },
+      },
+      {
+        name: "get_roth_summary",
+        description:
+          "Get the saved Roth conversion worksheet summary (conversion amount, breakeven, recommendation) when one exists.",
+        parameters: {
+          type: "OBJECT",
+          properties: { clientId: { type: "STRING", description: "Saved review id; defaults to active." } },
+        },
+      },
+      {
+        name: "client_overview",
+        description:
+          "Comprehensive synthesized overview of one client — profile, allocation, top positions, scores, top red flags + top recommendations — designed to be spoken as a 4-6 sentence briefing. Use when the advisor asks 'give me a quick rundown on Sarah'.",
+        parameters: {
+          type: "OBJECT",
+          properties: { clientId: { type: "STRING", description: "Saved review id; defaults to active." } },
+        },
+      },
+      {
+        name: "find_clients_by_criteria",
+        description:
+          "Search saved clients by structured criteria. Use for questions like 'who haven't I contacted in 90 days?' or 'who's conservative and over 65?' or 'who has portfolios over $1M with red flags?'.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            search: { type: "STRING", description: "Substring match on first or last name." },
+            riskProfile: { type: "STRING", description: "Exact risk profile tier." },
+            minAge: { type: "INTEGER", description: "Inclusive minimum age." },
+            maxAge: { type: "INTEGER", description: "Inclusive maximum age." },
+            minTotalValue: { type: "NUMBER", description: "Inclusive minimum portfolio value (USD)." },
+            maxTotalValue: { type: "NUMBER", description: "Inclusive maximum portfolio value (USD)." },
+            staleDays: { type: "INTEGER", description: "Minimum days since lastContactedAt." },
+            maxIncomeReadinessScore: { type: "INTEGER", description: "Max income-readiness score (find at-risk)." },
+            hasRedFlags: { type: "BOOLEAN", description: "True → only clients with ≥1 analysis red flag." },
+            status: { type: "STRING", description: "Exact saved-review status." },
+          },
+        },
+      },
     ],
   },
 ];

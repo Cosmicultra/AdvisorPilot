@@ -27,11 +27,44 @@ export interface VoiceAppActions {
   startNewClient: (confirmed?: boolean) => void;
   listClients: (filter?: ListClientsFilter) => Promise<ClientSummary[]>;
   getClientDetails: (clientId?: string) => Promise<ClientDetails | null>;
+  // ── New read-only lenses (Phase 2 voice expansion) ────────────────────
+  getHoldingsBreakdown: (clientId?: string) => Promise<HoldingsBreakdown | null>;
+  getAllocationSummary: (clientId?: string) => Promise<AllocationSummary | null>;
+  getMeetingGuide: (clientId?: string) => Promise<MeetingGuide | null>;
+  getRecommendations: (clientId?: string) => Promise<string[] | null>;
+  getRedFlags: (clientId?: string) => Promise<string[] | null>;
+  getOverlapInsights: (clientId?: string) => Promise<string[] | null>;
+  getRothSummary: (clientId?: string) => Promise<RothSummary | null>;
+  getClientOverview: (clientId?: string) => Promise<ClientOverview | null>;
+  findClientsByCriteria: (filter: FindClientsCriteria) => Promise<ClientSummary[]>;
 }
 
 export interface ListClientsFilter {
   search?: string;
   staleDays?: number;
+  status?: string;
+}
+
+export interface FindClientsCriteria {
+  /** Match on first or last name (substring, case-insensitive). */
+  search?: string;
+  /** Risk profile string match — e.g. "Conservative". */
+  riskProfile?: string;
+  /** Inclusive minimum age. */
+  minAge?: number;
+  /** Inclusive maximum age. */
+  maxAge?: number;
+  /** Inclusive minimum total portfolio value (USD). */
+  minTotalValue?: number;
+  /** Inclusive maximum total portfolio value (USD). */
+  maxTotalValue?: number;
+  /** Minimum days since last contact (stale-flag). */
+  staleDays?: number;
+  /** Maximum income-readiness score; useful for "who's at risk?". */
+  maxIncomeReadinessScore?: number;
+  /** Has at least one red flag in the analysis. */
+  hasRedFlags?: boolean;
+  /** Exact status, e.g. "Analyzed". */
   status?: string;
 }
 
@@ -43,13 +76,68 @@ export interface ClientSummary {
   riskProfile?: string | null;
   status?: string | null;
   lastContactedAt?: string | null;
+  totalValue?: number | null;
+  incomeReadinessScore?: number | null;
 }
 
 export interface ClientDetails extends ClientSummary {
-  totalValue?: number | null;
-  incomeReadinessScore?: number | null;
   holdingsCount?: number | null;
   redFlags?: string[];
+}
+
+export interface HoldingPosition {
+  ticker: string;
+  name: string;
+  assetClass: string;
+  valueUsd: number;
+  weightPct: number;
+}
+
+export interface HoldingsBreakdown {
+  clientId: string;
+  totalValue: number;
+  holdingCount: number;
+  /** Top 5 positions by weight. */
+  topPositions: HoldingPosition[];
+}
+
+export interface AllocationSummary {
+  clientId: string;
+  totalValue: number;
+  /** Bucketed allocation in dollars. */
+  buckets: Array<{ name: string; valueUsd: number; weightPct: number }>;
+}
+
+export interface MeetingGuide {
+  clientId: string;
+  advisorOpeningScript: string;
+  talkingPoints: string[];
+  objectionHandling: string[];
+}
+
+export interface RothSummary {
+  clientId: string;
+  hasWorksheet: boolean;
+  conversionAmount?: number | null;
+  yearsToBreakeven?: number | null;
+  recommendation?: string | null;
+}
+
+export interface ClientOverview {
+  clientId: string;
+  name: string;
+  age?: number | null;
+  riskProfile?: string | null;
+  retirementAge?: string | null;
+  totalValue?: number | null;
+  incomeReadinessScore?: number | null;
+  diversificationScore?: number | null;
+  topHoldings: HoldingPosition[];
+  allocation: AllocationSummary["buckets"];
+  topRedFlags: string[];
+  topRecommendations: string[];
+  /** Brief synthesis the agent can speak as an "overview". */
+  spokenSummary: string;
 }
 
 export type VoiceToolHandler = (
@@ -142,12 +230,102 @@ export const VOICE_TOOL_HANDLERS: Record<string, VoiceToolHandler> = {
       "objectionHandling",
     ];
     if (!allowed.includes(section)) return { error: `Unknown section "${section}"` };
-    const details = await actions.getClientDetails();
-    if (!details) return { error: "No active client." };
-    if (section === "redFlags") return { redFlags: details.redFlags ?? [] };
-    // Other sections live on the full analysis object; for v1 we return the
-    // detail summary and rely on the model to acknowledge what's available.
-    return { details, section };
+    switch (section) {
+      case "redFlags": {
+        const flags = await actions.getRedFlags();
+        return flags ? { redFlags: flags } : { error: "No active client." };
+      }
+      case "recommendations": {
+        const recs = await actions.getRecommendations();
+        return recs ? { recommendations: recs } : { error: "No active client." };
+      }
+      case "talkingPoints": {
+        const guide = await actions.getMeetingGuide();
+        return guide ? { talkingPoints: guide.talkingPoints } : { error: "No active client." };
+      }
+      case "objectionHandling": {
+        const guide = await actions.getMeetingGuide();
+        return guide ? { objectionHandling: guide.objectionHandling } : { error: "No active client." };
+      }
+      default: {
+        const details = await actions.getClientDetails();
+        return details ? { details, section } : { error: "No active client." };
+      }
+    }
+  },
+
+  // ── New lens tools ──────────────────────────────────────────────────
+
+  get_holdings_breakdown: async (args, actions) => {
+    const clientId =
+      typeof (args as { clientId?: unknown }).clientId === "string"
+        ? (args as { clientId: string }).clientId
+        : undefined;
+    const b = await actions.getHoldingsBreakdown(clientId);
+    return b ?? { error: "No holdings available for the active client." };
+  },
+
+  get_allocation_summary: async (args, actions) => {
+    const clientId =
+      typeof (args as { clientId?: unknown }).clientId === "string"
+        ? (args as { clientId: string }).clientId
+        : undefined;
+    const s = await actions.getAllocationSummary(clientId);
+    return s ?? { error: "No allocation available." };
+  },
+
+  get_meeting_guide: async (args, actions) => {
+    const clientId =
+      typeof (args as { clientId?: unknown }).clientId === "string"
+        ? (args as { clientId: string }).clientId
+        : undefined;
+    const g = await actions.getMeetingGuide(clientId);
+    return g ?? { error: "No meeting guide available." };
+  },
+
+  get_overlap_insights: async (args, actions) => {
+    const clientId =
+      typeof (args as { clientId?: unknown }).clientId === "string"
+        ? (args as { clientId: string }).clientId
+        : undefined;
+    const insights = await actions.getOverlapInsights(clientId);
+    return insights ? { overlapInsights: insights } : { error: "No active client." };
+  },
+
+  get_roth_summary: async (args, actions) => {
+    const clientId =
+      typeof (args as { clientId?: unknown }).clientId === "string"
+        ? (args as { clientId: string }).clientId
+        : undefined;
+    const r = await actions.getRothSummary(clientId);
+    return r ?? { error: "No Roth analysis available." };
+  },
+
+  client_overview: async (args, actions) => {
+    const clientId =
+      typeof (args as { clientId?: unknown }).clientId === "string"
+        ? (args as { clientId: string }).clientId
+        : undefined;
+    const o = await actions.getClientOverview(clientId);
+    return o ?? { error: "No active client to summarize." };
+  },
+
+  find_clients_by_criteria: async (args, actions) => {
+    const filter: FindClientsCriteria = {};
+    const a = args as Record<string, unknown>;
+    if (typeof a.search === "string") filter.search = a.search;
+    if (typeof a.riskProfile === "string") filter.riskProfile = a.riskProfile;
+    if (typeof a.minAge === "number") filter.minAge = a.minAge;
+    if (typeof a.maxAge === "number") filter.maxAge = a.maxAge;
+    if (typeof a.minTotalValue === "number") filter.minTotalValue = a.minTotalValue;
+    if (typeof a.maxTotalValue === "number") filter.maxTotalValue = a.maxTotalValue;
+    if (typeof a.staleDays === "number") filter.staleDays = a.staleDays;
+    if (typeof a.maxIncomeReadinessScore === "number")
+      filter.maxIncomeReadinessScore = a.maxIncomeReadinessScore;
+    if (typeof a.hasRedFlags === "boolean") filter.hasRedFlags = a.hasRedFlags;
+    if (typeof a.status === "string") filter.status = a.status;
+    const matches = await actions.findClientsByCriteria(filter);
+    return { count: matches.length, clients: matches.slice(0, 25) };
   },
 
   explain_ui: (args, actions) => {
