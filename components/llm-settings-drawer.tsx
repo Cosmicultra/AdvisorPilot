@@ -93,7 +93,8 @@ export function LlmSettingsDrawer({ open, onClose, onSaved }: LlmSettingsDrawerP
   }, []);
 
   useEffect(() => {
-    if (open) loadAll();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (open) void loadAll();
   }, [open, loadAll]);
 
   const passes = useMemo(() => {

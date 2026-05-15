@@ -26,20 +26,24 @@ export function LlmSettingsButton() {
     try {
       const res = await advisorFetch("/api/advisor-profile", { method: "GET" });
       if (!res.ok) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setLoaded(true);
         return;
       }
       const body = (await res.json()) as { profile?: { llmProvider?: LlmProvider | null } };
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setProvider(body.profile?.llmProvider ?? null);
     } catch {
       // Soft fail — pill just shows the firm default.
     } finally {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoaded(true);
     }
   }, []);
 
   useEffect(() => {
-    refresh();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refresh();
   }, [refresh]);
 
   const label = provider ? PROVIDER_LABELS[provider] : "Default";

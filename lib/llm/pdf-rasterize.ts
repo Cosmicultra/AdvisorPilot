@@ -12,7 +12,20 @@
 
 import { Buffer } from "buffer";
 import sharp from "sharp";
-import { pdf as pdfToImg } from "pdf-to-img";
+
+// Lazy-load pdf-to-img: the package has a top-level module init that
+// confuses Next/Turbopack's static analysis at build time. Dynamic-importing
+// inside the rasterize function keeps the route bundle clean while still
+// allowing serverless execution.
+async function loadPdfToImg() {
+  const mod = (await import("pdf-to-img")) as unknown as {
+    pdf: (
+      bytes: Buffer | Uint8Array,
+      opts?: { scale?: number }
+    ) => AsyncIterable<Buffer>;
+  };
+  return mod.pdf;
+}
 
 export interface RasterizePdfOptions {
   /** Render scale relative to PDF's native DPI (72). 2.0 ≈ 144 dpi. */
@@ -58,6 +71,7 @@ export async function rasterizePdfToJpegs(
 ): Promise<RasterizedPage[]> {
   const opts = { ...defaultRasterizeOptions(), ...options };
 
+  const pdfToImg = await loadPdfToImg();
   const document = await pdfToImg(pdfBytes, { scale: opts.scale });
   const results: RasterizedPage[] = [];
 

@@ -7,6 +7,10 @@ import { signIn, signOut } from "next-auth/react";
 import { DropdownMenu } from "radix-ui";
 import { LogoBlock } from "@/components/logo-block";
 import { LlmSettingsButton } from "@/components/llm-settings-button";
+import { VoiceAgent } from "@/components/voice/voice-agent";
+import type { VoiceAppActions } from "@/lib/voice/tool-handlers";
+import type { AppStep } from "@/lib/voice/types";
+import type { VoiceAppState as VoiceFocusState } from "@/lib/voice/focus";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -3527,6 +3531,115 @@ async function downloadPDFReport(mode: "client" | "advisor") {
       </div>
     );
   }
+
+  // Voice agent actions — exposes navigation + read-only client lookups to
+  // the Gemini Live agent. Tools never get raw setters; everything routes
+  // through these closures so the agent surface stays narrow.
+  const voiceActions: VoiceAppActions = {
+    getState: (): VoiceFocusState => ({
+      step: step as AppStep,
+      intakeStep,
+      activeReviewId,
+      clientFirstName: client.firstName || null,
+      clientLastName: client.lastName || null,
+      clientAge: typeof client.age === "string" && client.age ? Number(client.age) : null,
+      clientRiskProfile: client.riskProfile || null,
+      holdingsCount: holdings.length,
+      totalValue: holdings.reduce((sum, h) => sum + (Number(h.value) || 0), 0) || null,
+      incomeReadinessScore:
+        (analysis as { incomeReadinessScore?: number } | null | undefined)?.incomeReadinessScore ?? null,
+      redFlagCount:
+        Array.isArray((analysis as { redFlags?: unknown[] } | null | undefined)?.redFlags)
+          ? ((analysis as { redFlags: unknown[] }).redFlags.length)
+          : null,
+      recentClientCount: savedReviews.length,
+      savedReviewCount: savedReviews.length,
+    }),
+    navigate: (next) => setStep(next),
+    navigateIntakeStep: (n) => {
+      setStep("intake");
+      setIntakeStep(n);
+    },
+    openClient: (id) => {
+      const found = savedReviews.find((r) => r.id === id);
+      if (found) {
+        setActiveReviewId(found.id);
+        updateAnalysisFromDatabase(found);
+        setStep("analysis");
+      }
+    },
+    startNewClient: (confirmed) => {
+      if (!confirmed && (holdings.length > 0 || activeReviewId)) {
+        // Defensive: agent is supposed to confirm verbally before calling,
+        // but we double-check here so a slip doesn't wipe unsaved work.
+        return;
+      }
+      startBlankReview();
+    },
+    listClients: async (filter) => {
+      const q = filter?.search?.toLowerCase().trim() ?? "";
+      const stale = filter?.staleDays;
+      const statusFilter = filter?.status?.toLowerCase();
+      const now = Date.now();
+      return savedReviews
+        .filter((r) => {
+          const name = `${r.client.firstName ?? ""} ${r.client.lastName ?? ""}`
+            .trim()
+            .toLowerCase();
+          if (q && !name.includes(q)) return false;
+          if (statusFilter && (r.status ?? "").toLowerCase() !== statusFilter) return false;
+          if (typeof stale === "number" && r.lastContactedAt) {
+            const ageDays = (now - new Date(r.lastContactedAt).getTime()) / (24 * 3600 * 1000);
+            if (ageDays < stale) return false;
+          }
+          return true;
+        })
+        .map((r) => ({
+          id: r.id,
+          firstName: r.client.firstName ?? "",
+          lastName: r.client.lastName ?? "",
+          age:
+            typeof r.client.age === "string" && r.client.age
+              ? Number(r.client.age)
+              : null,
+          riskProfile: r.client.riskProfile ?? null,
+          status: r.status ?? null,
+          lastContactedAt: r.lastContactedAt ?? null,
+        }));
+    },
+    getClientDetails: async (clientId) => {
+      const target =
+        clientId && savedReviews.find((r) => r.id === clientId)
+          ? savedReviews.find((r) => r.id === clientId)!
+          : activeReviewId
+            ? savedReviews.find((r) => r.id === activeReviewId)
+            : null;
+      if (!target) return null;
+      const tv = (target.holdings ?? []).reduce(
+        (sum, h) => sum + (Number((h as { value?: unknown }).value) || 0),
+        0
+      );
+      return {
+        id: target.id,
+        firstName: target.client.firstName ?? "",
+        lastName: target.client.lastName ?? "",
+        age:
+          typeof target.client.age === "string" && target.client.age
+            ? Number(target.client.age)
+            : null,
+        riskProfile: target.client.riskProfile ?? null,
+        status: target.status ?? null,
+        lastContactedAt: target.lastContactedAt ?? null,
+        totalValue: tv || null,
+        incomeReadinessScore:
+          (target.analysis as { incomeReadinessScore?: number } | null | undefined)
+            ?.incomeReadinessScore ?? null,
+        holdingsCount: target.holdings?.length ?? 0,
+        redFlags:
+          (target.analysis as { redFlags?: string[] } | null | undefined)?.redFlags ?? [],
+      };
+    },
+  };
 
   return (
     <div className="ap-app-bg min-h-screen text-slate-950 print:bg-white">
@@ -7573,6 +7686,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
 
         </div>
       </div>
+      <VoiceAgent actions={voiceActions} />
     </div>
   );
 }

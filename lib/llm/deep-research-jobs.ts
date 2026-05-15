@@ -194,7 +194,7 @@ export async function pollRunningDeepResearchJobs(): Promise<{
     .limit(20);
   if (error || !data) return { checked: 0, completed: 0, failed: 0 };
 
-  let completed = 0;
+  const completed = 0;
   let failed = 0;
   for (const row of data as DbRow[]) {
     if (!row.external_handle) continue;
