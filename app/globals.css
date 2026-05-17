@@ -460,3 +460,32 @@
     display: none !important;
   }
 }
+
+/* ──────────────────────────────────────────────────────────────────────
+   CRM Roster aside — right border separating the roster column from
+   the main content. Only relevant in sidebar context (lives in
+   app/app/(crm)/crm/layout.tsx wrapped in `.ap-roster-sidebar`); the
+   mobile inline page rendering doesn't need this border.
+   ────────────────────────────────────────────────────────────────────── */
+.ap-roster-sidebar .ap-roster-aside {
+  border-right: 1px solid var(--ap-border-strong, var(--ap-border));
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   CRM Roster — sidebar-context icon collapse.
+   When the Roster is rendered as the persistent left sidebar AND the
+   viewport is at md→lg (60px icon-only column), hide the per-row
+   identity block, the AUM/stage block, and the filter bar — leaving
+   just the avatars as the navigation affordance.
+   Scoped to `.ap-roster-sidebar` so the mobile INLINE roster (rendered
+   by /app/crm/page.tsx at < md) keeps showing the full row +
+   filter bar, which is what the advisor needs when the roster IS the
+   page content rather than a rail.
+   ────────────────────────────────────────────────────────────────────── */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .ap-roster-sidebar .roster-row-identity,
+  .ap-roster-sidebar .roster-row-meta,
+  .ap-roster-sidebar .roster-filter-bar-wrapper {
+    display: none !important;
+  }
+}

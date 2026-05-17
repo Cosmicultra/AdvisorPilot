@@ -31,11 +31,25 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
+    // `suppressHydrationWarning` on <html> + <body> is for third-party
+    // browser extensions (Scribe recorder, Grammarly, dark-mode toggles,
+    // etc.) that inject attributes like `data-scribe-recorder-ready`
+    // BEFORE React hydrates. Without this, every advisor running such an
+    // extension sees a noisy red console error on every page load. The
+    // suppression is shallow — it only ignores attribute mismatches on
+    // these two elements; any hydration mismatch INSIDE the app still
+    // surfaces normally.
     <html
       lang="en"
       className={`${inter.variable} ${fraunces.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col font-sans">{children}</body>
+      <body
+        className="min-h-full flex flex-col font-sans"
+        suppressHydrationWarning
+      >
+        {children}
+      </body>
     </html>
   );
 }

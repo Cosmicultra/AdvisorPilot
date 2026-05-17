@@ -1,9 +1,17 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+// Lazy-init — see lib/crm/supabase-admin.ts for the same pattern. Module
+// import must not crash when env vars are missing (Supabase JS validates
+// URL at construction time now).
+let _supabaseAdmin: SupabaseClient | null = null;
+function getSupabaseAdmin(): SupabaseClient | null {
+  if (_supabaseAdmin) return _supabaseAdmin;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+  _supabaseAdmin = createClient(url, key);
+  return _supabaseAdmin;
+}
 
 export async function writeAuditEvent(input: {
   ownerEmail: string;
@@ -14,7 +22,8 @@ export async function writeAuditEvent(input: {
   entityId?: string | null;
   metadata?: Record<string, unknown>;
 }) {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return;
+  const supabaseAdmin = getSupabaseAdmin();
+  if (!supabaseAdmin) return;
   try {
     await supabaseAdmin.from("advisorpilot_audit_events").insert({
       owner_email: input.ownerEmail,

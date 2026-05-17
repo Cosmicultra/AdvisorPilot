@@ -16,6 +16,7 @@ import {
 } from "@/lib/ten-year-scenario-models";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
+import { saveGeneratedPdf } from "@/lib/crm/save-generated-pdf";
 import { buildFiaScenarioSummaries } from "@/lib/fia-illustration";
 import { fiaInputValue, normalizeFiaWorksheet } from "@/lib/fia-worksheet";
 import {
@@ -1677,6 +1678,32 @@ export async function POST(req: Request) {
         appendixCount: 0,
       },
     });
+
+    // Archive the generated PDF to advisorpilot_documents so it surfaces in
+    // the Documents tab. Best-effort — doesn't block the download.
+    // Skip for unauthenticated demos (no real owner_email to attribute to).
+    if (identity && !demoMode) {
+      await saveGeneratedPdf({
+        pdfBytes,
+        originalFileName: fileName,
+        ownerEmail: auditOwnerEmail,
+        ownerUserId: auditOwnerUserId,
+        clientId: clientIdForAudit,
+        source:
+          mode === "client"
+            ? "generated_client_snapshot"
+            : "generated_advisor_deep_dive",
+        metadata: {
+          mode,
+          holdingsCount: holdings.length,
+          totalValue,
+          includeFiaAppendix,
+          includeRothConversionAppendix,
+          fiaIllustrationRendered,
+          rothIllustrationRendered,
+        },
+      });
+    }
 
     return new Response(Buffer.from(pdfBytes), {
       headers: {

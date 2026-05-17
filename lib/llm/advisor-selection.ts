@@ -43,6 +43,7 @@ function normalizeOverrides(raw: unknown): Partial<Record<LlmPass, string>> | un
     "research.deep",
     "synthesis.json",
     "fee-analysis",
+    "chat",
     "tts",
     "stt",
   ];

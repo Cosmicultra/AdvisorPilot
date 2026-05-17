@@ -263,3 +263,24 @@ export {
 } from "./types";
 export { resolveLlmContext, resolveProvider, resolveModel } from "./registry";
 export { resolveAdvisorLlmSelection } from "./advisor-selection";
+
+// Chat-orchestrator surface — single-turn streaming facade + type contracts.
+// Routes consume `streamChat` exactly as they consume `complete()` today;
+// the chat-runner (next slice) is what loops `streamChat` + tool execution.
+export {
+  streamChat,
+  resolveChatContext,
+  type StreamChatRequest,
+  type StreamChatOptions,
+} from "./chat/stream-chat";
+export type {
+  ChatMessage,
+  ChatToolCall,
+  ChatToolResult,
+  ChatToolDefinition,
+  ChatStreamChunk,
+  ChatStreamParams,
+  ProviderChatAdapter,
+  ChatStreamErrorReason,
+} from "./chat/types";
+export { ChatStreamError } from "./chat/types";

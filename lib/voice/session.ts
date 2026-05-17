@@ -29,6 +29,30 @@ export interface SessionEvents {
   onVolume?: (rms: number) => void;
   onError?: (err: Error) => void;
   onClose?: () => void;
+  /**
+   * Fires immediately before a tool handler runs. Lets the host render
+   * the call as a pending ToolExecution card in the chat list so the
+   * advisor sees what voice is doing — same affordance text-chat tools
+   * get via tool:call SSE events.
+   */
+  onToolCall?: (callId: string, name: string, args: Record<string, unknown>) => void;
+  /**
+   * Fires after the tool handler resolves (success OR error). Lets the
+   * host flip the ToolExecution card to completed/error with the
+   * returned value (or error message).
+   *
+   * Note: for the `chat` tool the immediate result is just an
+   * acknowledgement (`{ queued: true, acknowledgement: "..." }`) and
+   * the actual orchestrator answer arrives later via the chat-bridge.
+   * The host is responsible for treating chat-tool completion as a
+   * two-phase pattern.
+   */
+  onToolResult?: (
+    callId: string,
+    name: string,
+    result: unknown,
+    error?: string,
+  ) => void;
 }
 
 interface MintResponse {
@@ -95,6 +119,33 @@ export class VoiceSession {
   private setState(s: VoiceSessionState) {
     this.state = s;
     if (this.events.onState) this.events.onState(s);
+  }
+
+  /**
+   * Inject a text message into the live conversation as if the user
+   * had spoken it. Used by the voice<->chat bridge to "nudge" the
+   * voice agent when a background chat() tool call completes — the
+   * agent reads the queued result aloud as its next turn.
+   *
+   * Per the file header (point 6), gemini-3.1-flash-live-preview
+   * returns close-code 1007 on `sendClientContent`; the working
+   * channel is `sendRealtimeInput({text})`.
+   *
+   * Returns true if the message was sent; false if the WS wasn't
+   * ready (typical when the bridge tries to flush during reconnect).
+   * The bridge re-queues on false so the message isn't lost.
+   */
+  sendText(text: string): boolean {
+    if (!this.session || !this.sendReady) return false;
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return false;
+    try {
+      this.session.sendRealtimeInput({ text: trimmed });
+      return true;
+    } catch (err) {
+      if (this.events.onError) this.events.onError(err as Error);
+      return false;
+    }
   }
 
   async start(): Promise<void> {
@@ -274,6 +325,19 @@ export class VoiceSession {
           // ignore console issues
         }
 
+        // Fire onToolCall BEFORE running the handler so the host can
+        // render a pending card immediately. If the handler is fast
+        // the card flips to completed almost instantly; if it's slow
+        // (e.g. resolveVoiceNavigate fetching the roster) the pending
+        // state is meaningful UX.
+        if (this.events.onToolCall) {
+          try {
+            this.events.onToolCall(callId, name, call.args ?? {});
+          } catch {
+            // Host callback bugs shouldn't break tool dispatch.
+          }
+        }
+
         if (!handler) {
           output = `Unknown tool: ${name}`;
           success = false;
@@ -291,6 +355,16 @@ export class VoiceSession {
           }
         }
         const durationMs = Math.round(performance.now() - startTs);
+
+        // Fire onToolResult AFTER the handler resolves. Host updates
+        // the corresponding pending card to completed/error.
+        if (this.events.onToolResult) {
+          try {
+            this.events.onToolResult(callId, name, parsedResult, error);
+          } catch {
+            // ignore — host bug shouldn't kill the session
+          }
+        }
 
         try {
           // eslint-disable-next-line no-console
