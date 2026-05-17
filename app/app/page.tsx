@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import {
   crmLandingRedirectTarget,
@@ -24,5 +25,9 @@ export default function AppPage() {
   if (crmShellEnabled()) {
     redirect(crmLandingRedirectTarget());
   }
-  return <LegacyAppShell />;
+  return (
+    <Suspense fallback={null}>
+      <LegacyAppShell />
+    </Suspense>
+  );
 }
