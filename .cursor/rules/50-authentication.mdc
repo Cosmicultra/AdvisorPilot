@@ -1,0 +1,102 @@
+---
+description: AdvisorPilot's three-path auth model — how to call authenticated APIs from the client, gate API routes server-side, and avoid the Server-Component sessionStorage trap.
+alwaysApply: true
+---
+
+# Authentication in AdvisorPilot
+
+Three concurrent auth paths. Code that touches auth MUST handle all three or be explicit about which subset it supports.
+
+| Path | Where the credential lives | When used |
+|---|---|---|
+| **NextAuth (Google)** | `next-auth.session-token` cookie | Advisors who signed in via "Sign in with Google" |
+| **Supabase email/password** | `sessionStorage["ap_supabase_at"]` (access token) + `["ap_supabase_rt"]` (refresh token), sent as `Authorization: Bearer <jwt>` | Advisors who signed in via the email/password form |
+| **Upload token** | URL path `/client-upload/[token]` | Public client-side magic-link uploads (separate flow; not relevant to advisor APIs) |
+
+## Server-side: every authenticated API route uses `resolveAdvisorIdentity`
+
+`lib/advisor-auth.ts` exports `resolveAdvisorIdentity(req)`. It checks BOTH the NextAuth session AND the `Authorization` header, returns `{ email, userId, provider } | null`. Use it. Don't roll your own.
+
+```typescript
+// ✅ GOOD
+import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+
+export const GET = async (req: Request) => {
+  const identity = await resolveAdvisorIdentity(req);
+  if (!identity) return NextResponse.json({ error: "Sign in." }, { status: 401 });
+  // ...use identity.email
+};
+
+// ❌ BAD — only handles NextAuth (Google) users; email/password users get 401
+const session = await getServerSession(authOptions);
+if (!session) return NextResponse.json({ error: "Sign in." }, { status: 401 });
+```
+
+## Client-side: every authenticated fetch uses `advisorFetch`
+
+`lib/advisor-fetch.ts` exports `advisorFetch()`. It reads the Bearer token from `sessionStorage`, sets the `Authorization` header, sends `credentials: "include"` for cookies, AND auto-refreshes on 401. Use it. Plain `fetch()` only works for Google users — email/password users will silently 401.
+
+```typescript
+// ✅ GOOD
+import { advisorFetch } from "@/lib/advisor-fetch";
+
+const res = await advisorFetch("/api/clients?limit=200", { cache: "no-store" });
+if (res.status === 401) { /* render "session expired" UI */ return; }
+
+// ❌ BAD — works for Google users, breaks for email/password users
+const res = await fetch("/api/clients?limit=200");
+```
+
+## Server Components CANNOT see browser sessionStorage
+
+A Server Component that fetches an authenticated API route via plain `fetch()` works for Google users (cookies forward automatically) but **fails for email/password users** because their JWT lives in browser `sessionStorage` — the server has no access to it.
+
+```typescript
+// ❌ BAD — RSC fetching authenticated API; email/password users get 401
+export default async function ClientDetailPage({ params }) {
+  const { id } = await params;
+  const res = await fetch(`http://${host}/api/clients/${id}`, {
+    headers: { cookie: incomingCookie },  // only NextAuth cookies; no Bearer
+  });
+  // ...
+}
+
+// ✅ GOOD — thin RSC hands off to a Client Component that uses advisorFetch
+export default async function ClientDetailPage({ params }) {
+  const { id, tab } = await params;
+  return <ClientDetailContent clientId={id} tab={tab} />;  // client component
+}
+```
+
+When in doubt about whether a route needs to support email/password users, **fetch client-side via `advisorFetch`**.
+
+## Don't add `getServerSession` redirects to layouts
+
+Server-side auth gates that assume a NextAuth session create redirect loops for email/password users (no NextAuth cookie → redirect to /login → after login → back to layout → still no NextAuth cookie → redirect to /login → infinite loop).
+
+The existing convention: API routes return 401, client surfaces show a "session expired" prompt with a link to `/login`. Don't redirect from layouts.
+
+```typescript
+// ❌ BAD — redirect loop for email/password users
+export default async function CrmLayout({ children }) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.email) redirect("/login");
+  return <CrmShell>{children}</CrmShell>;
+}
+
+// ✅ GOOD — let API enforce auth; client handles 401 gracefully
+export default function CrmLayout({ children }) {
+  return <CrmShell>{children}</CrmShell>;
+}
+```
+
+## Quick checklist before merging
+
+- [ ] Authenticated API route → calls `resolveAdvisorIdentity(req)` at the top
+- [ ] Client-side fetch to authenticated API → uses `advisorFetch()`, not plain `fetch()`
+- [ ] RSC fetch to authenticated API → only if you're sure the route's consumers are Google-only; otherwise convert to Client Component + `advisorFetch`
+- [ ] Layout/Page-level auth gating → don't add `getServerSession` redirects; rely on the API + client surface
+
+## Why this rule exists
+
+A Phase 1 PR called plain `fetch()` from the Roster + RSC fetch from the client-detail page. Email/password users got 401 on every CRM API call. Then a "fix" added `getServerSession` to the CRM layout, which created a redirect loop and locked the email/password user out entirely. Both mistakes would have been caught by reading `lib/advisor-fetch.ts` and `lib/advisor-auth.ts` first.

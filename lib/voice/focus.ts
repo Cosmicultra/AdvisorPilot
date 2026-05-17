@@ -1,103 +1,124 @@
 /**
- * Build the per-call "Focus" snapshot delivered to the voice agent via
- * `get_context`. Single source of truth for what the agent is allowed to
- * "see" about the advisor's current screen + active client.
+ * Build the per-call "Focus" snapshot the voice agent gets in its
+ * system prompt. Single source of truth for what the agent knows
+ * about the advisor's current screen + active client.
  *
- * Privacy rule: this is the ONLY function that turns React state into agent-
- * visible JSON. It redacts PII the advisor doesn't need spoken aloud:
- *   - account numbers → "****1234" partials only when the source string is
- *     already partial; otherwise the field is omitted.
- *   - email addresses → never included; only first name + last initial.
- *   - DOB → omitted (age is fine).
- *   - SSN → never present in our data model; defensive-omitted anyway.
+ * Voice v3 — rewritten for CRM routes instead of legacy wizard steps.
+ * The advisor moves between `/app/crm`, `/app/crm/:id/:tab`,
+ * `/app/intake`, `/app/tasks`, `/app/reports`, etc. The voice agent
+ * needs to know which one is active so it can produce contextually
+ * appropriate responses ("you're on Sarah's overview, do you want me
+ * to summarize her holdings?").
+ *
+ * Privacy rule: this is the ONLY function that turns React/router
+ * state into agent-visible JSON. It avoids PII the advisor doesn't
+ * need spoken aloud:
+ *   - email addresses → never included
+ *   - DOB → omitted (age is fine)
+ *   - SSN → never in our model; defensive-omitted anyway
+ *   - account numbers → never included
  */
 
-import type { AppStep, FocusPayload, FocusSnapshot } from "./types";
+import type { FocusPayload, FocusSnapshot } from "./types";
 
+/**
+ * The advisor's current location + active-client context as known by
+ * the voice host (ChatWidget). Populated by the host from
+ * `usePathname()` and the chat location context — no React imports
+ * here so this stays a pure module.
+ */
 export interface VoiceAppState {
-  step: AppStep;
-  intakeStep: number;
-  activeReviewId: string | null;
-  clientFirstName?: string | null;
-  clientLastName?: string | null;
-  clientAge?: number | null;
-  clientRiskProfile?: string | null;
-  holdingsCount: number;
-  totalValue?: number | null;
-  incomeReadinessScore?: number | null;
-  redFlagCount?: number | null;
-  recentClientCount: number;
-  savedReviewCount: number;
+  /** Current pathname, e.g. "/app/crm/123/overview". */
+  pathname: string;
+  /** Tab segment if on a client detail page, else null. */
+  clientTab: string | null;
+  /** Currently focused client id (URL or chat context), else null. */
+  activeClientId: string | null;
+  /** Display name for the active client when known, else null. */
+  activeClientName: string | null;
 }
 
-const INTAKE_STEP_TITLES = [
-  "Who is this review for",
-  "Client age",
-  "AGI on most recent return",
-  "Federal tax bracket",
-  "Expected retirement age",
-  "Annual spendable income in retirement",
-  "Social Security",
-  "Risk profile",
-  "Calibration model",
-  "Client goal statement",
-];
+/**
+ * Coarse classification of the active route so the prompt can produce
+ * appropriate behavior without parsing pathnames itself. The list
+ * mirrors the new MobileNav / AppRail primary-nav items + the client
+ * detail surfaces.
+ */
+export type VoiceLocation =
+  | "home"
+  | "intake"
+  | "tasks"
+  | "reports"
+  | "report"
+  | "clients"
+  | "client"
+  | "settings"
+  | "other";
 
-function clientLabel(state: VoiceAppState): string {
-  const first = (state.clientFirstName ?? "").trim();
-  const lastInitial = (state.clientLastName ?? "").trim().charAt(0);
-  if (first && lastInitial) return `${first} ${lastInitial}.`;
-  if (first) return first;
-  return "a new client";
+export function classifyLocation(pathname: string): VoiceLocation {
+  if (pathname === "/app" || pathname === "/app/") return "home";
+  if (pathname.startsWith("/app/intake")) return "intake";
+  if (pathname.startsWith("/app/tasks")) return "tasks";
+  if (pathname.startsWith("/app/reports/") && pathname !== "/app/reports")
+    return "report";
+  if (pathname.startsWith("/app/reports")) return "reports";
+  if (pathname.startsWith("/app/crm/") && pathname !== "/app/crm/")
+    return "client";
+  if (pathname.startsWith("/app/crm")) return "clients";
+  if (pathname.startsWith("/app/settings")) return "settings";
+  return "other";
 }
+
+const TAB_DESCRIPTIONS: Record<string, string> = {
+  overview: "the client's overview (snapshot card, pinned note, summary).",
+  workflow: "the workflow tab (Roth, FIA, fee analysis, retirement income).",
+  notes: "the notes tab.",
+  timeline: "the timeline / activity feed.",
+  tasks: "the tasks tab for this client.",
+  documents: "the documents tab (statements + reports).",
+  contacts: "the contacts tab (household members + linked people).",
+};
 
 export function focusDescription(state: VoiceAppState): string {
-  const who = clientLabel(state);
-  switch (state.step) {
-    case "intake": {
-      const title = INTAKE_STEP_TITLES[state.intakeStep] ?? "intake";
-      return `Intake step ${state.intakeStep + 1} of 10 (${title}) for ${who}.`;
-    }
-    case "upload":
-      return `Statement upload screen for ${who}.`;
-    case "confirm":
-      return `Confirming ${state.holdingsCount} extracted holdings for ${who}.`;
-    case "analysis": {
-      const score = state.incomeReadinessScore ?? "n/a";
-      const flags = state.redFlagCount ?? 0;
-      return `Portfolio analysis for ${who} — income readiness ${score}, ${state.holdingsCount} holdings, ${flags} red flag${flags === 1 ? "" : "s"}.`;
-    }
-    case "meeting":
-      return `Meeting guide / talking points for ${who}.`;
-    case "fia":
-      return `Fixed Income Annuity calculator for ${who}.`;
-    case "roth":
-      return `Roth conversion worksheet for ${who}.`;
-    case "retIncome":
-      return `Retirement income projection for ${who}.`;
+  const location = classifyLocation(state.pathname);
+  const clientLabel = state.activeClientName ?? "the active client";
+
+  switch (location) {
+    case "home":
+      return "AdvisorPilot home — the legacy workflow shell. No specific client active.";
+    case "intake":
+      return state.activeClientName
+        ? `Intake wizard, currently working on ${clientLabel}.`
+        : "Intake wizard for a brand-new client.";
+    case "tasks":
+      return state.activeClientName
+        ? `Tasks for ${clientLabel}.`
+        : "Tasks view (all of the advisor's tasks).";
+    case "reports":
+      return "Reports library (all of the advisor's reports).";
     case "report":
-      return `PDF report generation for ${who}.`;
-    case "saved":
-      return `Saved clients screen (${state.savedReviewCount} clients).`;
+      return "Single-report viewer.";
+    case "clients":
+      return "Client roster — the advisor is browsing their full client list.";
+    case "client":
+      if (state.clientTab && TAB_DESCRIPTIONS[state.clientTab]) {
+        return `Looking at ${clientLabel} — ${TAB_DESCRIPTIONS[state.clientTab]}`;
+      }
+      return `Looking at ${clientLabel}'s profile.`;
+    case "settings":
+      return "Settings dialog.";
     default:
-      return `AdvisorPilot — current screen.`;
+      return `AdvisorPilot — ${state.pathname}.`;
   }
 }
 
 export function focusPayload(state: VoiceAppState): FocusPayload {
   const snapshot: FocusSnapshot = {
-    step: state.step,
-    intakeStep: state.intakeStep,
-    activeReviewId: state.activeReviewId,
-    clientFirstName: state.clientFirstName ?? null,
-    clientAge: state.clientAge ?? null,
-    clientRiskProfile: state.clientRiskProfile ?? null,
-    holdingsCount: state.holdingsCount,
-    totalValue: state.totalValue ?? null,
-    incomeReadinessScore: state.incomeReadinessScore ?? null,
-    redFlagCount: state.redFlagCount ?? null,
-    recentClientCount: state.recentClientCount,
-    savedReviewCount: state.savedReviewCount,
+    pathname: state.pathname,
+    location: classifyLocation(state.pathname),
+    clientTab: state.clientTab,
+    activeClientId: state.activeClientId,
+    activeClientName: state.activeClientName,
   };
   return {
     description: focusDescription(state),

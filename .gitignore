@@ -39,3 +39,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+examples/*
+examples/
+
+# database schema dumps (workspace artifact; source of truth lives in supabase/*.sql migration files)
+schema.sql
+schema-*.sql
+data.sql
+data-*.sql
+
+# supabase CLI temp state (created by `supabase link`)
+supabase/.temp/

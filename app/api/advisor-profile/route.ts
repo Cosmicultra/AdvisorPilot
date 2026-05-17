@@ -91,6 +91,7 @@ function sanitizeModelOverrides(v: unknown): Record<string, string> | null {
     "research.deep",
     "synthesis.json",
     "fee-analysis",
+    "chat",
     "tts",
     "stt",
   ]);

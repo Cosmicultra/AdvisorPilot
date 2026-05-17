@@ -1,11 +1,20 @@
 import { getServerSession } from "next-auth";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+// Service-role client — LAZILY initialized so module import doesn't crash
+// when env vars are missing (the Supabase JS SDK now validates URL up-front,
+// which used to silently no-op on empty strings). Same pattern as
+// lib/crm/supabase-admin.ts and lib/crm/ensure-personal-org.ts.
+let _supabaseAdmin: SupabaseClient | null = null;
+function getSupabaseAdmin(): SupabaseClient | null {
+  if (_supabaseAdmin) return _supabaseAdmin;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+  _supabaseAdmin = createClient(url, key);
+  return _supabaseAdmin;
+}
 
 export type AdvisorIdentity = {
   email: string;
@@ -35,6 +44,11 @@ export async function resolveAdvisorIdentity(request: Request): Promise<AdvisorI
   if (auth?.startsWith("Bearer ")) {
     const jwt = auth.slice(7).trim();
     if (!jwt) return null;
+    const supabaseAdmin = getSupabaseAdmin();
+    // When Supabase env is missing we silently fail closed — same outcome
+    // as an invalid JWT (the route handler returns 401). Better than
+    // throwing and breaking the whole request.
+    if (!supabaseAdmin) return null;
     const { data, error } = await supabaseAdmin.auth.getUser(jwt);
     if (error || !data.user?.email) return null;
     return {

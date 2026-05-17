@@ -1,10 +1,40 @@
 /**
- * Helpers shared between the voice agent's tool handlers and the host page's
- * `voiceActions` adapter. Pure data shaping over the already-loaded
- * `savedReviews` array — no API calls, no react state.
+ * Holdings + allocation projection helpers — pure data shaping over a
+ * saved review.
+ *
+ * Originally lived alongside the voice agent's old tool handlers; voice
+ * v3 deleted those handlers (`lib/voice/tool-handlers.ts` is now just
+ * navigate + chat), so the projection shapes that used to be exported
+ * from tool-handlers live here directly. Consumers today are:
+ *   - components/crm/overview/current-allocation-card.tsx
+ *   - (formerly) the voice agent — now uses chat() to ask Nova instead.
+ *
+ * Kept under lib/voice/ for path stability; consider a `lib/projections/`
+ * move next time we touch the surface.
  */
 
-import type { HoldingsBreakdown, AllocationSummary } from "./tool-handlers";
+export interface HoldingPosition {
+  ticker: string;
+  name: string;
+  assetClass: string;
+  valueUsd: number;
+  weightPct: number;
+}
+
+export interface HoldingsBreakdown {
+  clientId: string;
+  totalValue: number;
+  holdingCount: number;
+  /** Top 5 positions by weight. */
+  topPositions: HoldingPosition[];
+}
+
+export interface AllocationSummary {
+  clientId: string;
+  totalValue: number;
+  /** Bucketed allocation in dollars + percentages. */
+  buckets: Array<{ name: string; valueUsd: number; weightPct: number }>;
+}
 
 interface ReviewHolding {
   rawName?: string | null;

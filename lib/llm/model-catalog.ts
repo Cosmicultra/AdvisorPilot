@@ -22,6 +22,7 @@ export const MODEL_CATALOG: Record<LlmProvider, Partial<Record<LlmPass, string[]
     "research.deep": ["gpt-4o"],
     "synthesis.json": ["gpt-4o", "gpt-4o-mini"],
     "fee-analysis": ["gpt-4o-mini", "gpt-4o"],
+    chat: ["gpt-4o", "gpt-4o-mini"],
     tts: ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"],
     stt: ["whisper-1"],
   },
@@ -33,6 +34,7 @@ export const MODEL_CATALOG: Record<LlmProvider, Partial<Record<LlmPass, string[]
     "research.deep": ["gemini-2.5-pro"],
     "synthesis.json": ["gemini-2.5-flash", "gemini-2.5-pro"],
     "fee-analysis": ["gemini-2.5-flash-lite", "gemini-2.5-flash"],
+    chat: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
     // TTS/STT fall back to OpenAI in v1 — not user-selectable here.
   },
   grok: {
@@ -43,6 +45,7 @@ export const MODEL_CATALOG: Record<LlmProvider, Partial<Record<LlmPass, string[]
     "research.deep": ["grok-4.3"],
     "synthesis.json": ["grok-4.3"],
     "fee-analysis": ["grok-4.3"],
+    chat: ["grok-4.3", "grok-4.3-latest"],
   },
 };
 
@@ -62,6 +65,7 @@ const PASS_LABELS: Record<LlmPass, string> = {
   "research.deep": "Deep research (background, multi-step)",
   "synthesis.json": "Portfolio synthesis JSON",
   "fee-analysis": "Fee analysis (fund expense ratio lookup)",
+  chat: "Chat assistant (in-app orchestrator)",
   tts: "Voice intake — text-to-speech",
   stt: "Voice intake — speech-to-text",
 };
@@ -77,6 +81,7 @@ export function modelOptionsForProvider(provider: LlmProvider): ProviderPassEntr
     "research.deep",
     "synthesis.json",
     "fee-analysis",
+    "chat",
     "tts",
     "stt",
   ];
