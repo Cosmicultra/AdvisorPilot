@@ -26,7 +26,7 @@ AdvisorPilot is a Next.js (App Router) web app for financial advisors to:
 
 ## How the app works (end-to-end)
 
-The advisor product is a single client component at **`app/app/page.tsx`** (`app/page.tsx` is the public marketing site). The workflow drives these route handlers:
+The advisor product lives at **`app/app/page.tsx`** — a server-component entry that wraps the legacy client shell in **`app/app/legacy-app-shell.tsx`** inside a `<Suspense>` boundary (`app/page.tsx` is the public marketing site). The workflow drives these route handlers:
 
 ### Statement → analysis pipeline
 
