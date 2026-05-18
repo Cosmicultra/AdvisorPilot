@@ -28,7 +28,7 @@ export async function isGmailConnected(req?: Request): Promise<boolean> {
 
   try {
     const token = (await getToken({
-      req,
+      req: req as Parameters<typeof getToken>[0]["req"],
       secret: process.env.NEXTAUTH_SECRET,
     })) as JwtWithRefresh | null;
     return Boolean(token?.accessToken || token?.refreshToken);

@@ -209,7 +209,8 @@ export const POST = async (req: Request) => {
       owner_user_id: identity.userId,
       client: body?.client || {},
       holdings: Array.isArray(body?.holdings) ? body.holdings : [],
-      meeting_notes: body?.meetingNotes || "",
+      meeting_notes:
+        typeof body?.meetingNotes === "string" ? body.meetingNotes : "",
       demo_mode: Boolean(body?.demoMode),
       analysis: body?.analysis || null,
       total_value: Number(body?.totalValue || 0),
@@ -225,7 +226,7 @@ export const POST = async (req: Request) => {
       payload.status = "Analyzed";
     }
 
-    if (body?.lastContactedAt) {
+    if (typeof body?.lastContactedAt === "string" && body.lastContactedAt) {
       payload.last_contacted_at = body.lastContactedAt;
     }
 

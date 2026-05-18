@@ -310,7 +310,7 @@ function allocationData(equity: number, fixedIncome: number, cash: number) {
 }
 
 function allocationDataCurrent(percents: { equity: number; fixedIncome: number; cash: number; other: number }) {
-  const items = [
+  const items: { label: string; value: number; color: string }[] = [
     { label: "Equity", value: percents.equity, color: ALLOCATION_SLEEVE_COLORS.equity },
     { label: "Fixed", value: percents.fixedIncome, color: ALLOCATION_SLEEVE_COLORS.fixedIncome },
     { label: "Cash", value: percents.cash, color: ALLOCATION_SLEEVE_COLORS.cash },
