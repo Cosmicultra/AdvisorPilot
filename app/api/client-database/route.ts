@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
+import {
+  clientSaveChangedSections,
+  clientSaveUpdateSummary,
+  type ClientSaveSnapshot,
+} from "@/lib/crm/client-update-summary";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,6 +61,50 @@ function isMissingUpdatedRow(error: { code?: string; message?: string } | null) 
   if (error.code === "PGRST116") return true;
   const m = String(error.message || "").toLowerCase();
   return m.includes("0 rows") || m.includes("json object requested");
+}
+
+function snapshotFromRecord(record: ClientRecord): ClientSaveSnapshot {
+  return {
+    client: record.client ?? {},
+    holdings: Array.isArray(record.holdings) ? record.holdings : [],
+    meeting_notes: record.meeting_notes || "",
+    demo_mode: Boolean(record.demo_mode),
+    analysis: record.analysis ?? null,
+    total_value: Number(record.total_value || 0),
+    status: record.status || "Analyzed",
+    last_contacted_at: record.last_contacted_at || null,
+    roth_worksheet: record.roth_worksheet ?? null,
+  };
+}
+
+function snapshotFromPayload(
+  payload: ClientPayload,
+  existing: ClientRecord | null,
+  body: Record<string, unknown>
+): ClientSaveSnapshot {
+  const status =
+    typeof payload.status === "string"
+      ? payload.status
+      : existing?.status || "Analyzed";
+  const lastContacted =
+    typeof body.lastContactedAt === "string" && body.lastContactedAt
+      ? String(body.lastContactedAt)
+      : existing?.last_contacted_at || null;
+  const rothWorksheet = Object.prototype.hasOwnProperty.call(body, "rothWorksheet")
+    ? (payload.roth_worksheet ?? null)
+    : (existing?.roth_worksheet ?? null);
+
+  return {
+    client: payload.client,
+    holdings: payload.holdings,
+    meeting_notes: payload.meeting_notes,
+    demo_mode: payload.demo_mode,
+    analysis: payload.analysis,
+    total_value: payload.total_value,
+    status,
+    last_contacted_at: lastContacted,
+    roth_worksheet: rothWorksheet,
+  };
 }
 
 function mapRecord(record: ClientRecord) {
@@ -132,8 +181,28 @@ export const POST = async (req: Request) => {
       );
     }
 
-    const body = await req.json();
-    const existingId = body?.id || null;
+    const body = (await req.json()) as Record<string, unknown>;
+    const existingId = (typeof body?.id === "string" && body.id) || null;
+
+    let existingRecord: ClientRecord | null = null;
+    if (existingId) {
+      const { data: existingRow, error: existingErr } = await supabaseAdmin
+        .from("advisorpilot_clients")
+        .select("*")
+        .eq("id", existingId)
+        .eq("owner_email", identity.email)
+        .maybeSingle();
+      if (existingErr) {
+        return NextResponse.json({ error: existingErr.message }, { status: 400 });
+      }
+      if (!existingRow) {
+        return NextResponse.json(
+          { error: "Saved client not found or access denied." },
+          { status: 404 }
+        );
+      }
+      existingRecord = existingRow as ClientRecord;
+    }
 
     const payload: ClientPayload = {
       owner_email: identity.email,
@@ -188,13 +257,28 @@ export const POST = async (req: Request) => {
     }
 
     const saved = mapRecord(result.data as ClientRecord);
+    const afterSnapshot = snapshotFromPayload(payload, result.data as ClientRecord, body);
+    const changedSections = existingRecord
+      ? clientSaveChangedSections(snapshotFromRecord(existingRecord), afterSnapshot)
+      : [];
+    const updateSummary = clientSaveUpdateSummary(changedSections);
+
     await writeAuditEvent({
       ownerEmail: identity.email,
       ownerUserId: identity.userId,
       action: existingId ? "client.updated" : "client.created",
       entityType: "client",
       entityId: saved.id,
-      metadata: { status: payload.status || null, holdingsCount: payload.holdings.length },
+      metadata: {
+        status: afterSnapshot.status,
+        holdingsCount: payload.holdings.length,
+        ...(existingId
+          ? {
+              changedSections,
+              summary: updateSummary || undefined,
+            }
+          : {}),
+      },
     });
 
     return NextResponse.json({

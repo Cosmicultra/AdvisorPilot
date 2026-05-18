@@ -1,5 +1,9 @@
+import { Suspense } from "react";
 import { LegacyEmbed } from "@/components/crm/legacy-embed";
-import { TopHeader } from "@/components/crm/top-header";
+import {
+  IntakeTopHeader,
+  IntakeTopHeaderFallback,
+} from "@/components/crm/intake-top-header";
 
 /**
  * /app/intake — clicking "Intake" on the CRM rail brings the user here.
@@ -20,9 +24,11 @@ export const dynamic = "force-dynamic";
 
 export default function IntakePage() {
   return (
-    <>
-      <TopHeader title="Intake" subtitle="New client wizard" />
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <Suspense fallback={<IntakeTopHeaderFallback />}>
+        <IntakeTopHeader />
+      </Suspense>
       <LegacyEmbed />
-    </>
+    </div>
   );
 }

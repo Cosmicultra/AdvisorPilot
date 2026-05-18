@@ -1,4 +1,4 @@
-﻿import { normalizeIntakeClient, type IntakeClient } from "@/lib/intake-config";
+import { normalizeIntakeClient, type IntakeClient } from "@/lib/intake-config";
 import { normalizeRothWorksheet, type RothWorksheet } from "@/lib/roth-worksheet";
 import type { HoldingValidationMetadata, HoldingValidationStatus } from "@/lib/holding-validation";
 import {
@@ -8,6 +8,7 @@ import {
 import { canonicalizeAssetClass } from "@/lib/asset-classes";
 import { deriveHoldingStatus } from "@/lib/holding-status";
 import { applySyntheticCashTickerIfEligible } from "@/lib/holding-validation";
+import { maskAccountNumberDisplay } from "@/lib/mask-account-number";
 
 export type UiHolding = {
   rawName: string;
@@ -115,7 +116,7 @@ export function normalizeHoldingsForUi(raw: unknown): UiHolding[] {
       base.sourceFileIndex = h.sourceFileIndex;
     }
     const acct = typeof h.accountNumber === "string" ? h.accountNumber.trim() : "";
-    if (acct) base.accountNumber = acct;
+    if (acct) base.accountNumber = maskAccountNumberDisplay(acct);
     base.registrationType = normalizeRegistrationType(
       (h.registrationType as RegistrationBucket | undefined) ?? "unknown"
     );

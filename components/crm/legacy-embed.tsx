@@ -45,9 +45,9 @@
  *     visual; both the horizontal (legacy) and vertical (CRM-embedded)
  *     forms render from the same DOM.
  *
- * Layout primitive: flexbox row on `.ap-app-bg`. The wizard rail
- * becomes a fixed-width sticky left column; the main content div takes
- * the remaining width. Other children of `.ap-app-bg` are either:
+ * Layout primitive: flexbox row on `.ap-app-bg` (CRM Roster model).
+ * The wizard rail is a fixed-width left pane; only the main content
+ * column scrolls. Other children of `.ap-app-bg` are either:
  *   - non-layout (`<style>`)
  *   - `display:none` already (legacy `.ap-top-nav` header)
  *   - portaled (the various dialogs)
@@ -59,7 +59,7 @@ import LegacyAppShell from "@/app/app/legacy-app-shell";
 
 export function LegacyEmbed() {
   return (
-    <div className="ap-legacy-embed flex-1 overflow-y-auto">
+    <div className="ap-legacy-embed flex min-h-0 flex-1 flex-col overflow-hidden">
       <style>{`
         /* Hide the legacy top nav — the CRM rail + top header (when present)
            replace it. */
@@ -78,31 +78,27 @@ export function LegacyEmbed() {
            the rail and the main content column both stretch to that
            full height, giving us the CRM Roster's full-bleed-column
            feel. */
+        /* Two-pane layout (same model as CRM Roster): wizard rail stays
+           fixed-height; only the main form column scrolls. */
         .ap-legacy-embed .ap-app-bg {
           background: transparent !important;
-          min-height: 100% !important;
+          flex: 1 1 auto !important;
+          min-height: 0 !important;
+          height: 100% !important;
+          max-height: 100% !important;
           display: flex !important;
           flex-direction: row !important;
           align-items: stretch !important;
           gap: 0 !important;
+          overflow: hidden !important;
         }
 
-        /* Wizard rail wrapper → mirrors the CRM Roster's white aside.
-           Stretches to fill the full row height (same pattern as
-           <RosterList />'s h-full w-[360px] aside). The white surface +
-           strong right border reach all the way to the bottom of the
-           embed regardless of how short the step list is.
-           Critically NOT sticky — we delegate sticky behavior to the
-           inner step list (see below). Stretch + sticky in flex
-           parents is a known CSS conflict (sticky elements use their
-           content height and ignore align-self: stretch), so we
-           separate the two responsibilities:
-             - outer wrapper: stretches full-height, provides the
-               white wrapper + border-right that the user wants to
-               reach the bottom of the page
-             - inner step list: stays sticky and viewport-tall so the
-               navigation is always reachable while scrolling long
-               intake forms */
+        /* Override legacy min-h-screen so height chains from CRM shell. */
+        .ap-legacy-embed > .ap-app-bg {
+          min-height: 0 !important;
+        }
+
+        /* Wizard rail — full-height left pane (does not scroll with form). */
         .ap-legacy-embed .ap-wizard-rail {
           flex: 0 0 320px !important;
           width: 320px !important;
@@ -110,6 +106,8 @@ export function LegacyEmbed() {
           align-self: stretch !important;
           display: flex !important;
           flex-direction: column !important;
+          min-height: 0 !important;
+          overflow: hidden !important;
           background-color: #ffffff !important;
           border-right: 1px solid var(--ap-border-strong, var(--ap-border)) !important;
           border-left: none !important;
@@ -117,19 +115,10 @@ export function LegacyEmbed() {
           border-bottom: none !important;
         }
 
-        /* Inner step list → the actual scrolling, sticky surface. Pinned
-           to the top of the embed's scroll viewport so the buttons
-           stay reachable as the advisor scrolls. max-height: 100vh
-           keeps the list within the viewport; overflow-y: auto engages
-           if a future wizard grows past ~14 steps.
-           Header strip below is injected via ::before INSIDE this
-           sticky element so the "WORKFLOW" label sticks too — without
-           that, the label would scroll off the top of the white
-           wrapper while the steps stayed visible. */
+        /* Step list scrolls inside the rail only when steps exceed height. */
         .ap-legacy-embed .ap-wizard-rail-inner {
-          position: sticky !important;
-          top: 0 !important;
-          max-height: 100vh !important;
+          flex: 1 1 auto !important;
+          min-height: 0 !important;
           overflow-y: auto !important;
           display: flex !important;
           flex-direction: column !important;
@@ -235,15 +224,14 @@ export function LegacyEmbed() {
           color: var(--ap-royal) !important;
         }
 
-        /* Main content column takes the remaining width. Targets the
-           legacy's max-w-7xl wrapper specifically (the only other
-           layout-relevant direct child of .ap-app-bg). flex: 1 1 0 with
-           min-width: 0 so long form fields and code blocks can shrink
-           instead of forcing horizontal scroll on the whole embed. */
+        /* Main content column — this is the only pane that scrolls. */
         .ap-legacy-embed .ap-app-bg > div.mx-auto {
           flex: 1 1 0 !important;
           min-width: 0 !important;
+          min-height: 0 !important;
           max-width: none !important;
+          overflow-y: auto !important;
+          overflow-x: hidden !important;
         }
 
         /* ────────────────────────────────────────────────────────────
@@ -310,17 +298,9 @@ export function LegacyEmbed() {
             flex-direction: column !important;
           }
 
-          /* Rail becomes a full-width 52px sticky top strip. Sticky
-             (not fixed) keeps it scoped to the embed's scroll viewport
-             so it doesn't overlap the page-level TopHeader above.
-             Reminder: NO backticks inside this <style> template literal
-             -- they terminate the surrounding JS template string. */
+          /* Rail becomes a fixed 52px top strip; form scrolls below. */
           .ap-legacy-embed .ap-wizard-rail {
-            position: sticky !important;
-            top: 0 !important;
-            left: auto !important;
-            right: auto !important;
-            bottom: auto !important;
+            position: static !important;
             width: 100% !important;
             max-width: none !important;
             height: 52px !important;

@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import type { Session } from "next-auth";
 import { signIn, signOut } from "next-auth/react";
 import { DropdownMenu } from "radix-ui";
+import { CurrencyAmountInput } from "@/components/currency-amount-input";
 import { LogoBlock } from "@/components/logo-block";
 import { LlmSettingsButton } from "@/components/llm-settings-button";
 import {
@@ -143,8 +144,7 @@ import {
   sumTraditionalQualifiedValue,
   type RegistrationBucket,
 } from "@/lib/holding-registration";
-import type { LiveIntakeHandoffAction } from "@/lib/live-intake-scripts";
-import { LiveIntakeOverlay } from "@/components/live-intake-overlay";
+import { maskAccountNumberDisplay } from "@/lib/mask-account-number";
 import { FiaScenarioReturnChart } from "@/components/fia-scenario-return-chart";
 import { ASSET_CLASSES, classifyAllocationBucket, isCanonicalAssetClass } from "@/lib/asset-classes";
 import {
@@ -152,6 +152,7 @@ import {
   parseAdvisorFeePercentPoints,
   type FeeAnalysisApiResponse,
 } from "@/lib/fee-analysis";
+import { ALLOCATION_SLEEVE_COLORS } from "@/lib/allocation-display";
 import { bucketValuesToPercents, allocationForRiskModel } from "@/lib/allocation-math";
 import {
   TEN_YEAR_SCENARIOS,
@@ -302,20 +303,20 @@ function targetAllocation(age: number, riskProfile: string) {
 
 function allocationData(equity: number, fixedIncome: number, cash: number) {
   return [
-    { label: "Equity", value: equity, color: "#0f766e" },
-    { label: "Fixed", value: fixedIncome, color: "#1d4ed8" },
-    { label: "Cash", value: cash, color: "#c99700" },
+    { label: "Equity", value: equity, color: ALLOCATION_SLEEVE_COLORS.equity },
+    { label: "Fixed", value: fixedIncome, color: ALLOCATION_SLEEVE_COLORS.fixedIncome },
+    { label: "Cash", value: cash, color: ALLOCATION_SLEEVE_COLORS.cash },
   ];
 }
 
 function allocationDataCurrent(percents: { equity: number; fixedIncome: number; cash: number; other: number }) {
   const items = [
-    { label: "Equity", value: percents.equity, color: "#0f766e" },
-    { label: "Fixed", value: percents.fixedIncome, color: "#1d4ed8" },
-    { label: "Cash", value: percents.cash, color: "#c99700" },
+    { label: "Equity", value: percents.equity, color: ALLOCATION_SLEEVE_COLORS.equity },
+    { label: "Fixed", value: percents.fixedIncome, color: ALLOCATION_SLEEVE_COLORS.fixedIncome },
+    { label: "Cash", value: percents.cash, color: ALLOCATION_SLEEVE_COLORS.cash },
   ];
   if (percents.other > 0) {
-    items.push({ label: "Unclassified", value: percents.other, color: "#64748b" });
+    items.push({ label: "Unclassified", value: percents.other, color: ALLOCATION_SLEEVE_COLORS.other });
   }
   return items;
 }
@@ -956,8 +957,7 @@ export default function AdvisorPilotPage() {
 
   const [step, setStep] = useState("intake");
   const [intakeStep, setIntakeStep] = useState(0);
-  const [liveIntakeOpen, setLiveIntakeOpen] = useState(false);
-  /** After live intake, scroll Statement Capture to client link vs advisor upload. */
+  /** Scroll Statement Capture to client link vs advisor upload after handoff. */
   const [uploadSectionFocus, setUploadSectionFocus] = useState<"client_link" | "advisor_upload" | null>(null);
 
   useEffect(() => {
@@ -2307,71 +2307,6 @@ export default function AdvisorPilotPage() {
     }
   }
 
-  async function completeLiveIntakeToUpload(handoff: LiveIntakeHandoffAction) {
-    try {
-      if (handoff === "digital_email") {
-        const minted = await mintClientUploadLink();
-        if (!minted.ok) {
-          setMagicLinkErr(minted.error);
-          setLiveIntakeOpen(false);
-          setStep("upload");
-          setUploadSectionFocus("client_link");
-          return;
-        }
-        setMagicLinkUrl(minted.uploadUrl);
-        setMagicLinkExpiresAt(minted.expiresAt);
-
-        const to = client.advisorEmail?.trim();
-        if (!to) {
-          setMagicLinkErr("Add the client email on the intake form to send the upload link.");
-          setLiveIntakeOpen(false);
-          setStep("upload");
-          setUploadSectionFocus("client_link");
-          return;
-        }
-
-        const advisorNameForEmail =
-          signatureName.trim() || String(session?.user?.name || "").trim() || "";
-
-        const em = await fetch("/api/email-client-upload-link", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            to,
-            uploadUrl: minted.uploadUrl,
-            clientFirstName: clientFirstNameSalutation(client),
-            advisorName: advisorNameForEmail,
-          }),
-        });
-        const mailData = await em.json();
-        if (!em.ok) {
-          setMagicLinkErr(mailData.error || "Could not send email.");
-          setLiveIntakeOpen(false);
-          setStep("upload");
-          setUploadSectionFocus("client_link");
-          return;
-        }
-        setMagicLinkErr("");
-        setLiveIntakeOpen(false);
-        setStep("upload");
-        setUploadSectionFocus("client_link");
-        return;
-      }
-
-      setLiveIntakeOpen(false);
-      setStep("upload");
-      if (handoff === "advisor_upload") {
-        setUploadSectionFocus("advisor_upload");
-      } else {
-        setUploadSectionFocus(null);
-      }
-    } catch {
-      setMagicLinkErr("Something went wrong finishing live intake.");
-      setLiveIntakeOpen(false);
-      setStep("upload");
-    }
-  }
-
   function backIntake() {
     if (intakeStep === 7) {
       const screen = client.riskIntakeScreen;
@@ -2415,30 +2350,6 @@ export default function AdvisorPilotPage() {
     }
     if (intakeStep > 0) setIntakeStep(intakeStep - 1);
   }
-
-  const liveIntakeFooter = useMemo(
-    () => (
-      <button
-        type="button"
-        aria-label="Profile AutoPilot"
-        onClick={() => setLiveIntakeOpen(true)}
-        className="group inline-flex flex-col items-center gap-2 rounded-none bg-transparent px-2 py-1 text-center transition hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-700 focus-visible:ring-offset-2"
-      >
-        <Image
-          src="/logo.png"
-          alt=""
-          aria-hidden
-          width={96}
-          height={96}
-          className="h-16 w-auto rounded-none object-contain drop-shadow-[0_8px_18px_rgba(14,116,235,0.18)] transition group-hover:drop-shadow-[0_12px_24px_rgba(14,116,235,0.32)] md:h-[4.5rem]"
-        />
-        <span className="font-serif text-sm font-semibold leading-tight tracking-tight text-blue-900 transition group-hover:text-blue-950">
-          Profile AutoPilot
-        </span>
-      </button>
-    ),
-    []
-  );
 
   async function loadSavedReviews() {
     const ownerEmail = getCurrentOwnerEmail();
@@ -2578,7 +2489,6 @@ export default function AdvisorPilotPage() {
     setMagicLinkExpiresAt("");
     setMagicLinkErr("");
     setMagicLinkCopied(false);
-    setLiveIntakeOpen(false);
     setUploadSectionFocus(null);
   }, []);
 
@@ -4041,19 +3951,8 @@ async function downloadPDFReport(mode: "client" | "advisor") {
           </Card>
         )}
 
-        {step === "intake" && liveIntakeOpen && (
-          <LiveIntakeOverlay
-            intakeStep={intakeStep}
-            client={client}
-            setClient={setClient}
-            advisorDisplayName={advisorVoiceName}
-            onAdvanceStep={nextIntake}
-            onCompleteToUpload={completeLiveIntakeToUpload}
-            onClose={() => setLiveIntakeOpen(false)}
-          />
-        )}
         <div key={`${step}-${step === "intake" ? intakeStep : "main"}`} className="ap-step-enter">
-        {step === "intake" && intakeStep === 0 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[0].eyebrow} title={INTAKE_STEPS[0].title} helper={INTAKE_STEPS[0].helper} onBack={backIntake} backDisabled onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4">
+        {step === "intake" && intakeStep === 0 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[0].eyebrow} title={INTAKE_STEPS[0].title} helper={INTAKE_STEPS[0].helper} onBack={backIntake} backDisabled onNext={nextIntake} nextDisabled={intakeContinueDisabled}><div className="space-y-4">
   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
     <div>
       <label className="text-sm font-semibold text-slate-700">First name</label>
@@ -4108,7 +4007,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
     </div>
   ) : null}
 </div></IntakeShell>}
-        {step === "intake" && intakeStep === 1 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[1].eyebrow} title={INTAKE_STEPS[1].title} helper={INTAKE_STEPS[1].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-6"><div><p className="text-sm font-semibold text-slate-800">Client</p><div className="mt-2 grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Date of birth</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="date" value={client.dob} onChange={(e) => {
+        {step === "intake" && intakeStep === 1 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[1].eyebrow} title={INTAKE_STEPS[1].title} helper={INTAKE_STEPS[1].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled}><div className="space-y-6"><div><p className="text-sm font-semibold text-slate-800">Client</p><div className="mt-2 grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Date of birth</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="date" value={client.dob} onChange={(e) => {
   const dob = e.target.value;
   const calculatedAge = getAgeFromDob(dob);
   setClient({
@@ -4125,11 +4024,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
     spouseAge: calculatedAge !== null ? String(calculatedAge) : client.spouseAge,
   });
 }} /></div><div><label className="text-sm font-semibold text-slate-700">Or age</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.spouseAge} onChange={(e) => setClient({ ...client, spouseAge: e.target.value })} placeholder="60" /></div></div></div>) : null}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 2 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[2].eyebrow} title={INTAKE_STEPS[2].title} helper={INTAKE_STEPS[2].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Adjusted Gross Income (AGI), most recent federal return</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.adjustedGrossIncomeAnnual} onChange={(e) => setClient({ ...client, adjustedGrossIncomeAnnual: e.target.value })} placeholder="165432" /></div><p className="mt-2 text-sm text-slate-500">Use Form 1040 AGI for the latest filed year, for illustration only, not a tax determination.</p></div></IntakeShell>}
-        {step === "intake" && intakeStep === 3 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[3].eyebrow} title={INTAKE_STEPS[3].title} helper={INTAKE_STEPS[3].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Marginal federal tax bracket</label><Select value={FEDERAL_TAX_BRACKET_IDS.includes(client.federalTaxBracket as (typeof FEDERAL_TAX_BRACKET_IDS)[number]) ? client.federalTaxBracket : "22"} onValueChange={(value) => setClient({ ...client, federalTaxBracket: value })}><SelectTrigger className="mt-2 h-14 rounded-none"><SelectValue /></SelectTrigger><SelectContent>{FEDERAL_TAX_BRACKET_IDS.map((id) => <SelectItem key={id} value={id}>{id}% bracket</SelectItem>)}</SelectContent></Select><p className="mt-2 text-sm text-slate-500">Used for illustrative tax math in reports (not a tax determination).</p></div></IntakeShell>}
-        {step === "intake" && intakeStep === 4 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[4].eyebrow} title={INTAKE_STEPS[4].title} helper={INTAKE_STEPS[4].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4"><div><label className="text-sm font-semibold text-slate-700">Expected retirement age (client)</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.retirementAge} onChange={(e) => setClient({ ...client, retirementAge: e.target.value })} placeholder="67" /></div>{client.married ? (<div><label className="text-sm font-semibold text-slate-700">Expected retirement age (spouse)</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.spouseRetirementAge} onChange={(e) => setClient({ ...client, spouseRetirementAge: e.target.value })} placeholder="67" /></div>) : null}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 5 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[5].eyebrow} title={INTAKE_STEPS[5].title} helper={INTAKE_STEPS[5].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div><label className="text-sm font-semibold text-slate-700">Annual spendable income in retirement</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.retirementSpendableIncomeAnnual} onChange={(e) => setClient({ ...client, retirementSpendableIncomeAnnual: e.target.value })} placeholder="85000" /></div></div></IntakeShell>}
-        {step === "intake" && intakeStep === 6 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[6].eyebrow} title={INTAKE_STEPS[6].title} helper={INTAKE_STEPS[6].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="space-y-4"><div className="flex items-center justify-between gap-4 rounded-none border border-blue-100 bg-white px-4 py-3"><span className="text-sm font-semibold text-slate-700">Taking Social Security?</span><button type="button" role="switch" aria-checked={client.takingSocialSecurity} onClick={() => setClient((c) => (c.takingSocialSecurity ? { ...c, takingSocialSecurity: false, socialSecurityMonthlyClient: "", socialSecurityMonthlySpouse: "" } : { ...c, takingSocialSecurity: true }))} className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${client.takingSocialSecurity ? "bg-sky-500" : "bg-slate-200"}`}><span className={`absolute top-1 left-1 block h-6 w-6 rounded-none bg-white shadow transition-transform ${client.takingSocialSecurity ? "translate-x-6" : "translate-x-0"}`} /></button></div>{client.takingSocialSecurity ? (<div className="space-y-4">{client.married ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Client monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div><div><label className="text-sm font-semibold text-slate-700">Spouse monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlySpouse} onChange={(e) => setClient({ ...client, socialSecurityMonthlySpouse: e.target.value })} placeholder="1800" /></div></div></div> : <div><label className="text-sm font-semibold text-slate-700">Monthly Social Security amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div>}</div>) : <p className="text-sm text-slate-500">Leave this off if the household is not receiving benefits yet. You can continue without entering amounts.</p>}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 2 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[2].eyebrow} title={INTAKE_STEPS[2].title} helper={INTAKE_STEPS[2].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled}><div><label className="text-sm font-semibold text-slate-700">Adjusted Gross Income (AGI), most recent federal return</label><CurrencyAmountInput className="mt-2 h-14 rounded-none border-blue-100 bg-white focus-within:ring-sky-500" inputClassName="text-lg" value={client.adjustedGrossIncomeAnnual} onChange={(v) => setClient({ ...client, adjustedGrossIncomeAnnual: v })} placeholder="165,432" /><p className="mt-2 text-sm text-slate-500">Use Form 1040 AGI for the latest filed year, for illustration only, not a tax determination.</p></div></IntakeShell>}
+        {step === "intake" && intakeStep === 3 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[3].eyebrow} title={INTAKE_STEPS[3].title} helper={INTAKE_STEPS[3].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled}><div><label className="text-sm font-semibold text-slate-700">Marginal federal tax bracket</label><Select value={FEDERAL_TAX_BRACKET_IDS.includes(client.federalTaxBracket as (typeof FEDERAL_TAX_BRACKET_IDS)[number]) ? client.federalTaxBracket : "22"} onValueChange={(value) => setClient({ ...client, federalTaxBracket: value })}><SelectTrigger className="mt-2 h-14 rounded-none"><SelectValue /></SelectTrigger><SelectContent>{FEDERAL_TAX_BRACKET_IDS.map((id) => <SelectItem key={id} value={id}>{id}% bracket</SelectItem>)}</SelectContent></Select><p className="mt-2 text-sm text-slate-500">Used for illustrative tax math in reports (not a tax determination).</p></div></IntakeShell>}
+        {step === "intake" && intakeStep === 4 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[4].eyebrow} title={INTAKE_STEPS[4].title} helper={INTAKE_STEPS[4].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled}><div className="space-y-4"><div><label className="text-sm font-semibold text-slate-700">Expected retirement age (client)</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.retirementAge} onChange={(e) => setClient({ ...client, retirementAge: e.target.value })} placeholder="67" /></div>{client.married ? (<div><label className="text-sm font-semibold text-slate-700">Expected retirement age (spouse)</label><Input className="mt-2 h-14 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" type="number" value={client.spouseRetirementAge} onChange={(e) => setClient({ ...client, spouseRetirementAge: e.target.value })} placeholder="67" /></div>) : null}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 5 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[5].eyebrow} title={INTAKE_STEPS[5].title} helper={INTAKE_STEPS[5].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled}><div><label className="text-sm font-semibold text-slate-700">Annual spendable income in retirement</label><CurrencyAmountInput className="mt-2 h-14 rounded-none border-blue-100 bg-white focus-within:ring-sky-500" inputClassName="text-lg" value={client.retirementSpendableIncomeAnnual} onChange={(v) => setClient({ ...client, retirementSpendableIncomeAnnual: v })} placeholder="85,000" /></div></IntakeShell>}
+        {step === "intake" && intakeStep === 6 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[6].eyebrow} title={INTAKE_STEPS[6].title} helper={INTAKE_STEPS[6].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled}><div className="space-y-4"><div className="flex items-center justify-between gap-4 rounded-none border border-blue-100 bg-white px-4 py-3"><span className="text-sm font-semibold text-slate-700">Taking Social Security?</span><button type="button" role="switch" aria-checked={client.takingSocialSecurity} onClick={() => setClient((c) => (c.takingSocialSecurity ? { ...c, takingSocialSecurity: false, socialSecurityMonthlyClient: "", socialSecurityMonthlySpouse: "" } : { ...c, takingSocialSecurity: true }))} className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${client.takingSocialSecurity ? "bg-sky-500" : "bg-slate-200"}`}><span className={`absolute top-1 left-1 block h-6 w-6 rounded-none bg-white shadow transition-transform ${client.takingSocialSecurity ? "translate-x-6" : "translate-x-0"}`} /></button></div>{client.takingSocialSecurity ? (<div className="space-y-4">{client.married ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div><label className="text-sm font-semibold text-slate-700">Client monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div><div><label className="text-sm font-semibold text-slate-700">Spouse monthly amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlySpouse} onChange={(e) => setClient({ ...client, socialSecurityMonthlySpouse: e.target.value })} placeholder="1800" /></div></div></div> : <div><label className="text-sm font-semibold text-slate-700">Monthly Social Security amount</label><div className="mt-2 flex h-14 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500"><span className="pl-4 text-lg font-medium text-slate-600">$</span><Input className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 text-lg shadow-none focus-visible:ring-0" type="text" inputMode="decimal" value={client.socialSecurityMonthlyClient} onChange={(e) => setClient({ ...client, socialSecurityMonthlyClient: e.target.value })} placeholder="2400" /></div></div>}</div>) : <p className="text-sm text-slate-500">Leave this off if the household is not receiving benefits yet. You can continue without entering amounts.</p>}</div></IntakeShell>}
         {step === "intake" && intakeStep === 7 && (
           <IntakeShell
             portfolioStepCurrent={intakeStep + 1}
@@ -4141,7 +4040,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
             onBack={backIntake}
             onNext={nextIntake}
             nextDisabled={intakeContinueDisabled}
-            footerCenter={liveIntakeFooter}
+           
           >
             {client.riskIntakeScreen === "gate" ? (
               <div className="space-y-4">
@@ -4307,8 +4206,8 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               : null}
           </IntakeShell>
         )}
-        {step === "intake" && intakeStep === 8 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[8].eyebrow} title={INTAKE_STEPS[8].title} helper={INTAKE_STEPS[8].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><div className="grid grid-cols-1 gap-3">{[["risk-profile", "Use stated risk profile", "Best default for advisor-reviewed recommendations."], ["age-default", "Run default based on age", "Uses age only; ignores the tier from Question 8. Consider if you want a pure age glidepath."], ["income-goal", "Retirement income goal", "Best for near-retirees who need income and lower volatility."], ["custom", "Custom advisor model", "Use your own allocation model later."]].map(([value, title, desc]) => <button key={value} onClick={() => setClient({ ...client, calibration: value })} className={`rounded-none border p-4 text-left transition ${client.calibration === value ? "ap-choice-selected shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}><div className="font-semibold">{title}</div><div className={`mt-1 text-sm ${client.calibration === value ? "text-blue-100" : "text-slate-500"}`}>{desc}</div></button>)}</div></IntakeShell>}
-        {step === "intake" && intakeStep === 9 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[9].eyebrow} title={INTAKE_STEPS[9].title} helper={INTAKE_STEPS[9].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled} footerCenter={liveIntakeFooter}><Textarea className="min-h-40 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.goal} onChange={(e) => setClient({ ...client, goal: e.target.value })} placeholder="Example: Wants retirement income, less market risk, and tax-efficient withdrawals." /></IntakeShell>}
+        {step === "intake" && intakeStep === 8 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[8].eyebrow} title={INTAKE_STEPS[8].title} helper={INTAKE_STEPS[8].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled}><div className="grid grid-cols-1 gap-3">{[["risk-profile", "Use stated risk profile", "Best default for advisor-reviewed recommendations."], ["age-default", "Run default based on age", "Uses age only; ignores the tier from Question 8. Consider if you want a pure age glidepath."], ["income-goal", "Retirement income goal", "Best for near-retirees who need income and lower volatility."], ["custom", "Custom advisor model", "Use your own allocation model later."]].map(([value, title, desc]) => <button key={value} onClick={() => setClient({ ...client, calibration: value })} className={`rounded-none border p-4 text-left transition ${client.calibration === value ? "ap-choice-selected shadow-lg" : "border-slate-200 bg-white hover:bg-sky-50"}`}><div className="font-semibold">{title}</div><div className={`mt-1 text-sm ${client.calibration === value ? "text-blue-100" : "text-slate-500"}`}>{desc}</div></button>)}</div></IntakeShell>}
+        {step === "intake" && intakeStep === 9 && <IntakeShell portfolioStepCurrent={intakeStep + 1} portfolioStepTotal={INTAKE_STEP_COUNT} progress={progress} eyebrow={INTAKE_STEPS[9].eyebrow} title={INTAKE_STEPS[9].title} helper={INTAKE_STEPS[9].helper} onBack={backIntake} onNext={nextIntake} nextDisabled={intakeContinueDisabled}><Textarea className="min-h-40 rounded-none border-blue-100 bg-white text-lg focus-visible:ring-sky-500" value={client.goal} onChange={(e) => setClient({ ...client, goal: e.target.value })} placeholder="Example: Wants retirement income, less market risk, and tax-efficient withdrawals." /></IntakeShell>}
 
         {step === "upload" && (
           <Card className="rounded-none ap-glass border-0">
@@ -4520,7 +4419,9 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       <tbody>
                         {accountRollups.map((row) => {
                           const label =
-                            row.accountNumber.trim() ||
+                            (row.accountNumber.trim()
+                              ? maskAccountNumberDisplay(row.accountNumber)
+                              : "") ||
                             (row.sourceFileIndex != null ? `Statement upload #${row.sourceFileIndex}` : "Same statement (no explicit account)");
                           const selectValue =
                             row.dominantRegistration === "mixed" ? "unknown" : row.dominantRegistration;
@@ -4705,9 +4606,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                             <Input
                               key={`acct-${index}-${h.accountNumber ?? ""}`}
                               className={HOLDING_INPUT_CLASS}
-                              placeholder="Masked / last digits"
-                              defaultValue={h.accountNumber ?? ""}
-                              onBlur={(e) => updateHolding(index, { accountNumber: e.target.value.trim() || undefined })}
+                              placeholder="e.g. BRK-****-5502"
+                              defaultValue={h.accountNumber ? maskAccountNumberDisplay(h.accountNumber) : ""}
+                              onBlur={(e) => {
+                                const raw = e.target.value.trim();
+                                updateHolding(index, {
+                                  accountNumber: raw ? maskAccountNumberDisplay(raw) : undefined,
+                                });
+                              }}
                             />
                           </div>
                           <div className="space-y-2">
@@ -5189,12 +5095,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <div className="space-y-3">
                       <div>
                         <label className="text-sm font-semibold text-slate-700">Premium for illustration ($)</label>
-                        <Input
-                          className="mt-2 h-12 rounded-none bg-white"
-                          inputMode="decimal"
+                        <CurrencyAmountInput
+                          className="mt-2 h-12 rounded-none bg-white border-input focus-within:ring-sky-500"
                           value={fiaInputValue(fiaWorksheet.registrationPremiumOverride)}
-                          onChange={(e) =>
-                            setFiaWorksheet((w) => ({ ...w, registrationPremiumOverride: e.target.value }))
+                          onChange={(v) =>
+                            setFiaWorksheet((w) => ({ ...w, registrationPremiumOverride: v }))
                           }
                           placeholder={
                             fiaWorksheet.premiumSource === "qualified"
@@ -5836,17 +5741,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 {rothWorksheet.useEntireQualifiedBalance === false ? (
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Specific dollar amount</label>
-                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
-                      <span className="pl-4 text-lg font-medium text-slate-600">$</span>
-                      <Input
-                        className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
-                        type="text"
-                        inputMode="decimal"
-                        value={rothWorksheet.specificConversionAmount}
-                        onChange={(e) => setRothWorksheet((w) => ({ ...w, specificConversionAmount: e.target.value }))}
-                        placeholder="250000"
-                      />
-                    </div>
+                    <CurrencyAmountInput
+                      className="mt-2 h-12 border-blue-100 focus-within:ring-sky-500"
+                      value={rothWorksheet.specificConversionAmount}
+                      onChange={(v) => setRothWorksheet((w) => ({ ...w, specificConversionAmount: v }))}
+                      placeholder="250,000"
+                    />
                   </div>
                 ) : null}
                 <p className="text-xs text-slate-500">
@@ -7035,17 +6935,13 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                             </p>
                             <div>
                               <label className="text-xs font-semibold text-slate-700">Annual covered earnings (SS wages)</label>
-                              <div className="mt-1 flex h-11 items-center overflow-hidden rounded-none border border-slate-200 bg-white focus-within:ring-2 focus-within:ring-sky-500">
-                                <span className="pl-3 text-sm font-medium text-slate-600">$</span>
-                                <Input
-                                  className="h-full flex-1 border-0 bg-transparent pl-1 pr-3 text-sm shadow-none focus-visible:ring-0"
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={retIncSsEstClientAnnual}
-                                  onChange={(e) => setRetIncSsEstClientAnnual(e.target.value)}
-                                  placeholder="e.g. 85000"
-                                />
-                              </div>
+                              <CurrencyAmountInput
+                                className="mt-1 h-11 rounded-none border-slate-200 focus-within:ring-sky-500"
+                                inputClassName="text-sm"
+                                value={retIncSsEstClientAnnual}
+                                onChange={setRetIncSsEstClientAnnual}
+                                placeholder="85,000"
+                              />
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                               <div>
@@ -7096,17 +6992,13 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                               </p>
                               <div>
                                 <label className="text-xs font-semibold text-slate-700">Annual covered earnings (SS wages)</label>
-                                <div className="mt-1 flex h-11 items-center overflow-hidden rounded-none border border-slate-200 bg-white focus-within:ring-2 focus-within:ring-sky-500">
-                                  <span className="pl-3 text-sm font-medium text-slate-600">$</span>
-                                  <Input
-                                    className="h-full flex-1 border-0 bg-transparent pl-1 pr-3 text-sm shadow-none focus-visible:ring-0"
-                                    type="text"
-                                    inputMode="decimal"
-                                    value={retIncSsEstSpouseAnnual}
-                                    onChange={(e) => setRetIncSsEstSpouseAnnual(e.target.value)}
-                                    placeholder="e.g. 72000"
-                                  />
-                                </div>
+                                <CurrencyAmountInput
+                                  className="mt-1 h-11 rounded-none border-slate-200 focus-within:ring-sky-500"
+                                  inputClassName="text-sm"
+                                  value={retIncSsEstSpouseAnnual}
+                                  onChange={setRetIncSsEstSpouseAnnual}
+                                  placeholder="72,000"
+                                />
                               </div>
                               <div className="grid grid-cols-2 gap-3">
                                 <div>
@@ -7198,32 +7090,22 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <p className="text-sm font-semibold text-slate-800">Earned income (annual, pre-retirement)</p>
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Client</label>
-                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
-                      <span className="pl-4 text-lg font-medium text-slate-600">$</span>
-                      <Input
-                        className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
-                        type="text"
-                        inputMode="decimal"
-                        value={retIncClientEarnedAnnual}
-                        onChange={(e) => setRetIncClientEarnedAnnual(e.target.value)}
-                        placeholder="0"
-                      />
-                    </div>
+                    <CurrencyAmountInput
+                      className="mt-2 h-12 border-blue-100 focus-within:ring-sky-500"
+                      value={retIncClientEarnedAnnual}
+                      onChange={setRetIncClientEarnedAnnual}
+                      placeholder="0"
+                    />
                   </div>
                   {client.married ? (
                     <div>
                       <label className="text-sm font-semibold text-slate-700">Spouse</label>
-                      <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
-                        <span className="pl-4 text-lg font-medium text-slate-600">$</span>
-                        <Input
-                          className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
-                          type="text"
-                          inputMode="decimal"
-                          value={retIncSpouseEarnedAnnual}
-                          onChange={(e) => setRetIncSpouseEarnedAnnual(e.target.value)}
-                          placeholder="0"
-                        />
-                      </div>
+                      <CurrencyAmountInput
+                        className="mt-2 h-12 border-blue-100 focus-within:ring-sky-500"
+                        value={retIncSpouseEarnedAnnual}
+                        onChange={setRetIncSpouseEarnedAnnual}
+                        placeholder="0"
+                      />
                     </div>
                   ) : null}
                 </div>
@@ -7232,17 +7114,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <p className="text-sm font-semibold text-slate-800">Pension and other long-term income</p>
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Pension (annual start)</label>
-                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
-                      <span className="pl-4 text-lg font-medium text-slate-600">$</span>
-                      <Input
-                        className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
-                        type="text"
-                        inputMode="decimal"
-                        value={retIncPensionAnnual}
-                        onChange={(e) => setRetIncPensionAnnual(e.target.value)}
-                        placeholder="0"
-                      />
-                    </div>
+                    <CurrencyAmountInput
+                      className="mt-2 h-12 border-blue-100 focus-within:ring-sky-500"
+                      value={retIncPensionAnnual}
+                      onChange={setRetIncPensionAnnual}
+                      placeholder="0"
+                    />
                   </div>
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Pension COLA (% per year)</label>
@@ -7257,17 +7134,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   </div>
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Other long-term income (annual start)</label>
-                    <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
-                      <span className="pl-4 text-lg font-medium text-slate-600">$</span>
-                      <Input
-                        className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
-                        type="text"
-                        inputMode="decimal"
-                        value={retIncOtherAnnual}
-                        onChange={(e) => setRetIncOtherAnnual(e.target.value)}
-                        placeholder="0"
-                      />
-                    </div>
+                    <CurrencyAmountInput
+                      className="mt-2 h-12 border-blue-100 focus-within:ring-sky-500"
+                      value={retIncOtherAnnual}
+                      onChange={setRetIncOtherAnnual}
+                      placeholder="0"
+                    />
                   </div>
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Other income growth (% per year)</label>
@@ -7734,7 +7606,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       ) : null}
                     </div>
                   </div>
-                  <div className={`mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4`}>
+                  <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     <Button variant="outline" className="h-12 justify-start rounded-none bg-white/85 touch-manipulation" onClick={() => downloadPDFReport("client")}>
                       <Download className="mr-2 h-4 w-4" />
                       Client Snapshot PDF
@@ -7742,44 +7614,6 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <Button variant="outline" className="h-12 justify-start rounded-none bg-white/85 touch-manipulation" onClick={() => downloadPDFReport("advisor")}>
                       <Download className="mr-2 h-4 w-4" />
                       Advisor Deep Dive PDF
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="h-12 justify-start rounded-none border-teal-200 bg-teal-50/90 touch-manipulation hover:bg-teal-100/90"
-                      onClick={() => setStep("fia")}
-                    >
-                      <Calculator className="mr-2 h-4 w-4" />
-                      FIA calculator
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                    {showRothOptionReport ? (
-                      <Button
-                        variant="outline"
-                        className="h-12 justify-start rounded-none border-amber-200 bg-amber-50/90 touch-manipulation hover:bg-amber-100/90"
-                        onClick={() => setStep("roth")}
-                      >
-                        <Target className="mr-2 h-4 w-4" />
-                        Roth worksheet
-                        <ArrowRight className="ml-2 h-4 w-4" />
-                      </Button>
-                    ) : null}
-                    <Button
-                      variant="outline"
-                      className="h-12 justify-start rounded-none border-violet-200 bg-violet-50/90 touch-manipulation hover:bg-violet-100/90"
-                      onClick={() => setStep("feeAnalysis")}
-                    >
-                      <Percent className="mr-2 h-4 w-4" />
-                      Fee analysis
-                      <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="h-12 justify-start rounded-none border-sky-200 bg-sky-50/90 touch-manipulation hover:bg-sky-100/90"
-                      onClick={() => setStep("retIncome")}
-                    >
-                      <Landmark className="mr-2 h-4 w-4" />
-                      Ret. Inc Calculator
-                      <ArrowRight className="ml-2 h-4 w-4" />
                     </Button>
                     <Button variant="outline" className="h-12 justify-start rounded-none bg-white/85 touch-manipulation" onClick={buildFollowUpEmail}>
                       <Mail className="mr-2 h-4 w-4" />
@@ -7799,7 +7633,6 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     >
                       <FolderOpen className="mr-2 h-4 w-4" />
                       Client Database
-                      <ArrowRight className="ml-2 h-4 w-4" />
                     </Button>
                   </div>
                 </div>

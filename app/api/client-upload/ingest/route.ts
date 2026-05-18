@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { Buffer } from "buffer";
 import { createClient } from "@supabase/supabase-js";
 import { extractHoldingsFromFileBuffer } from "@/lib/extract-statement-holdings";
@@ -8,7 +8,12 @@ import { applySyntheticCashTickerIfEligible, extractLikelySymbol, validateHoldin
 import { normalizeRegistrationType } from "@/lib/holding-registration";
 import { canonicalizeAssetClass } from "@/lib/asset-classes";
 import { deriveHoldingStatus } from "@/lib/holding-status";
-import { normalizeIntakeClient, isIntakeComplete, intakeIncompleteStepTitles } from "@/lib/intake-config";
+import {
+  CLIENT_LINK_INTAKE_STEPS,
+  normalizeIntakeClient,
+  isIntakeComplete,
+  intakeIncompleteStepTitles,
+} from "@/lib/intake-config";
 import { SYNTHETIC_CASH_TICKER } from "@/lib/cash-holding-constants";
 import {
   buildCashParkingSyntheticHolding,
@@ -218,7 +223,7 @@ export async function POST(request: Request) {
         return NextResponse.json(
           {
             error: "Please complete every profile section before uploading.",
-            missingSteps: intakeIncompleteStepTitles(profileForValidate),
+            missingSteps: intakeIncompleteStepTitles(profileForValidate, CLIENT_LINK_INTAKE_STEPS),
           },
           { status: 400 }
         );

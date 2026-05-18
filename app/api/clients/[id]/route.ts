@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import { writeAuditEvent } from "@/lib/audit-log";
+import { clientSaveUpdateSummary, crmPatchChangedLabels } from "@/lib/crm/client-update-summary";
 import { toClientDetail, type ClientRow } from "@/lib/crm/clients-mapper";
 import {
   getCrmSupabaseAdmin,
@@ -280,6 +282,21 @@ export const PATCH = async (
       console.error(`[crm:api] route=/api/clients/${id} PATCH update-error`, updateErr);
       return NextResponse.json({ error: updateErr.message }, { status: 400 });
     }
+
+    const patchKeys = Object.keys(validation.patch);
+    const changedSections = crmPatchChangedLabels(patchKeys);
+    await writeAuditEvent({
+      ownerEmail: identity.email,
+      ownerUserId: identity.userId,
+      action: "client.updated",
+      entityType: "client",
+      entityId: id,
+      metadata: {
+        changedSections,
+        summary: clientSaveUpdateSummary(changedSections),
+        source: "crm_patch",
+      },
+    });
 
     const response = await respondWithDetail(supabase, id);
     console.info(

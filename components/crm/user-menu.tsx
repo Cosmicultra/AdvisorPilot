@@ -38,12 +38,14 @@ interface AdvisorProfileResponse {
     ownerEmail?: string | null;
     advisorName?: string | null;
   } | null;
+  emailConnected?: boolean;
 }
 
 export function UserMenu() {
   const settingsDialog = useSettingsDialog();
   const [profileEmail, setProfileEmail] = useState<string | null>(null);
   const [profileName, setProfileName] = useState<string | null>(null);
+  const [emailConnected, setEmailConnected] = useState<boolean | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Fetch the advisor profile (works for both Google + email/password) so
@@ -59,6 +61,7 @@ export function UserMenu() {
         if (cancelled || !body) return;
         setProfileEmail(body.profile?.ownerEmail ?? null);
         setProfileName(body.profile?.advisorName ?? null);
+        setEmailConnected(body.emailConnected === true);
       })
       .catch(() => {
         // Soft-fail — avatar shows "?" instead of initials.
@@ -69,8 +72,9 @@ export function UserMenu() {
   }, []);
 
   const email = profileEmail;
-  const displayName = profileName ?? email ?? "Account";
-  const initials = deriveInitials(displayName, email);
+  const triggerLabel = formatAdvisorFirstName(profileName, email);
+  const emailStatusHint =
+    emailConnected === true ? "Connected to email" : "Re-Authenticate email";
 
   const handleSignOut = useCallback(() => {
     // Clear email/password Bearer tokens (no-op if Google user).
@@ -86,38 +90,47 @@ export function UserMenu() {
   return (
     <>
       <DropdownMenu.Root modal={false}>
-        <DropdownMenu.Trigger asChild>
-          <button
-            type="button"
-            aria-label={email ? `Account menu, ${email}` : "Account menu"}
-            aria-haspopup="menu"
-            className="flex items-center gap-2 px-2 py-1 transition-colors hover:bg-[rgba(12,25,41,0.04)] data-[state=open]:bg-[rgba(12,25,41,0.06)]"
-            style={{ border: "1px solid var(--ap-border)" }}
-          >
-            <span
-              className="flex h-7 w-7 flex-shrink-0 items-center justify-center text-[11px] font-semibold uppercase"
-              style={{
-                backgroundColor: "var(--ap-royal)",
-                color: "#FFFFFF",
-              }}
+        <div className="flex items-center gap-1.5">
+          <span
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{
+              backgroundColor:
+                emailConnected === null
+                  ? "#cbd5e1"
+                  : emailConnected
+                    ? "#22c55e"
+                    : "#f59e0b",
+            }}
+            title={emailConnected === null ? undefined : emailStatusHint}
+            aria-label={emailConnected === null ? undefined : emailStatusHint}
+          />
+          <DropdownMenu.Trigger asChild>
+            <button
+              type="button"
+              aria-label={email ? `Account menu, ${triggerLabel}` : "Account menu"}
+              aria-haspopup="menu"
+              className="flex items-center gap-2 px-2 py-1 transition-colors hover:bg-[rgba(12,25,41,0.04)] data-[state=open]:bg-[rgba(12,25,41,0.06)]"
+              style={{ border: "1px solid var(--ap-border)" }}
             >
-              {initials}
-            </span>
-            <span
-              className="hidden max-w-[160px] truncate text-[12px] font-medium sm:inline"
-              style={{ color: "var(--ap-navy)" }}
-            >
-              {displayName}
-            </span>
-            <ChevronDown
-              size={12}
-              strokeWidth={1.75}
-              className="flex-shrink-0"
-              style={{ color: "var(--ap-gray)" }}
-              aria-hidden
-            />
-          </button>
-        </DropdownMenu.Trigger>
+              <span
+                className="flex h-7 max-w-[5.5rem] flex-shrink-0 items-center justify-center px-2 text-[11px] font-semibold leading-none"
+                style={{
+                  backgroundColor: "var(--ap-royal)",
+                  color: "#FFFFFF",
+                }}
+              >
+                <span className="truncate">{triggerLabel}</span>
+              </span>
+              <ChevronDown
+                size={12}
+                strokeWidth={1.75}
+                className="flex-shrink-0"
+                style={{ color: "var(--ap-gray)" }}
+                aria-hidden
+              />
+            </button>
+          </DropdownMenu.Trigger>
+        </div>
 
         <DropdownMenu.Portal>
           <DropdownMenu.Content
@@ -187,23 +200,19 @@ export function UserMenu() {
   );
 }
 
-function deriveInitials(displayName: string, email: string | null): string {
-  const source = displayName || email || "";
-  if (!source) return "?";
+/** First name shown inside the blue account badge (per advisor). */
+function formatAdvisorFirstName(profileName: string | null, email: string | null): string {
+  const raw = (() => {
+    const name = profileName?.trim();
+    if (name) return name.split(/\s+/)[0] || name;
+    if (email) {
+      const local = email.split("@")[0] ?? "";
+      const part = local.split(/[._-]/).filter(Boolean)[0];
+      if (part) return part;
+    }
+    return "Account";
+  })();
 
-  // Split on whitespace first (real names like "Daniel Perussina")
-  const parts = source.trim().split(/\s+/);
-  if (parts.length >= 2) {
-    return `${parts[0]?.charAt(0) ?? ""}${parts[parts.length - 1]?.charAt(0) ?? ""}`.toUpperCase();
-  }
-
-  // Single token — try email local-part split on . or _
-  const local = email?.split("@")[0] ?? source;
-  const localParts = local.split(/[._-]/).filter(Boolean);
-  if (localParts.length >= 2) {
-    return `${localParts[0].charAt(0)}${localParts[1].charAt(0)}`.toUpperCase();
-  }
-
-  // Fallback: first 2 characters of the source.
-  return source.slice(0, 2).toUpperCase();
+  if (raw === "Account") return raw;
+  return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
 }

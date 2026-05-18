@@ -1,8 +1,6 @@
 import type { ReactNode } from "react";
 import { TopHeader } from "@/components/crm/top-header";
 import { RosterList } from "@/components/crm/roster-list";
-import { NewClientButton } from "@/components/crm/new-client-button";
-import { UserMenu } from "@/components/crm/user-menu";
 
 /**
  * Layout for /app/crm/* — the two-pane Roster shell. Persistent across
@@ -25,12 +23,6 @@ export default function CrmRosterLayout({ children }: { children: ReactNode }) {
       <TopHeader
         title="Client roster"
         subtitle="Select a client to open their overview"
-        rightActions={
-          <>
-            <NewClientButton />
-            <UserMenu />
-          </>
-        }
       />
       <div className="flex min-h-0 flex-1">
         {/* Sidebar Roster — hidden on mobile (mobile advisors browse

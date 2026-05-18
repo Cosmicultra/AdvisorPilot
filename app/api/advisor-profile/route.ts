@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import { isGmailConnected } from "@/lib/gmail-connection";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -115,6 +116,8 @@ export const GET = async (req: Request) => {
       return NextResponse.json({ error: "Sign in before loading your advisor profile." }, { status: 401 });
     }
 
+    const emailConnected = await isGmailConnected(req);
+
     const { data, error } = await supabaseAdmin
       .from("advisorpilot_advisor_profiles")
       .select("*")
@@ -142,6 +145,7 @@ export const GET = async (req: Request) => {
         }
         return NextResponse.json({
           profile: retry.data ? mapProfile(retry.data as AdvisorProfileRecord) : null,
+          emailConnected,
           migrationRequired: "supabase/advisorpilot_advisor_profiles_llm_columns.sql",
         });
       }
@@ -150,6 +154,7 @@ export const GET = async (req: Request) => {
 
     return NextResponse.json({
       profile: data ? mapProfile(data as AdvisorProfileRecord) : null,
+      emailConnected,
     });
   } catch (err: unknown) {
     console.error("ADVISOR PROFILE GET ERROR:", err);

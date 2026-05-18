@@ -11,10 +11,12 @@ import {
   RISK_QUIZ_QUESTIONS,
 } from "@/lib/risk-questionnaire";
 import {
+  ageFromIsoDob,
+  CLIENT_LINK_INTAKE_STEPS,
   FEDERAL_TAX_BRACKET_IDS,
-  INTAKE_STEPS,
   type IntakeClient,
 } from "@/lib/intake-config";
+import { CurrencyAmountInput } from "@/components/currency-amount-input";
 import type { RiskProfileId } from "@/lib/risk-profiles";
 import type { RiskQuizQuestionId } from "@/lib/risk-questionnaire";
 
@@ -54,6 +56,30 @@ function SwitchRow({
   );
 }
 
+function MoneyInputField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="text-xs font-semibold text-slate-700">{label}</label>
+      <CurrencyAmountInput
+        className="mt-1"
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+      />
+    </div>
+  );
+}
+
 const CALIBRATION_CHOICES: { value: string; title: string; desc: string }[] = [
   ["risk-profile", "Use stated risk profile", "Best default once you confirm Question 8."],
   ["age-default", "Run default based on age", "Uses age only; ignores the tier from Question 8."],
@@ -70,6 +96,22 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
 
   function patch(p: Partial<IntakeClient>) {
     onChange({ ...c, ...p });
+  }
+
+  function patchClientDob(dob: string) {
+    const calculated = ageFromIsoDob(dob);
+    patch({
+      dob,
+      age: calculated !== null ? String(calculated) : c.age,
+    });
+  }
+
+  function patchSpouseDob(spouseDob: string) {
+    const calculated = ageFromIsoDob(spouseDob);
+    patch({
+      spouseDob,
+      spouseAge: calculated !== null ? String(calculated) : c.spouseAge,
+    });
   }
 
   function setRiskFromTier(profile: RiskProfileId) {
@@ -103,7 +145,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
         they will appear below. Please correct anything that changed.
       </p>
 
-      {INTAKE_STEPS.map((step) => (
+      {CLIENT_LINK_INTAKE_STEPS.map((step) => (
         <section key={step.id} className="rounded-none border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-wide text-teal-800">{step.eyebrow}</p>
           <h3 className="mt-1 font-serif text-lg font-bold text-slate-900">{step.title}</h3>
@@ -147,7 +189,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                   </p>
                 </div>
                 <SwitchRow
-                  label="Married filing jointly (capture spouse)"
+                  label="Are you married?"
                   checked={c.married}
                   onChange={() => {
                     const next = !c.married;
@@ -195,7 +237,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                       className="mt-1 h-12 rounded-none"
                       type="date"
                       value={c.dob}
-                      onChange={(e) => patch({ dob: e.target.value })}
+                      onChange={(e) => patchClientDob(e.target.value)}
                     />
                   </div>
                   <div>
@@ -219,7 +261,7 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
                           className="mt-1 h-12 rounded-none"
                           type="date"
                           value={c.spouseDob}
-                          onChange={(e) => patch({ spouseDob: e.target.value })}
+                          onChange={(e) => patchSpouseDob(e.target.value)}
                         />
                       </div>
                       <div>
@@ -239,16 +281,12 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
             )}
 
             {step.id === "adjustedGrossIncome" && (
-              <div>
-                <label className="text-xs font-semibold text-slate-700">Adjusted Gross Income (annual)</label>
-                <Input
-                  className="mt-1 h-12 rounded-none"
-                  inputMode="decimal"
-                  value={c.adjustedGrossIncomeAnnual}
-                  onChange={(e) => patch({ adjustedGrossIncomeAnnual: e.target.value })}
-                  placeholder="e.g. 185000"
-                />
-              </div>
+              <MoneyInputField
+                label="Adjusted Gross Income (annual)"
+                value={c.adjustedGrossIncomeAnnual}
+                onChange={(v) => patch({ adjustedGrossIncomeAnnual: v })}
+                placeholder="185,000"
+              />
             )}
 
             {step.id === "taxBracket" && (
@@ -305,16 +343,12 @@ export function ClientLinkIntakeForm({ value: c, onChange }: Props) {
             )}
 
             {step.id === "retirementIncome" && (
-              <div>
-                <label className="text-xs font-semibold text-slate-700">Spendable income needed in retirement (annual)</label>
-                <Input
-                  className="mt-1 h-12 rounded-none"
-                  inputMode="decimal"
-                  value={c.retirementSpendableIncomeAnnual}
-                  onChange={(e) => patch({ retirementSpendableIncomeAnnual: e.target.value })}
-                  placeholder="e.g. 85000"
-                />
-              </div>
+              <MoneyInputField
+                label="Spendable income needed in retirement (annual)"
+                value={c.retirementSpendableIncomeAnnual}
+                onChange={(v) => patch({ retirementSpendableIncomeAnnual: v })}
+                placeholder="85,000"
+              />
             )}
 
             {step.id === "socialSecurity" && (

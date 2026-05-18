@@ -57,7 +57,7 @@ type NavItem = {
 // in lockstep. If you add a primary section, add it both here AND
 // in components/crm/app-rail.tsx → TOP_ITEMS.
 const NAV_ITEMS: NavItem[] = [
-  { id: "intake", href: "/app/intake", icon: ClipboardList, label: "Intake" },
+  { id: "intake", href: "/app/intake", icon: ClipboardList, label: "Analysis" },
   { id: "crm", href: "/app/crm", icon: LayoutGrid, label: "CRM" },
   { id: "tasks", href: "/app/tasks", icon: ListChecks, label: "Tasks" },
   { id: "reports", href: "/app/reports", icon: FileText, label: "Reports" },

@@ -4,6 +4,7 @@
  */
 
 import { canAdvanceRiskIntake } from "@/lib/risk-questionnaire";
+import { parseMoneyInputRaw } from "@/lib/money-input";
 import type { RiskIntakeScreen } from "@/lib/risk-questionnaire";
 import { RISK_PROFILES } from "@/lib/risk-profiles";
 import { normalizeFiaWorksheet, type FiaWorksheet } from "@/lib/fia-worksheet";
@@ -160,6 +161,65 @@ export const INTAKE_STEPS: IntakeStepMeta[] = [
 
 export const INTAKE_STEP_COUNT = INTAKE_STEPS.length;
 
+/** Whole years from a date input value (YYYY-MM-DD); null if empty or invalid. */
+export function ageFromIsoDob(dob: string): number | null {
+  const t = String(dob || "").trim();
+  if (!t) return null;
+  const birth = new Date(`${t}T12:00:00`);
+  if (Number.isNaN(birth.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const monthDelta = today.getMonth() - birth.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && today.getDate() < birth.getDate())) age -= 1;
+  return Math.max(0, age);
+}
+
+/** Client magic-link profile form — same fields as INTAKE_STEPS, client-facing copy only. */
+const CLIENT_LINK_INTAKE_STEP_OVERRIDES: Partial<
+  Record<(typeof INTAKE_STEPS)[number]["id"], Pick<IntakeStepMeta, "title" | "helper">>
+> = {
+  identity: {
+    title: "What is your first name, last name, and email where your report will be sent?",
+    helper: "",
+  },
+  age: {
+    title: "How old are you?",
+    helper: "Use date of birth or age. If married, include your spouse's age or date of birth the same way.",
+  },
+  adjustedGrossIncome: {
+    title:
+      "What is the AGI from your federal return (Form 1040, line 11 on recent-year returns)?",
+    helper: "For illustrative planning only, not tax advice.",
+  },
+  taxBracket: {
+    title: "What is your current federal tax bracket?",
+    helper:
+      "Use the marginal bracket that best fits your ordinary income today (used for illustrative tax math in reports).",
+  },
+  retirement: {
+    title: "What age do you expect to retire, or have you already retired?",
+    helper: "If married, include your spouse's expected retirement age too.",
+  },
+  risk: {
+    title: "What is your risk profile?",
+    helper:
+      "Choose the tier that fits you, or use the optional short questionnaire below for a suggested tier.",
+  },
+  calibration: {
+    title: "Please use stated risk profile.",
+    helper: "Pick how your advisor should calibrate the review. Stated risk profile is the usual default.",
+  },
+  goal: {
+    title: "What is your main retirement goal?",
+    helper: "In your own words — this helps your advisor tailor the conversation.",
+  },
+};
+
+export const CLIENT_LINK_INTAKE_STEPS: IntakeStepMeta[] = INTAKE_STEPS.map((step) => {
+  const override = CLIENT_LINK_INTAKE_STEP_OVERRIDES[step.id as keyof typeof CLIENT_LINK_INTAKE_STEP_OVERRIDES];
+  return override ? { ...step, ...override } : step;
+});
+
 /** Full display name for PDFs, emails, and headers. Supports legacy saved rows that only had `name`. */
 export function clientDisplayName(c: Partial<IntakeClient> & { name?: string }): string {
   const fn = String(c.firstName ?? "").trim();
@@ -218,9 +278,9 @@ export function normalizeIntakeClient(raw: unknown): IntakeClient {
     dob: String(r.dob ?? ""),
     age: String(r.age ?? ""),
     federalTaxBracket: String(r.federalTaxBracket ?? "22"),
-    adjustedGrossIncomeAnnual: String(r.adjustedGrossIncomeAnnual ?? ""),
+    adjustedGrossIncomeAnnual: parseMoneyInputRaw(String(r.adjustedGrossIncomeAnnual ?? "")),
     retirementAge: String(r.retirementAge ?? "67"),
-    retirementSpendableIncomeAnnual: String(r.retirementSpendableIncomeAnnual ?? ""),
+    retirementSpendableIncomeAnnual: parseMoneyInputRaw(String(r.retirementSpendableIncomeAnnual ?? "")),
     socialSecurityMonthlyClient: String(r.socialSecurityMonthlyClient ?? ""),
     socialSecurityMonthlySpouse: String(r.socialSecurityMonthlySpouse ?? ""),
     riskProfile: String(r.riskProfile ?? "moderate-conservative"),
@@ -417,10 +477,13 @@ export function isIntakeComplete(c: IntakeClient): boolean {
 }
 
 /** Step titles that still fail validation (for client magic-link UX). */
-export function intakeIncompleteStepTitles(c: IntakeClient): string[] {
+export function intakeIncompleteStepTitles(
+  c: IntakeClient,
+  steps: readonly IntakeStepMeta[] = INTAKE_STEPS
+): string[] {
   const out: string[] = [];
   for (let i = 0; i < INTAKE_STEP_COUNT; i++) {
-    if (!canAdvanceIntakeStep(i, c)) out.push(INTAKE_STEPS[i].title);
+    if (!canAdvanceIntakeStep(i, c)) out.push(steps[i].title);
   }
   return out;
 }

@@ -9,6 +9,7 @@ import { ClientLinkIntakeForm } from "@/components/client-link-intake-form";
 import { Trash2 } from "lucide-react";
 import { newStatementUploadId, type StatementUploadQueueItem } from "@/lib/statement-upload-queue";
 import {
+  CLIENT_LINK_INTAKE_STEPS,
   intakeIncompleteStepTitles,
   isIntakeComplete,
   normalizeIntakeClient,
@@ -142,7 +143,7 @@ export default function ClientMagicUploadPage() {
     setError("");
     setValidationHint([]);
     if (!isIntakeComplete(intake)) {
-      setValidationHint(intakeIncompleteStepTitles(intake));
+      setValidationHint(intakeIncompleteStepTitles(intake, CLIENT_LINK_INTAKE_STEPS));
       return;
     }
     setPhase("upload");
@@ -155,7 +156,7 @@ export default function ClientMagicUploadPage() {
     setMessage("");
 
     if (!isIntakeComplete(intake)) {
-      setValidationHint(intakeIncompleteStepTitles(intake));
+      setValidationHint(intakeIncompleteStepTitles(intake, CLIENT_LINK_INTAKE_STEPS));
       setPhase("profile");
       setError("Please complete your profile before uploading.");
       return;

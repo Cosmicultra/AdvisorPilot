@@ -22,6 +22,7 @@
  * Spec: docs/crm/20-technical-specs.md §2.3.
  */
 
+import { clientUpdatedActivityTitle } from "./client-update-summary";
 import type { ActivityEntry, ActivityType } from "./types";
 
 /** Raw row shape returned by public.list_visible_activity. */
@@ -45,7 +46,7 @@ export interface VisibleActivityRow {
  */
 const AUDIT_ACTION_MAP: Record<string, { type: ActivityType; title: string }> = {
   "client.created":        { type: "system",   title: "Client created" },
-  "client.updated":        { type: "system",   title: "Client updated" },
+  "client.updated":        { type: "system",   title: "Client updated" }, // title overridden from metadata when present
   "client.deleted":        { type: "system",   title: "Client deleted" },
   "statement.extracted":   { type: "document", title: "Statement extracted" },
   "analysis.completed":    { type: "analysis", title: "Analysis completed" },
@@ -77,12 +78,16 @@ export function toActivityEntry(row: VisibleActivityRow): ActivityEntry {
 
   // source === "audit_event"
   const mapped = AUDIT_ACTION_MAP[row.type];
+  const title =
+    row.type === "client.updated"
+      ? clientUpdatedActivityTitle(row.metadata)
+      : (mapped?.title ?? humanizeAuditAction(row.type));
   return {
     id: row.id,
     ownerEmail: row.owner_email,
     clientId: row.client_id,
     type: mapped?.type ?? "system",
-    title: mapped?.title ?? humanizeAuditAction(row.type),
+    title,
     body: row.body,
     actorEmail: row.actor_email,
     metadata: row.metadata ?? {},

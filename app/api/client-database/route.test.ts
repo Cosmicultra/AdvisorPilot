@@ -54,6 +54,7 @@ vi.mock("@supabase/supabase-js", () => ({
         };
       }),
       single: vi.fn(async () => mocks.tableSingleResponse),
+      maybeSingle: vi.fn(async () => mocks.tableSingleResponse),
     })),
   })),
 }));
@@ -94,15 +95,9 @@ describe("client-database route auth", () => {
     });
   });
 
-  it("returns 404 when update affects zero rows", async () => {
+  it("returns 404 when saved client id is missing or not owned", async () => {
     mocks.identity = { email: "advisor@example.com", userId: null, provider: "google" };
-    mocks.tableSingleResponse = {
-      data: null,
-      error: {
-        code: "PGRST116",
-        message: "JSON object requested, multiple (or no) rows returned",
-      },
-    };
+    mocks.tableSingleResponse = { data: null, error: null };
 
     const { POST } = await import("./route");
     const res = await POST(

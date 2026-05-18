@@ -1,45 +1,22 @@
 /**
  * Current allocation — stacked bar showing the distribution of the client's
- * holdings across asset classes. Reuses lib/voice/page-helpers's
- * buildAllocationSummary so the bucketing matches what the analysis flow
- * + voice agent see.
- *
- * Spec: docs/crm/00-fundamentals.md §2 (Overview tab body).
+ * holdings across equity / fixed / cash / alternative sleeves. Matches step
+ * 04 Analysis donut colors and bucketing.
  */
 
-import { buildAllocationSummary } from "@/lib/voice/page-helpers";
+import { buildSleeveAllocationSummary } from "@/lib/allocation-display";
 import type { ClientDetail } from "@/lib/crm/types";
 import { OverviewCard } from "./overview-card";
 
-const BUCKET_COLORS: Record<string, string> = {
-  Equity: "var(--ap-royal)",
-  Fixed: "#0F4C81",
-  Cash: "#7EB3E8",
-  Annuity: "#B65BE3",
-  "Real Estate": "#E89B5B",
-  Commodities: "#E8C25B",
-  "Mutual Fund": "#5BB3E8",
-  ETF: "#3E8CC4",
-  Other: "rgba(12, 25, 41, 0.18)",
-};
-
-function colorFor(bucket: string): string {
-  return BUCKET_COLORS[bucket] ?? BUCKET_COLORS.Other;
-}
-
 export function CurrentAllocationCard({ client }: { client: ClientDetail }) {
-  const summary = buildAllocationSummary({
-    id: client.id,
-    client: client.client,
-    holdings: client.holdings,
-  });
+  const summary = buildSleeveAllocationSummary(client.holdings);
 
   if (summary.buckets.length === 0 || summary.totalValue <= 0) {
     return (
       <OverviewCard title="Current allocation">
         <p className="text-[12.5px]" style={{ color: "var(--ap-gray)" }}>
           No holdings to chart yet. Upload a statement and confirm holdings to
-          see this client's allocation.
+          see this client&apos;s allocation.
         </p>
       </OverviewCard>
     );
@@ -60,7 +37,7 @@ export function CurrentAllocationCard({ client }: { client: ClientDetail }) {
               title={`${bucket.name}: ${bucket.weightPct.toFixed(1)}%`}
               style={{
                 width: `${bucket.weightPct}%`,
-                backgroundColor: colorFor(bucket.name),
+                backgroundColor: bucket.color,
               }}
             />
           ))}
@@ -76,7 +53,7 @@ export function CurrentAllocationCard({ client }: { client: ClientDetail }) {
                 <span
                   aria-hidden="true"
                   className="h-2.5 w-2.5"
-                  style={{ backgroundColor: colorFor(bucket.name) }}
+                  style={{ backgroundColor: bucket.color }}
                 />
                 <span style={{ color: "var(--ap-navy)" }}>{bucket.name}</span>
               </span>

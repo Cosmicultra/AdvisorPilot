@@ -57,6 +57,22 @@ describe("normalizeHoldingsForUi", () => {
     expect(out[0].duplicateOfIndex).toBe(2);
   });
 
+  it("masks account numbers to last four digits on load", () => {
+    const out = normalizeHoldingsForUi([
+      {
+        rawName: "Fund A",
+        suggested: "VFIAX",
+        confidence: 90,
+        assetClass: "Mutual Fund",
+        value: 1000,
+        status: "matched",
+        options: [],
+        accountNumber: "BRK-9914-5502",
+      },
+    ]);
+    expect(out[0].accountNumber).toBe("BRK-****-5502");
+  });
+
   it("applies AP_CASH for cash-sleeve rows without a reliable ticker", () => {
     const out = normalizeHoldingsForUi([
       {

@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ageFromIsoDob,
   applyIntakePatch,
   boostIdentityFromUtterance,
   canAdvanceIntakeStep,
@@ -24,6 +25,26 @@ function client(overrides: Partial<IntakeClient> = {}): IntakeClient {
 }
 
 describe("intake-config", () => {
+  describe("ageFromIsoDob", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-05-17T12:00:00"));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("returns whole years from YYYY-MM-DD", () => {
+      expect(ageFromIsoDob("1960-05-01")).toBe(66);
+      expect(ageFromIsoDob("1960-05-20")).toBe(65);
+    });
+
+    it("returns null for empty or invalid dates", () => {
+      expect(ageFromIsoDob("")).toBeNull();
+      expect(ageFromIsoDob("not-a-date")).toBeNull();
+    });
+  });
+
   it("normalizes legacy full-name client records", () => {
     expect(normalizeIntakeClient({ name: "Jane Smith" })).toMatchObject({
       firstName: "Jane",

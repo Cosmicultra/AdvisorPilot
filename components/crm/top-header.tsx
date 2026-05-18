@@ -13,14 +13,15 @@
 
 import type { ReactNode } from "react";
 import { MobileNav } from "./mobile-nav";
-import { UserMenu } from "./user-menu";
+import { TopHeaderDefaultActions } from "./top-header-default-actions";
 
 export type TopHeaderProps = {
-  title: string;
+  title: ReactNode;
   subtitle?: string;
-  /** Right-slot content. Defaults to `<UserMenu />` when omitted; pass an
-   *  explicit value to replace it (or pass `<>...<UserMenu />...</>` to
-   *  combine custom actions with the default menu). */
+  /** Right-slot content. Defaults to `<TopHeaderDefaultActions />` when
+   *  omitted (+ New client + account menu). Pass custom children to add
+   *  section-specific CTAs — include `<NewClientButton />` and
+   *  `<UserMenu />` when overriding. */
   rightActions?: ReactNode;
 };
 
@@ -63,7 +64,7 @@ export function TopHeader({ title, subtitle, rightActions }: TopHeaderProps) {
       </div>
 
       <div className="flex flex-shrink-0 items-center gap-2">
-        {rightActions ?? <UserMenu />}
+        {rightActions ?? <TopHeaderDefaultActions />}
       </div>
     </header>
   );

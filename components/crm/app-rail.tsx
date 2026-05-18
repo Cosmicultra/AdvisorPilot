@@ -32,7 +32,7 @@ type RailItem = {
 };
 
 const TOP_ITEMS: RailItem[] = [
-  { id: "intake", href: "/app/intake", icon: ClipboardList, label: "Intake" },
+  { id: "intake", href: "/app/intake", icon: ClipboardList, label: "Analysis" },
   { id: "crm", href: "/app/crm", icon: LayoutGrid, label: "CRM" },
   { id: "tasks", href: "/app/tasks", icon: ListChecks, label: "Tasks" },
   { id: "reports", href: "/app/reports", icon: FileText, label: "Reports" },
@@ -63,17 +63,15 @@ export function AppRail() {
       <Link
         href="/app"
         aria-label="AdvisorPilot home"
-        className="flex h-[60px] items-center justify-center"
+        className="flex h-[60px] w-full shrink-0 p-1"
         style={{ borderBottom: "1px solid rgba(255, 255, 255, 0.08)" }}
       >
-        {/* Native img: small enough for the 60px rail; falls back to "AP"
-         *  monogram if the file is missing. */}
+        {/* logo_clean: fills the 52×52 content area (60px box − p-1), same visual
+            weight as the 52px nav items below. */}
         <img
-          src="/logo.png"
+          src="/logo_clean.png"
           alt="AdvisorPilot"
-          width={32}
-          height={32}
-          className="block h-8 w-8 object-contain"
+          className="block h-full w-full object-contain"
         />
       </Link>
 
