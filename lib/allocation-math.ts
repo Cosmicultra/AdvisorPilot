@@ -45,6 +45,28 @@ export function bucketValuesToPercents(buckets: AllocationBuckets, totalValue: n
   return out;
 }
 
+/**
+ * Proposed allocation mix from Analysis step — age-based equity glide path
+ * adjusted by risk profile (same formula as legacy-app-shell `targetAllocation`).
+ */
+export function targetAllocationBuckets(
+  age: number,
+  riskProfile: string
+): { equity: number; fixedIncome: number; cash: number } {
+  const safeAge = Number.isFinite(age) && age > 0 ? age : 62;
+  const profile = String(riskProfile || "moderate-conservative").toLowerCase();
+
+  let equity = 100 - safeAge;
+  if (profile === "conservative") equity -= 10;
+  if (profile === "moderate-conservative") equity -= 5;
+  if (profile === "moderate-growth") equity += 10;
+  if (profile === "aggressive") equity += 20;
+  equity = Math.max(25, Math.min(85, equity));
+  const fixedIncome = Math.max(10, 100 - equity - 5);
+  const cash = 100 - equity - fixedIncome;
+  return { equity, fixedIncome, cash };
+}
+
 export function allocationForRiskModel(p: AllocationBuckets) {
   const half = Number(p.other || 0) * 0.5;
   const e = Number(p.equity) + half;

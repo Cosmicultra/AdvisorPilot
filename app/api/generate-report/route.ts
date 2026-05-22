@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { LineCapStyle, PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
+import { LineCapStyle, PDFDocument, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
+import { embedReportPdfFonts } from "@/lib/report-pdf/fonts";
+import { colors, layout, MARGIN, CONTENT_W, PAGE_H, PAGE_W } from "@/lib/report-pdf/theme";
+import { estimateWrappedLines, wrapLinesToWidth } from "@/lib/report-pdf/wrap";
 import { Buffer } from "buffer";
 import fs from "fs/promises";
 import path from "path";
@@ -438,10 +441,15 @@ export async function POST(req: Request) {
     });
 
     const pdfDoc = await PDFDocument.create();
-    let page = pdfDoc.addPage([612, 792]);
+    let page = pdfDoc.addPage([PAGE_W, PAGE_H]);
 
-    const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const fonts = await embedReportPdfFonts(pdfDoc);
+    const regular = fonts.sans;
+    const bold = fonts.sansBold;
+    const serif = fonts.serif;
+    const serifItalic = fonts.serifItalic;
+    const mono = fonts.mono;
+    const monoMedium = fonts.monoMedium;
 
     let logoImage: PDFImage | null = null;
     try {
@@ -452,53 +460,46 @@ export async function POST(req: Request) {
       logoImage = null;
     }
 
-    /** McKinsey-style financial report palette: disciplined navy, single gold accent, minimal saturation. */
-    const navy = rgb(0.03, 0.12, 0.22);
-    const navyLight = rgb(0.07, 0.18, 0.32);
-    const ink = rgb(0.16, 0.18, 0.2);
-    const stayBar = rgb(0.12, 0.36, 0.55);
-    const stayBarSoft = rgb(0.75, 0.84, 0.92);
-    const accentSecondary = navyLight;
-    const goldAccent = rgb(0.78, 0.62, 0.28);
-    const red = rgb(0.70, 0.14, 0.16);
-    const muted = rgb(0.38, 0.4, 0.44);
-    const surface = rgb(0.97, 0.98, 0.99);
-    const softBlue = rgb(0.92, 0.96, 1.0);
-    const softTeal = stayBarSoft;
-    const softRed = rgb(1.0, 0.94, 0.94);
-    const rule = rgb(0.78, 0.8, 0.84);
-    const ruleStrong = rgb(0.55, 0.58, 0.62);
-    const white = rgb(1, 1, 1);
-    /** Allocation donut — match app `allocationData` / `allocationDataCurrent` (ProfessionalDonutChart). */
-    const donutEquity = rgb(15 / 255, 118 / 255, 110 / 255);
-    const donutFixed = rgb(29 / 255, 78 / 255, 216 / 255);
-    const donutCash = rgb(201 / 255, 151 / 255, 0);
-    const donutOther = rgb(100 / 255, 116 / 255, 139 / 255);
-    /** #e5e7eb — same as ProfessionalDonutChart base stroke. */
-    const donutTrack = rgb(229 / 255, 231 / 255, 235 / 255);
+    const {
+      navy,
+      accent,
+      ink,
+      muted,
+      surface,
+      synopsisBg,
+      rule,
+      white,
+      scoreRed,
+      scoreBlue,
+      headerText,
+      headerEyebrow,
+      headerMeta,
+      donutEquity,
+      donutFixed,
+      donutCash,
+      donutOther,
+      donutTrack,
+      pageBg,
+      tableHeadText,
+      tableZebra,
+      accentLight,
+    } = colors;
 
-    const MARGIN = 44;
-    const CONTENT_W = 612 - MARGIN * 2;
-    /** Typography: prose right edge aligns with section title rule (x = MARGIN + CONTENT_W). */
-    const synopsisTextX = MARGIN + 12;
-    const synopsisWrapWidthPt = MARGIN + CONTENT_W - synopsisTextX;
-    /** Gold-bar synopsis runs slightly larger than appendix body (appendix sizing unchanged). */
-    const synopsisFontSize = 8.2;
-    const synopsisLineGap = 3.55;
-    const boxedTextInsetX = MARGIN + 14;
-    const boxedTextWrapWidthPt = CONTENT_W - 28;
-    const cardListTextX = MARGIN + 22;
-    const cardListWrapWidthPt = MARGIN + CONTENT_W - cardListTextX;
+    const synopsisTextX = layout.synopsisInsetX;
+    const synopsisWrapWidthPt = layout.synopsisWrapW;
+    const synopsisFontSize = 9;
+    const synopsisLineGap = 5;
+    const boxedTextInsetX = layout.synopsisInsetX;
+    const boxedTextWrapWidthPt = layout.synopsisWrapW;
     const appendixWrapWidthPt = CONTENT_W;
 
     let exhibitCounter = 0;
+    let sectionIndex = 0;
 
-    /** Minimum y for body content (points above page bottom); keeps text clear of footer rule and disclaimer. */
-    const FOOTER_SAFE_Y = 74;
+    const FOOTER_SAFE_Y = layout.footerSafeY;
 
-    let y = 740;
+    let y = 520;
     let pageNumber = 1;
-
     function pageTitle() {
       return mode === "client" ? "Portfolio review  |  Client snapshot" : "Portfolio review  |  Advisor deep dive";
     }
@@ -507,8 +508,44 @@ export async function POST(req: Request) {
       return mode === "client" ? "Client snapshot" : "Advisor deep dive";
     }
 
-    function drawTopAccentLine(pg: PDFPage, topY: number, w = 612) {
-      pg.drawRectangle({ x: 0, y: topY - 3, width: w, height: 3, color: goldAccent });
+    function drawPageBackground(pg: PDFPage) {
+      pg.drawRectangle({ x: 0, y: 0, width: PAGE_W, height: PAGE_H, color: pageBg });
+    }
+
+    /** `boxTop` is the top edge of the logo square (PDF y increases upward). */
+    function drawLogoMark(pg: PDFPage, x: number, boxTop: number, size: number) {
+      const boxBottom = boxTop - size;
+      pg.drawRectangle({
+        x,
+        y: boxBottom,
+        width: size,
+        height: size,
+        color: colors.navyMid,
+        borderColor: colors.navyRule,
+        borderWidth: 0.6,
+      });
+      if (logoImage) {
+        const pad = size * 0.1;
+        pg.drawImage(logoImage, {
+          x: x + pad,
+          y: boxBottom + pad,
+          width: size - pad * 2,
+          height: size - pad * 2,
+        });
+      } else {
+        pg.drawText("AP", {
+          x: x + size * 0.28,
+          y: boxBottom + size * 0.32,
+          size: size * 0.22,
+          font: bold,
+          color: white,
+        });
+      }
+    }
+
+    function formatRiskProfileLabel(raw: unknown) {
+      const s = String(raw || "N/A").replace(/-/g, " ");
+      return s.replace(/\b\w+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
     }
 
     function drawFooter(pageRef: PDFPage, pageNum: number, totalPages: number) {
@@ -517,7 +554,7 @@ export async function POST(req: Request) {
       const leftRun = `AdvisorPilot  |  ${pageTitleShort()}`;
       pageRef.drawLine({
         start: { x: MARGIN, y: 52 },
-        end: { x: 612 - MARGIN, y: 52 },
+        end: { x: PAGE_W - MARGIN, y: 52 },
         thickness: 0.4,
         color: rule,
       });
@@ -525,17 +562,17 @@ export async function POST(req: Request) {
         x: MARGIN,
         y: 44,
         size: 5.8,
-        font: regular,
-        color: muted,
+        font: bold,
+        color: colors.footerMuted,
       });
-      const rightTxt = `Page ${pageNum} of ${totalPages}`;
-      const rw = regular.widthOfTextAtSize(rightTxt, 5.8);
+      const rightTxt = `${String(pageNum).padStart(2, "0")} / ${String(totalPages).padStart(2, "0")}`;
+      const rw = mono.widthOfTextAtSize(rightTxt, 5.8);
       pageRef.drawText(rightTxt, {
-        x: 612 - MARGIN - rw,
+        x: PAGE_W - MARGIN - rw,
         y: 44,
         size: 5.8,
-        font: regular,
-        color: muted,
+        font: mono,
+        color: colors.footerMuted,
       });
 
       const text = cleanText(footer);
@@ -555,70 +592,185 @@ export async function POST(req: Request) {
       let fy = 34 + (lines.length - 1) * 5;
       for (const l of lines) {
         const w = regular.widthOfTextAtSize(l, 5);
-        pageRef.drawText(l, { x: (612 - w) / 2, y: fy, size: 5, font: regular, color: muted });
+        pageRef.drawText(l, { x: (PAGE_W - w) / 2, y: fy, size: 5, font: regular, color: colors.footerDisc });
         fy -= 5;
       }
     }
 
-    function drawHeader() {
-      page.drawRectangle({ x: 0, y: 722, width: 612, height: 72, color: navy });
-      drawTopAccentLine(page, 794);
-      page.drawText(cleanText(pageTitle()), { x: MARGIN, y: 762, size: 18, font: bold, color: white });
-      page.drawText("WEALTH AND ASSET MANAGEMENT", {
-        x: MARGIN,
-        y: 746,
-        size: 6.2,
-        font: bold,
-        color: rgb(0.65, 0.72, 0.82),
-      });
-      const subLine = `${clientDisplayName(client) || "Client"}  |  Age ${client.age || "N/A"}  |  ${mode === "client" ? "Client summary" : "Advisor working session"}`;
-      page.drawText(cleanText(subLine), {
-        x: MARGIN,
-        y: 728,
-        size: 8.8,
-        font: regular,
-        color: rgb(0.82, 0.87, 0.93),
-      });
-      const metaLine = `Risk profile: ${String(client.riskProfile || "N/A").replace("-", " ")}  |  Portfolio value: ${money(totalValue)}  |  Prepared: ${reportDateStr}`;
-      page.drawText(cleanText(metaLine), {
-        x: MARGIN,
-        y: 712,
-        size: 8,
-        font: regular,
-        color: rgb(0.7, 0.78, 0.88),
-      });
-
-      if (logoImage) {
-        page.drawRectangle({
-          x: 526,
-          y: 728,
-          width: 48,
-          height: 36,
-          color: white,
-          opacity: 0.94,
-          borderColor: rgb(0.18, 0.36, 0.54),
-          borderWidth: 0.6,
-        });
-        page.drawImage(logoImage, { x: 533, y: 732, width: 34, height: 28 });
-      } else {
-        page.drawText("AdvisorPilot", { x: 498, y: 732, size: 10, font: bold, color: white });
-      }
-
-      y = 688;
+    function clientMetaShort() {
+      const rp = String(client.riskProfile || "N/A").replace("-", " ");
+      return `Age ${client.age || "N/A"} · ${rp} · ${reportDateStr}`;
     }
 
-    function drawSmallHeader() {
-      drawTopAccentLine(page, 792);
-      /* Full-width rule sits above the subtitle so caps (above baseline) are not struck through. */
-      page.drawRectangle({ x: 0, y: 762, width: 612, height: 1, color: ruleStrong });
-      page.drawText("AdvisorPilot", { x: MARGIN, y: 770, size: 10, font: bold, color: navyLight });
-      page.drawText(cleanText(pageTitle()), { x: MARGIN, y: 746, size: 7.2, font: regular, color: muted });
-      const rightTxt = `Page ${pageNumber}`;
-      const rw = regular.widthOfTextAtSize(rightTxt, 7.2);
-      page.drawText(rightTxt, { x: 612 - MARGIN - rw, y: 770, size: 7.2, font: regular, color: muted });
-      /* Closer to header band so body sections are not visually “pushed down” on continuation pages. */
-      /* Continuation pages: start body closer to mini-header for tighter editorial rhythm */
-      y = 732;
+    function drawCoverHeader() {
+      const bandH = layout.coverBandHeight;
+      const bandBottom = PAGE_H - bandH;
+      const logoSize = layout.coverLogoSize;
+      const titleSize = layout.coverTitleSize;
+      const statSize = layout.coverStatSize;
+      const titleLead = titleSize * 1.15;
+
+      page.drawRectangle({ x: 0, y: 0, width: PAGE_W, height: PAGE_H, color: pageBg });
+      page.drawRectangle({ x: 0, y: bandBottom, width: PAGE_W, height: bandH, color: navy });
+
+      const logoX = PAGE_W - MARGIN - logoSize;
+      const logoBoxTop = PAGE_H - layout.coverPadTop;
+      const eyebrowBaseline = logoBoxTop - 11;
+
+      page.drawText(cleanText("Wealth & Asset Management - Confidential"), {
+        x: MARGIN,
+        y: eyebrowBaseline,
+        size: 6.75,
+        font: regular,
+        color: colors.accentMuted,
+      });
+      drawLogoMark(page, logoX, logoBoxTop, logoSize);
+
+      const titleLine1Y = logoBoxTop - logoSize - layout.coverRowGap;
+      const titleLine2Y = titleLine1Y - titleLead;
+      const modeLabel = mode === "client" ? "Client Snapshot" : "Advisor Deep Dive";
+
+      page.drawText("Portfolio Review", {
+        x: MARGIN,
+        y: titleLine1Y,
+        size: titleSize,
+        font: serif,
+        color: white,
+      });
+      page.drawText(modeLabel, {
+        x: MARGIN,
+        y: titleLine2Y,
+        size: titleSize,
+        font: serifItalic,
+        color: accentLight,
+      });
+
+      const statRightX = logoX + logoSize;
+      const logoBottom = logoBoxTop - logoSize;
+      const statLabelSize = 6.75;
+      const statLabel = "PORTFOLIO VALUE";
+      const statLabelY = logoBottom - layout.coverStatGapBelowLogo - statLabelSize;
+      const slW = regular.widthOfTextAtSize(statLabel, statLabelSize);
+      page.drawText(statLabel, {
+        x: statRightX - slW,
+        y: statLabelY,
+        size: statLabelSize,
+        font: regular,
+        color: colors.accentMuted,
+      });
+      const pv = cleanText(money(totalValue));
+      const pvW = serif.widthOfTextAtSize(pv, statSize);
+      const statValueY = statLabelY - layout.coverStatGapLabelToValue - statSize;
+      page.drawText(pv, {
+        x: statRightX - pvW,
+        y: statValueY,
+        size: statSize,
+        font: serif,
+        color: white,
+      });
+
+      const infoTop = bandBottom + layout.coverInfoBarHeight;
+      page.drawLine({
+        start: { x: 0, y: infoTop },
+        end: { x: PAGE_W, y: infoTop },
+        thickness: 0.5,
+        color: colors.navyRule,
+      });
+      const cols = [
+        { label: "Client", value: clientDisplayName(client) || "Client" },
+        { label: "Age", value: String(client.age ?? "N/A") },
+        { label: "Risk Profile", value: formatRiskProfileLabel(client.riskProfile) },
+        { label: "Retirement Target", value: `Age ${client.retirementAge ?? "N/A"}` },
+        { label: "Prepared", value: reportDateStr },
+      ];
+      const colW = CONTENT_W / cols.length;
+      cols.forEach((c, i) => {
+        const cx = MARGIN + i * colW;
+        const labelPad = i === 0 ? 0 : 12;
+        page.drawText(cleanText(c.label).toUpperCase(), {
+          x: cx + labelPad,
+          y: infoTop - 14,
+          size: 6.4,
+          font: regular,
+          color: rgb(45 / 255, 80 / 255, 138 / 255),
+        });
+        page.drawText(cleanText(c.value).slice(0, 32), {
+          x: cx + labelPad,
+          y: infoTop - 26,
+          size: 8.25,
+          font: regular,
+          color: headerMeta,
+        });
+        if (i < cols.length - 1) {
+          page.drawLine({
+            start: { x: cx + colW, y: bandBottom },
+            end: { x: cx + colW, y: infoTop },
+            thickness: 0.4,
+            color: colors.navyRule,
+          });
+        }
+      });
+
+      y = bandBottom - layout.bodyPadTop;
+    }
+
+    function drawCompactHeader(illustrative = false) {
+      drawPageBackground(page);
+      const h = layout.compactHeaderHeight;
+      const bandBottom = PAGE_H - h;
+      page.drawRectangle({ x: 0, y: bandBottom, width: PAGE_W, height: h, color: navy });
+      page.drawRectangle({ x: 0, y: bandBottom, width: PAGE_W, height: 2, color: accent });
+
+      const headerPad = 16;
+      const eyebrow = illustrative
+        ? "Wealth & Asset Management · Confidential · Illustrative Exhibits"
+        : "Wealth & Asset Management · Confidential";
+      page.drawText(cleanText(eyebrow), {
+        x: MARGIN,
+        y: PAGE_H - headerPad,
+        size: 6,
+        font: regular,
+        color: rgb(45 / 255, 80 / 255, 138 / 255),
+      });
+      const modeLabel = mode === "client" ? "Client Snapshot" : "Advisor Deep Dive";
+      const titleY = PAGE_H - headerPad - 14;
+      page.drawText("Portfolio Review ", {
+        x: MARGIN,
+        y: titleY,
+        size: 12,
+        font: serif,
+        color: white,
+      });
+      const prW = serif.widthOfTextAtSize("Portfolio Review ", 12);
+      page.drawText(modeLabel, {
+        x: MARGIN + prW,
+        y: titleY,
+        size: 12,
+        font: serifItalic,
+        color: accentLight,
+      });
+
+      const cName = clientDisplayName(client) || "Client";
+      const nameW = regular.widthOfTextAtSize(cName, 9);
+      page.drawText(cName, {
+        x: PAGE_W - MARGIN - 36 - nameW - 12,
+        y: PAGE_H - headerPad - 1,
+        size: 9,
+        font: regular,
+        color: headerText,
+      });
+      const meta = clientMetaShort();
+      const metaW = regular.widthOfTextAtSize(meta, 7.5);
+      page.drawText(meta, {
+        x: PAGE_W - MARGIN - 36 - metaW - 12,
+        y: titleY,
+        size: 7.5,
+        font: regular,
+        color: colors.accentMuted,
+      });
+      drawLogoMark(page, PAGE_W - MARGIN - 36, PAGE_H - headerPad - 4, 36);
+
+      y = bandBottom - layout.bodyPadTop;
     }
 
     /** All-caps section eyebrow (McKinsey-style section labels). */
@@ -628,15 +780,15 @@ export async function POST(req: Request) {
         y,
         size: 6.4,
         font: bold,
-        color: stayBar,
+        color: accent,
       });
       y -= 14;
     }
 
-    function newPage() {
-      page = pdfDoc.addPage([612, 792]);
+    function newPage(opts?: { illustrative?: boolean }) {
+      page = pdfDoc.addPage([PAGE_W, PAGE_H]);
       pageNumber += 1;
-      drawSmallHeader();
+      drawCompactHeader(opts?.illustrative);
     }
 
     function availableHeight() {
@@ -666,66 +818,33 @@ export async function POST(req: Request) {
 
       t = truncateToMaxLines(t);
       const lines = wrapLinesToWidth(t, regular, size, synopsisWrapWidthPt);
-      const barH = Math.max(lines.length * lineH + 4, lineH + 4);
+      const kickerH = 12;
+      const padT = 14;
+      const padB = 14;
+      const bodyH = lines.length * lineH - gap + padT + padB + kickerH;
+      const boxBottom = y - bodyH;
       page.drawRectangle({
         x: MARGIN,
-        y: y - barH,
-        width: 2.5,
-        height: barH,
-        color: goldAccent,
+        y: boxBottom,
+        width: CONTENT_W,
+        height: bodyH,
+        color: synopsisBg,
+        borderColor: rule,
+        borderWidth: 0.35,
       });
-      y = drawWrappedTextToWidth(t, synopsisTextX, y, synopsisWrapWidthPt, size, ink, regular, gap) - 5;
-    }
-
-    function wrapLinesToWidth(text: unknown, font: PDFFont, fontSize: number, maxWidthPt: number): string[] {
-      const raw = cleanText(text);
-      const words = raw.split(/\s+/).filter(Boolean);
-      if (!words.length) return [""];
-
-      const linesOut: string[] = [];
-      let current = "";
-      const widthOf = (s: string) => font.widthOfTextAtSize(s, fontSize);
-
-      const flush = () => {
-        if (current) {
-          linesOut.push(current);
-          current = "";
-        }
-      };
-
-      for (const word of words) {
-        const trial = current ? `${current} ${word}` : word;
-        if (widthOf(trial) <= maxWidthPt) {
-          current = trial;
-          continue;
-        }
-
-        flush();
-
-        if (widthOf(word) <= maxWidthPt) {
-          current = word;
-          continue;
-        }
-
-        let piece = "";
-        for (let i = 0; i < word.length; i++) {
-          const ch = word[i]!;
-          const nextPiece = piece + ch;
-          if (widthOf(nextPiece) <= maxWidthPt) piece = nextPiece;
-          else {
-            if (piece) linesOut.push(piece);
-            piece = ch;
-          }
-        }
-        current = piece;
-      }
-
-      flush();
-      return linesOut.length ? linesOut : [""];
+      page.drawRectangle({ x: MARGIN, y: boxBottom, width: 3, height: bodyH, color: navy });
+      page.drawText("SUMMARY OF THE PORTFOLIO REVIEW", {
+        x: synopsisTextX,
+        y: y - padT,
+        size: 7,
+        font: bold,
+        color: accent,
+      });
+      y = drawWrappedTextToWidth(t, synopsisTextX, y - padT - kickerH, synopsisWrapWidthPt, size, ink, regular, gap) - padB - 5;
     }
 
     function estimateLinesToWidth(text: unknown, font: PDFFont, fontSize: number, maxWidthPt: number): number {
-      return Math.max(1, wrapLinesToWidth(text, font, fontSize, maxWidthPt).length);
+      return estimateWrappedLines(text, font, fontSize, maxWidthPt);
     }
 
     function drawWrappedTextToWidth(
@@ -747,19 +866,16 @@ export async function POST(req: Request) {
       return yy;
     }
 
-    function sectionBlockHeight(items: string[], subtitle = "") {
-      // Conservative estimate so a section does not start at the bottom of one page
-      // and continue onto the next unless it is truly too large to fit on one page.
-      const header = subtitle ? 64 : 50;
-      const rowGap = 12;
+    function insightSectionHeight(items: string[], subtitle = "") {
+      const header = subtitle ? 58 : 46;
+      const fs = layout.insightFontSize;
+      const lineH = fs + layout.insightLineGap;
       let total = header;
-
       for (const item of items) {
-        const lines = estimateLinesToWidth(item, regular, 8.4, cardListWrapWidthPt);
-        total += Math.max(54, 34 + lines * 13.2) + rowGap;
+        const lines = estimateLinesToWidth(item, regular, fs, layout.insightWrapW);
+        total += lines * lineH + 10;
       }
-
-      return total + 20;
+      return total + 16;
     }
 
     function paragraphBlockHeight(text: unknown, subtitle = "") {
@@ -775,32 +891,49 @@ export async function POST(req: Request) {
     }
 
     function sectionTitle(title: string, subtitle?: string, opts?: { exhibit?: boolean }) {
+      let numLabel: string;
       if (opts?.exhibit) {
         exhibitCounter += 1;
-        page.drawText(`Exhibit ${exhibitCounter}`, {
-          x: MARGIN,
-          y,
-          size: 6.5,
-          font: bold,
-          color: muted,
-        });
-        y -= 11;
+        numLabel = `Exhibit ${exhibitCounter}`;
+      } else {
+        sectionIndex += 1;
+        numLabel = String(sectionIndex).padStart(2, "0");
       }
-      page.drawRectangle({ x: MARGIN, y: y - 11, width: 3, height: 13, color: stayBar });
-      page.drawText(cleanText(title), { x: MARGIN + 10, y, size: 11, font: bold, color: navyLight });
-      y -= 19;
+      page.drawText(numLabel, {
+        x: MARGIN,
+        y,
+        size: 7.5,
+        font: monoMedium,
+        color: accent,
+      });
+      const numW = monoMedium.widthOfTextAtSize(numLabel, 7.5);
+      page.drawText(cleanText(title), {
+        x: MARGIN + numW + 10,
+        y,
+        size: 11,
+        font: serif,
+        color: navy,
+      });
+      const titleW = serif.widthOfTextAtSize(cleanText(title), 11);
+      const ruleStart = MARGIN + numW + 10 + titleW + 12;
+      y -= 14;
       page.drawLine({
-        start: { x: MARGIN, y: y + 9 },
-        end: { x: MARGIN + CONTENT_W, y: y + 9 },
-        thickness: 0.45,
+        start: { x: ruleStart, y: y + 4 },
+        end: { x: MARGIN + CONTENT_W, y: y + 4 },
+        thickness: 0.4,
         color: rule,
       });
-      y -= 11;
+      y -= 8;
       if (subtitle) {
-        page.drawText(cleanText(subtitle), { x: MARGIN, y, size: 7.6, font: regular, color: muted });
-        y -= 13;
+        const sub = cleanText(subtitle);
+        const subLines = wrapLinesToWidth(sub, regular, 7, CONTENT_W);
+        for (const subLine of subLines) {
+          page.drawText(subLine, { x: MARGIN, y, size: 7, font: regular, color: muted });
+          y -= 9;
+        }
+        y -= 4;
       } else {
-        y -= 5;
+        y -= 2;
       }
     }
 
@@ -830,67 +963,62 @@ export async function POST(req: Request) {
       page.drawRectangle({
         x: MARGIN,
         y: boxBottom,
-        width: 2,
+        width: 3,
         height: textBodyH,
-        color: goldAccent,
+        color: navy,
       });
       y = drawWrappedTextToWidth(text, boxedTextInsetX, boxTop - padT, boxedTextWrapWidthPt, fs, ink, regular, lineGap);
       y = y - padB - 8;
     }
 
-    function drawCardSection(title: string, subtitle: string, items: string[], _accent: RGB = stayBar, _fill: RGB = surface) {
+    function drawInsightSection(title: string, subtitle: string, items: string[]) {
       if (!items.length) return;
 
-      const sectionHeight = sectionBlockHeight(items, subtitle);
+      const sectionHeight = insightSectionHeight(items, subtitle);
       ensureBlock(sectionHeight);
       sectionTitle(title, subtitle);
 
-      const lineGap = 4.4;
-      for (let idx = 1; idx <= items.length; idx++) {
-        const item = items[idx - 1]!;
-        const lines = estimateLinesToWidth(item, regular, 8.4, cardListWrapWidthPt);
-        const blockH = Math.max(28, lines * (8.4 + lineGap) + 20);
-        if (blockH + 40 > availableHeight()) newPage();
+      const fs = layout.insightFontSize;
+      const lineGap = layout.insightLineGap;
+      const lineH = fs + lineGap;
+
+      for (const item of items) {
+        const lineCount = estimateLinesToWidth(item, regular, fs, layout.insightWrapW);
+        const blockH = lineCount * lineH + 4;
+        if (blockH + 30 > availableHeight()) newPage();
 
         const itemTop = y;
-        page.drawText(`${idx}.`, {
-          x: MARGIN,
+        page.drawText("-", {
+          x: layout.insightBulletX,
           y: itemTop,
-          size: 8.5,
+          size: fs + 1,
           font: bold,
-          color: stayBar,
+          color: accent,
         });
-        const textBottom = drawWrappedTextToWidth(
+        y = drawWrappedTextToWidth(
           item,
-          cardListTextX,
+          layout.insightTextX,
           itemTop,
-          cardListWrapWidthPt,
-          8.4,
+          layout.insightWrapW,
+          fs,
           ink,
           regular,
           lineGap,
         );
-        const dividerY = textBottom - 5;
-        page.drawLine({
-          start: { x: MARGIN, y: dividerY },
-          end: { x: MARGIN + CONTENT_W, y: dividerY },
-          thickness: 0.3,
-          color: rgb(0.88, 0.9, 0.93),
-        });
-        y = dividerY - 11;
+        y -= 12;
       }
-      y -= 5;
+      y -= 4;
     }
 
     function drawHistoricalDecadeScenarios() {
       const rowCount = TEN_YEAR_SCENARIOS.length + 1;
-      const sectionHeight = 80 + 22 + rowCount * 26 + 30;
+      const subtitle =
+        "Decade rows: CAGR vs proposed sleeve. Bottom row: 2008 modeled calendar-year blend (worst calibrated S&P year).";
+      const subLines = wrapLinesToWidth(cleanText(subtitle), regular, 7, CONTENT_W).length;
+      const sectionHeaderH = 46 + subLines * 9 + 6;
+      const sectionHeight = sectionHeaderH + 22 + rowCount * 26 + 36;
       ensureBlock(sectionHeight);
-      sectionTitle(
-        "Hypothetical Allocation Stress",
-        "Decade rows: CAGR vs proposed sleeve. Bottom row: 2008 modeled calendar-year blend (worst calibrated S&P year).",
-        { exhibit: true }
-      );
+      sectionTitle("Hypothetical Allocation Stress", subtitle, { exhibit: true });
 
       const targetSlice = {
         equity: asNumber(targetAllocation.equity, 60),
@@ -942,26 +1070,26 @@ export async function POST(req: Request) {
         height: headerH,
         color: navy,
       });
-      page.drawText("Stress window", { x: tableX + 14, y: tableTop - 15, size: 7.5, font: bold, color: white });
+      page.drawText("STRESS WINDOW", { x: tableX + 14, y: tableTop - 15, size: 7, font: bold, color: tableHeadText });
       const cx = tableX + 330;
       const px = tableX + 446;
       const numW = 56;
-      const wHc = bold.widthOfTextAtSize("Current", 7.5);
-      const wHp = bold.widthOfTextAtSize("Proposed", 7.5);
-      page.drawText("Current", { x: cx + numW - wHc, y: tableTop - 15, size: 7.5, font: bold, color: white });
-      page.drawText("Proposed", { x: px + numW - wHp, y: tableTop - 15, size: 7.5, font: bold, color: white });
+      const wHc = bold.widthOfTextAtSize("CURRENT", 7);
+      const wHp = bold.widthOfTextAtSize("PROPOSED", 7);
+      page.drawText("CURRENT", { x: cx + numW - wHc, y: tableTop - 15, size: 7, font: bold, color: tableHeadText });
+      page.drawText("PROPOSED", { x: px + numW - wHp, y: tableTop - 15, size: 7, font: bold, color: tableHeadText });
 
       let rowY = tableTop - headerH;
       rows.forEach((row, index) => {
         rowY -= rowH;
-        const rowFill = index % 2 === 0 ? surface : white;
+        const rowFill = index % 2 === 0 ? tableZebra : pageBg;
         page.drawRectangle({
           x: tableX,
           y: rowY,
           width: tableW,
           height: rowH,
           color: rowFill,
-          borderColor: rgb(0.91, 0.94, 0.96),
+          borderColor: colors.ruleLight,
           borderWidth: 0.22,
         });
         const baseline = rowY + rowH / 2 - 2;
@@ -970,12 +1098,12 @@ export async function POST(req: Request) {
           y: baseline,
           size: 8,
           font: regular,
-          color: navy,
+          color: ink,
         });
-        const wC = bold.widthOfTextAtSize(row.current, 9);
-        const wP = bold.widthOfTextAtSize(row.proposed, 9);
-        page.drawText(row.current, { x: cx + numW - wC, y: baseline, size: 9, font: bold, color: ink });
-        page.drawText(row.proposed, { x: px + numW - wP, y: baseline, size: 9, font: bold, color: navy });
+        const wC = mono.widthOfTextAtSize(row.current, 9);
+        const wP = monoMedium.widthOfTextAtSize(row.proposed, 9);
+        page.drawText(row.current, { x: cx + numW - wC, y: baseline, size: 9, font: mono, color: ink });
+        page.drawText(row.proposed, { x: px + numW - wP, y: baseline, size: 9, font: monoMedium, color: accent });
       });
 
       y = tableBottom - 14;
@@ -994,174 +1122,92 @@ export async function POST(req: Request) {
       helper: string,
       x: number,
       top: number,
-      color: RGB,
-      boxH = 76
+      cardW: number,
+      boxH = 88
     ) {
       const n = Math.max(0, Math.min(100, Number(value || 0)));
-      const titleSize = boxH < 68 ? 8 : 8.6;
-      const numSize = boxH < 68 ? 18 : 22;
-      const titleY = top - (boxH < 68 ? 18 : 22);
-      const numY = top - (boxH < 68 ? 36 : 50);
-      const slashY = top - (boxH < 68 ? 34 : 47);
-      const helperY = top - (boxH < 68 ? 52 : 64);
-      const barY = top - (boxH < 68 ? 44 : 50);
+      const accentBar = scoreRed;
+      const titleY = top - 22;
+      const numY = top - 52;
+      const helperY = top - 68;
+      const trackY = top - 78;
 
-      page.drawRectangle({ x, y: top - boxH, width: 168, height: boxH, color: white, borderColor: rule, borderWidth: 0.4 });
-      page.drawRectangle({ x, y: top - 3, width: 168, height: 3, color });
-      page.drawText(title, { x: x + 12, y: titleY, size: titleSize, font: bold, color: navy });
-      page.drawText(`${Math.round(n)}`, { x: x + 12, y: numY, size: numSize, font: bold, color: navy });
-      page.drawText("/100", { x: x + Math.round(numSize === 18 ? 38 : 46), y: slashY, size: 8.5, font: regular, color: muted });
-      page.drawText(helper, { x: x + 12, y: helperY, size: 6.6, font: regular, color: muted });
-      page.drawRectangle({ x: x + 78, y: barY, width: 76, height: 3, color: rgb(0.89, 0.92, 0.95) });
-      page.drawRectangle({ x: x + 78, y: barY, width: 76 * (n / 100), height: 3, color: n >= 75 ? stayBar : n >= 55 ? goldAccent : red });
+      page.drawRectangle({ x, y: top - boxH, width: cardW, height: boxH, color: pageBg, borderColor: rule, borderWidth: 0.45 });
+      page.drawRectangle({ x, y: top - 3, width: cardW, height: 3, color: accentBar });
+      page.drawText(cleanText(title).toUpperCase(), { x: x + 14, y: titleY, size: 7, font: bold, color: muted });
+      page.drawText(`${Math.round(n)}`, { x: x + 14, y: numY, size: 28, font: serif, color: navy });
+      const slashX = x + 14 + serif.widthOfTextAtSize(`${Math.round(n)}`, 28) + 2;
+      page.drawText(" /100", { x: slashX, y: numY + 8, size: 9, font: regular, color: muted });
+      page.drawText(helper, { x: x + 14, y: helperY, size: 6.5, font: regular, color: muted });
+      const trackW = cardW - 28;
+      page.drawRectangle({ x: x + 14, y: trackY, width: trackW, height: 2, color: colors.ruleLight });
+      page.drawRectangle({ x: x + 14, y: trackY, width: trackW * (n / 100), height: 2, color: accentBar });
     }
 
 
     function drawRetirementSuccessModel() {
-      const sectionHeight = 300;
+      const sectionHeight = 200;
       ensureBlock(sectionHeight);
       sectionTitle("Retirement success model", undefined, { exhibit: true });
 
-      const boxX = MARGIN;
-      const boxTop = y - 4;
-      const boxW = CONTENT_W;
-      /* Tall enough for second bar + delta band + padding above card bottom */
-      const boxH = 156;
-      const boxBottom = boxTop - boxH;
+      const gap = 16;
+      const cardW = Math.floor((CONTENT_W - gap) / 2);
+      const cardH = 118;
+      const cardTop = y - 4;
+      const cardBottom = cardTop - cardH;
 
-      page.drawRectangle({
-        x: boxX,
-        y: boxBottom,
-        width: boxW,
-        height: boxH,
-        color: white,
-        borderColor: rule,
-        borderWidth: 0.4,
-      });
-
-      page.drawRectangle({
-        x: boxX,
-        y: boxTop - 3,
-        width: boxW,
-        height: 2.5,
-        color: goldAccent,
-      });
-
-      function gradeColor(value: number) {
-        if (value >= 85) return stayBar;
-        if (value >= 70) return goldAccent;
-        return red;
-      }
-
-      const innerX = boxX + 14;
-      const barW = 274;
-      const scoreX = innerX + barW + 14;
-      const barH = 11;
-      const markH = barH + 5;
-
-      function drawSuccessBar(label: string, value: number, modelLabel: string, top: number) {
+      function drawSuccessCard(
+        label: string,
+        value: number,
+        helper: string,
+        x: number,
+        topAccent: RGB,
+        scoreColor: RGB,
+      ) {
+        page.drawRectangle({
+          x,
+          y: cardTop - cardH,
+          width: cardW,
+          height: cardH,
+          color: pageBg,
+          borderColor: rule,
+          borderWidth: 0.45,
+        });
+        page.drawRectangle({ x, y: cardTop - 3, width: cardW, height: 3, color: topAccent });
+        page.drawText(cleanText(label).toUpperCase(), { x: x + 16, y: cardTop - 22, size: 7, font: bold, color: muted });
         const n = Math.max(0, Math.min(100, Number(value || 0)));
-        const scoreColor = gradeColor(n);
-
-        page.drawText(cleanText(label), {
-          x: innerX,
-          y: top,
-          size: 9,
-          font: bold,
-          color: navy,
-        });
-
-        page.drawText(cleanText(modelLabel), {
-          x: innerX,
-          y: top - 12,
-          size: 6.9,
-          font: regular,
-          color: muted,
-        });
-
-        page.drawRectangle({
-          x: scoreX,
-          y: top - 27,
-          width: 90,
-          height: 32,
-          color: white,
-          borderColor: scoreColor,
-          borderWidth: 0.55,
-        });
-
-        page.drawText(`${Math.round(n)}/100`, {
-          x: scoreX + 10,
-          y: top - 11,
-          size: 14,
-          font: bold,
-          color: navy,
-        });
-
-        page.drawText(successLabel(n), {
-          x: scoreX + 10,
-          y: top - 22,
-          size: 6.8,
-          font: regular,
-          color: scoreColor,
-        });
-
-        page.drawRectangle({
-          x: innerX,
-          y: top - 38,
-          width: barW,
-          height: barH,
-          color: rgb(0.90, 0.93, 0.96),
-        });
-
-        page.drawRectangle({
-          x: innerX,
-          y: top - 38,
-          width: barW * (n / 100),
-          height: barH,
-          color: scoreColor,
-        });
-
-        page.drawRectangle({
-          x: innerX + barW * 0.85,
-          y: top - 40,
-          width: 1,
-          height: markH,
-          color: navy,
-        });
+        page.drawText(`${Math.round(n)}`, { x: x + 16, y: cardTop - 58, size: 36, font: serif, color: scoreColor });
+        const slashX = x + 16 + serif.widthOfTextAtSize(`${Math.round(n)}`, 36) + 2;
+        page.drawText(" /100", { x: slashX, y: cardTop - 48, size: 11, font: regular, color: muted });
+        page.drawText(successLabel(n), { x: x + 16, y: cardTop - 72, size: 8, font: bold, color: scoreColor });
+        page.drawText(helper, { x: x + 16, y: cardTop - 86, size: 6.5, font: regular, color: muted });
       }
 
-      const rowTopCurrent = boxTop - 24;
-      const rowTopProposed = boxTop - 90;
-      drawSuccessBar("Current allocation", currentSuccessRate, "Based on current positioning", rowTopCurrent);
-      drawSuccessBar("Proposed allocation", proposedSuccessRate, "Based on proposed allocation", rowTopProposed);
+      const curColor = currentSuccessRate >= 70 ? scoreBlue : scoreRed;
+      const propColor = proposedSuccessRate >= 70 ? scoreBlue : accent;
+      drawSuccessCard(
+        "Current allocation",
+        currentSuccessRate,
+        "Based on current positioning",
+        MARGIN,
+        scoreRed,
+        curColor,
+      );
+      const deltaPts = proposedSuccessRate - currentSuccessRate;
+      const propHelper =
+        deltaPts >= 0
+          ? `+${deltaPts} points vs. current allocation`
+          : `${deltaPts} points vs. current allocation`;
+      drawSuccessCard(
+        "Proposed allocation",
+        proposedSuccessRate,
+        propHelper,
+        MARGIN + cardW + gap,
+        accent,
+        propColor,
+      );
 
-      const delta = proposedSuccessRate - currentSuccessRate;
-      const deltaText = delta >= 0 ? `+${delta} points vs. current` : `${delta} points vs. current`;
-
-      const deltaH = 20;
-      /* Bar track y is the rectangle bottom edge in PDF coords */
-      const secondBarBottomY = rowTopProposed - 38;
-      const gapAboveDelta = 5;
-      const deltaY = secondBarBottomY - gapAboveDelta - deltaH;
-      page.drawRectangle({
-        x: innerX,
-        y: deltaY,
-        width: 176,
-        height: deltaH,
-        color: delta >= 0 ? softTeal : softRed,
-        borderColor: delta >= 0 ? stayBar : red,
-        borderWidth: 0.45,
-      });
-
-      page.drawText(cleanText(deltaText), {
-        x: innerX + 10,
-        y: deltaY + 13,
-        size: 8.2,
-        font: bold,
-        color: delta >= 0 ? stayBar : red,
-      });
-
-      y = boxBottom - 10;
+      y = cardBottom - 18;
     }
 
     /** Short cross-reference after the retirement exhibit; full methodology moves to appendix. */
@@ -1171,13 +1217,36 @@ export async function POST(req: Request) {
           ? "These scores illustrate sustainability under modeled scenarios only. They are not predictions of outcomes or suitability."
           : "Illustrative sustainability scores based on seeded Monte Carlo simulations. Not suitability, not predictive. Full methodology follows in Disclosures.";
       const lineB = "Details on assumptions, hypothetical stress paths, narrative sources, and limitations appear at the end of this document under Disclosures.";
-      const fs = 6.5;
-      const lineGap = 3.8;
-      const cueH = 36;
-      ensureBlock(cueH);
-      y = drawWrappedTextToWidth(lineA, MARGIN, y, appendixWrapWidthPt, fs, muted, regular, lineGap);
-      y = drawWrappedTextToWidth(lineB, MARGIN, y, appendixWrapWidthPt, fs, muted, regular, lineGap);
-      y -= 8;
+      const fs = 7;
+      const lineGap = 4;
+      const textInsetX = MARGIN + 14;
+      const textWrapW = CONTENT_W - 28;
+      const lineH = fs + lineGap;
+      const padTop = 10;
+      const padBottom = 10;
+      const blockGap = 5;
+      const linesA = wrapLinesToWidth(lineA, regular, fs, textWrapW);
+      const linesB = wrapLinesToWidth(lineB, regular, fs, textWrapW);
+      const boxH = padTop + linesA.length * lineH + blockGap + linesB.length * lineH + padBottom;
+      const gapBelow = 18;
+      ensureBlock(boxH + gapBelow);
+      const boxTop = y;
+      const boxBottom = boxTop - boxH;
+      page.drawRectangle({
+        x: MARGIN,
+        y: boxBottom,
+        width: CONTENT_W,
+        height: boxH,
+        color: synopsisBg,
+        borderColor: colors.calloutBorder,
+        borderWidth: 0.4,
+      });
+      page.drawRectangle({ x: MARGIN, y: boxBottom, width: 3, height: boxH, color: accent });
+      let textY = boxTop - padTop;
+      textY = drawWrappedTextToWidth(lineA, textInsetX, textY, textWrapW, fs, ink, regular, lineGap);
+      textY -= blockGap;
+      drawWrappedTextToWidth(lineB, textInsetX, textY, textWrapW, fs, muted, regular, lineGap);
+      y = boxBottom - gapBelow;
     }
 
     /** Terminal disclosures with client vs advisor depth; renders after holdings and optional integrated illustrations. */
@@ -1186,8 +1255,8 @@ export async function POST(req: Request) {
       drawSectionEyebrow("Disclosures");
       /** Tighter than `sectionTitle` so the full disclosures block fits on one page in advisor (long-form) mode. */
       function drawDisclosuresHead(title: string, subtitle: string) {
-        page.drawRectangle({ x: MARGIN, y: y - 8, width: 2.5, height: 10, color: stayBar });
-        page.drawText(cleanText(title), { x: MARGIN + 8, y, size: 10, font: bold, color: navyLight });
+        page.drawRectangle({ x: MARGIN, y: y - 8, width: 3, height: 10, color: navy });
+        page.drawText(cleanText(title), { x: MARGIN + 10, y, size: 10, font: serif, color: navy });
         y -= 14;
         page.drawLine({
           start: { x: MARGIN, y: y + 6 },
@@ -1312,7 +1381,7 @@ export async function POST(req: Request) {
         ensureBlock(titleBlockH + 10);
         let ty = y;
         for (const tl of titleLines) {
-          page.drawText(cleanText(tl), { x: MARGIN, y: ty, size: titleFs, font: bold, color: navyLight });
+          page.drawText(cleanText(tl), { x: MARGIN, y: ty, size: titleFs, font: serif, color: navy });
           ty -= titleFs + titleLineLead;
         }
         y = ty - titleBottomMargin;
@@ -1349,7 +1418,7 @@ export async function POST(req: Request) {
 
       const segmentsRaw = [
         { label: "Equity", value: equity, color: donutEquity },
-        { label: "Fixed", value: fixed, color: donutFixed },
+        { label: "Fixed Income", value: fixed, color: donutFixed },
         { label: "Cash", value: cash, color: donutCash },
         ...(other > 0 ? [{ label: "Unclassified", value: other, color: donutOther }] : []),
       ];
@@ -1358,11 +1427,10 @@ export async function POST(req: Request) {
       const segments = segmentsRaw.map((it) => ({ ...it, value: (it.value / sum) * 100 })).filter((it) => it.value > 0);
 
       const cardBottomY = top - cardH;
-      page.drawRectangle({ x, y: cardBottomY, width: cardW, height: cardH, color: white, borderColor: rule, borderWidth: 0.35 });
-      page.drawRectangle({ x, y: top - 2.5, width: cardW, height: 2.5, color: accent });
+      page.drawRectangle({ x, y: cardBottomY, width: cardW, height: cardH, color: pageBg, borderColor: rule, borderWidth: 0.45 });
 
-      page.drawText(title, { x: x + 12, y: top - 20, size: 10.5, font: bold, color: navyLight });
-      page.drawText(subtitle, { x: x + 12, y: top - 34, size: 7, font: regular, color: muted });
+      page.drawText(cleanText(title).toUpperCase(), { x: x + 14, y: top - 20, size: 7.5, font: bold, color: navy });
+      page.drawText(subtitle, { x: x + 14, y: top - 32, size: 7, font: regular, color: muted });
 
       /** Match ProfessionalDonutChart geometry; scale sizes the ring on the page. */
       const scale = 0.4;
@@ -1402,16 +1470,16 @@ export async function POST(req: Request) {
         cumDeg += slice;
       }
 
-      page.drawCircle({ x: donutCx, y: donutCy, size: SNAPSHOT_DONUT.holeR * scale, color: white });
+      page.drawCircle({ x: donutCx, y: donutCy, size: SNAPSHOT_DONUT.holeR * scale, color: pageBg });
 
-      const totalLabel = "Total";
-      const totalSize = 6.2;
+      const totalLabel = "TOTAL";
+      const totalSize = 6;
       const totalW = regular.widthOfTextAtSize(totalLabel, totalSize);
       page.drawText(totalLabel, { x: donutCx - totalW / 2, y: donutCy + 9, size: totalSize, font: regular, color: muted });
       const pctLabel = "100%";
-      const pctCenterSize = 11;
-      const tw = bold.widthOfTextAtSize(pctLabel, pctCenterSize);
-      page.drawText(pctLabel, { x: donutCx - tw / 2, y: donutCy - 6, size: pctCenterSize, font: bold, color: navy });
+      const pctCenterSize = 10;
+      const tw = monoMedium.widthOfTextAtSize(pctLabel, pctCenterSize);
+      page.drawText(pctLabel, { x: donutCx - tw / 2, y: donutCy - 6, size: pctCenterSize, font: monoMedium, color: navy });
 
       const outerVisual = (SNAPSHOT_DONUT.r + strokeW / 2) * scale;
       const legendLeft = donutCx + outerVisual + 10;
@@ -1426,14 +1494,14 @@ export async function POST(req: Request) {
         page.drawRectangle({ x: legendLeft, y: rowY - 1, width: sw, height: sw + 4, color: item.color });
         page.drawText(item.label, { x: legendLeft + sw + 5, y: rowY, size: labelSize, font: regular, color: ink });
         const pct = `${pctRounded}%`;
-        const pw = bold.widthOfTextAtSize(pct, pctSize);
-        page.drawText(pct, { x: pctColRight - pw, y: rowY, size: pctSize, font: bold, color: navy });
+        const pw = monoMedium.widthOfTextAtSize(pct, pctSize);
+        page.drawText(pct, { x: pctColRight - pw, y: rowY, size: pctSize, font: monoMedium, color: navy });
         rowY -= rowStride;
       }
     }
 
     function drawPageOneAllocationScoresSynopsis() {
-      drawHeader();
+      drawCoverHeader();
 
       sectionTitle("Allocation overview", undefined);
       y += 11;
@@ -1446,29 +1514,29 @@ export async function POST(req: Request) {
       const x1 = MARGIN;
       const x2 = MARGIN + cardW + cardGap;
       const cardTopY = y + cardTopOffset;
-      allocationCard("Current allocation", "Based on confirmed holdings", x1, cardTopY, currentAllocation, stayBar, cardH, {
+      allocationCard("Current allocation", "Based on confirmed holdings", x1, cardTopY, currentAllocation, accent, cardH, {
         includeOther: true,
       });
-      allocationCard("Proposed allocation", "Illustrative target mix for discussion", x2, cardTopY, targetAllocation, accentSecondary, cardH);
+      allocationCard("Proposed allocation", "Illustrative target mix for discussion", x2, cardTopY, targetAllocation, scoreBlue, cardH);
       const cardBottomY = cardTopY - cardH;
       y = cardBottomY - 22;
 
       sectionTitle("Portfolio scores", "Alignment, diversification, income readiness.");
       y += 3;
-      const cardPx = 168;
-      const scoreGap = Math.max(8, Math.floor((CONTENT_W - cardPx * 3) / 2));
+      const scoreGap = 8;
+      const scoreCardW = Math.floor((CONTENT_W - scoreGap * 2) / 3);
       const sx1 = MARGIN;
-      const sx2 = MARGIN + cardPx + scoreGap;
-      const sx3 = MARGIN + (cardPx + scoreGap) * 2;
-      const scoreBoxH = 58;
+      const sx2 = MARGIN + scoreCardW + scoreGap;
+      const sx3 = MARGIN + (scoreCardW + scoreGap) * 2;
+      const scoreBoxH = 88;
       const scoreTopOffset = 4;
       const scoreTopY = y + scoreTopOffset;
-      drawScoreCard("Risk alignment", scores.riskAlignment, "Versus proposed allocation", sx1, scoreTopY, stayBar, scoreBoxH);
-      drawScoreCard("Diversification", scores.diversification, "Balance across sleeves", sx2, scoreTopY, accentSecondary, scoreBoxH);
-      drawScoreCard("Income readiness", scores.incomeReadiness, "Stability for income needs", sx3, scoreTopY, goldAccent, scoreBoxH);
+      drawScoreCard("Risk alignment", scores.riskAlignment, "Versus proposed allocation", sx1, scoreTopY, scoreCardW, scoreBoxH);
+      drawScoreCard("Diversification", scores.diversification, "Balance across sleeves", sx2, scoreTopY, scoreCardW, scoreBoxH);
+      drawScoreCard("Income readiness", scores.incomeReadiness, "Stability for income needs", sx3, scoreTopY, scoreCardW, scoreBoxH);
       y = scoreTopY - scoreBoxH - 21;
 
-      sectionTitle("Synopsis", "Summary of the portfolio review.");
+      sectionTitle("Synopsis");
       y += 2;
       drawSynopsisOnPageOne(analysis?.synopsis || "No analysis available.", FOOTER_SAFE_Y);
     }
@@ -1513,36 +1581,40 @@ export async function POST(req: Request) {
 
     drawRetirementSuccessMethodologyCue();
 
+    if (y < FOOTER_SAFE_Y + 200) newPage();
     drawHistoricalDecadeScenarios();
 
+    newPage();
     drawSectionEyebrow("Insights and implications");
     if (mode === "advisor") {
-      drawCardSection("Advisor red flags", "Issues to resolve internally before client-facing recommendations.", redFlagItems, red, softRed);
+      drawInsightSection("Advisor red flags", "Issues to resolve internally before client-facing recommendations.", redFlagItems);
     }
 
-    drawCardSection("Overlap and concentration", "Where diversification may be weaker than position count suggests.", overlapInsightItems, accentSecondary, softBlue);
-    drawCardSection(
+    drawInsightSection("Overlap and concentration", "Where diversification may be weaker than position count suggests.", overlapInsightItems);
+    drawInsightSection(
       mode === "client" ? "What this means for you" : "Client-facing interpretation",
       "Plain-language impact.",
       mode === "client" ? whatThisMeansItems.slice(0, 3) : whatThisMeansItems,
-      stayBar,
-      stayBarSoft
     );
-    drawCardSection("Strategic considerations", "Themes for the planning conversation.", mode === "client" ? strategyItems.slice(0, 3) : strategyItems, accentSecondary, surface);
+    drawInsightSection(
+      "Strategic considerations",
+      "Themes for the planning conversation.",
+      mode === "client" ? strategyItems.slice(0, 3) : strategyItems,
+    );
 
     if (mode === "advisor") {
-      drawCardSection("Illustrative recommendations", "Ideas for review only; not trade instructions.", recommendationItems, goldAccent, rgb(1.0, 0.985, 0.92));
+      drawInsightSection("Illustrative recommendations", "Ideas for review only; not trade instructions.", recommendationItems);
     } else {
-      drawCardSection("Potential next steps", "How a typical follow-up conversation may flow.", [
+      drawInsightSection("Potential next steps", "How a typical follow-up conversation may flow.", [
         "Review how the portfolio aligns with retirement timeline, income needs, and comfort with volatility.",
         "Discuss whether a clearer balance of growth, stability, and income supports your stated goals.",
         "Explore diversification across asset classes and income sources before any changes.",
         "Align any next actions with taxes, liquidity, risk tolerance, and your full financial picture.",
-      ], stayBar, stayBarSoft);
+      ]);
     }
 
     if (mode === "advisor") {
-      drawCardSection("Meeting overview", "Talking points for the next conversation.", meetingItems.slice(0, 4), navy, surface);
+      drawInsightSection("Meeting overview", "Talking points for the next conversation.", meetingItems.slice(0, 4));
     }
 
     if (mode === "advisor" && analysis?.advisorOpeningScript) {
@@ -1550,7 +1622,7 @@ export async function POST(req: Request) {
     }
 
     if (mode === "advisor" && Array.isArray(analysis?.objectionHandling) && analysis.objectionHandling.length) {
-      drawCardSection("Objection handling", "Framing for likely client concerns.", stringItems(analysis.objectionHandling, 6), red, softRed);
+      drawInsightSection("Objection handling", "Framing for likely client concerns.", stringItems(analysis.objectionHandling, 6));
     }
 
     drawHoldingsAppendix();
@@ -1569,19 +1641,24 @@ export async function POST(req: Request) {
         y = v;
       },
       addContinuationPage: () => {
-        newPage();
+        newPage({ illustrative: true });
       },
       margin: MARGIN,
       contentW: CONTENT_W,
       footerSafeY: FOOTER_SAFE_Y,
       regular,
       bold,
-      navyLight,
-      stayBar,
+      navyLight: navy,
+      stayBar: accent,
       muted,
       rule,
-      surface,
+      surface: tableZebra,
       ink,
+      pageBg,
+      tableHeadText,
+      mono,
+      monoMedium,
+      serif,
     };
 
     let fiaIllustrationRendered = false;
@@ -1606,13 +1683,13 @@ export async function POST(req: Request) {
           capRaw &&
           buildFiaScenarioSummaries(ws, fiaPremium, fiaAgeOk).length > 0;
         if (fiaReady) {
-          newPage();
-          drawSectionEyebrow("Illustrative exhibits");
+          newPage({ illustrative: true });
           sectionTitle(
             "Hypothetical fixed index annuity",
-            "Advisor-entered terms; illustrative only, not a carrier illustration."
+            "Advisor-entered terms; illustrative only, not a carrier illustration.",
+            { exhibit: true },
           );
-          y += 2;
+          y -= 4;
           if (
             appendFiaIllustrationFiguresAndTables(illustrationLayout, {
               fiaWorksheet: body.fiaWorksheet,
@@ -1638,10 +1715,13 @@ export async function POST(req: Request) {
           rothWorksheet: body.rothWorksheet,
           totalValue: rothTotal,
         });
-        newPage();
-        drawSectionEyebrow(fiaIllustrationRendered ? "Illustrative exhibits (continued)" : "Illustrative exhibits");
-        sectionTitle("Roth conversion comparison", "Illustrative stay vs. conversion paths; see Disclosures for assumptions.");
-        y += 2;
+        newPage({ illustrative: true });
+        sectionTitle(
+          "Roth conversion comparison",
+          "Illustrative stay vs. conversion paths; see Disclosures for assumptions.",
+          { exhibit: true },
+        );
+        y -= 4;
         appendRothIllustrationFiguresAndTables(illustrationLayout, bundle.model);
         illustrationDisclosureChunks.push(...getRothDisclosureChunksForPortfolio(bundle.model, bundle.need));
         rothIllustrationRendered = true;

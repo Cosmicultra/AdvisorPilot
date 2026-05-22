@@ -133,7 +133,7 @@ export function toClientDetail(
     analysis,
     rothWorksheet,
     meetingNotes: row.meeting_notes ?? "",
-    email: deriveEmail(row, intake),
+    email: deriveClientEmail(row, intake),
     phone: row.phone,
     location: row.location,
     relationshipSummary: deriveRelationshipSummary(intake),
@@ -194,7 +194,8 @@ function deriveAccountsCount(holdings: UiHolding[]): number | null {
  * back to JSONB only for legacy rows where intake collected an email but
  * the top-level column is still NULL.
  */
-function deriveEmail(row: ClientRow, intake: IntakeClient): string | null {
+/** Client email for CRM + drippers (top-level column, then intake JSONB fallback). */
+export function deriveClientEmail(row: ClientRow, intake: IntakeClient): string | null {
   if (row.email && row.email.trim()) return row.email.trim();
   const jsonbEmail = intake.advisorEmail?.trim();
   return jsonbEmail || null;
@@ -221,12 +222,14 @@ function deriveRelationshipSummary(intake: IntakeClient): string | null {
 
 function isClientStage(value: unknown): value is ClientStage {
   return (
+    value === "Lead" ||
+    value === "Prospect" ||
+    value === "Onboarding" ||
+    value === "Engaged" ||
     value === "Review due" ||
     value === "Upcoming" ||
     value === "Stable" ||
-    value === "At risk" ||
-    value === "Onboarding" ||
-    value === "Prospect"
+    value === "At risk"
   );
 }
 

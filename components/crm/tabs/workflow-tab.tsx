@@ -29,6 +29,7 @@ import {
   Landmark,
   MessageSquareText,
   Percent,
+  RefreshCw,
   Upload,
 } from "lucide-react";
 import type { ClientDetail } from "@/lib/crm/types";
@@ -38,6 +39,8 @@ interface StepCard {
   title: string;
   description: string;
   icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
+  /** Extra query string appended to the intake deep link (e.g. mode=accountRefresh). */
+  extraQuery?: string;
 }
 
 interface StepGroup {
@@ -62,6 +65,14 @@ const GROUPS: StepGroup[] = [
         title: "Statement upload",
         description: "Drop new statements for AI extraction.",
         icon: Upload,
+      },
+      {
+        step: "upload",
+        title: "Refresh account statement",
+        description:
+          "Upload a newer statement for one account; other accounts stay on the client.",
+        icon: RefreshCw,
+        extraQuery: "mode=accountRefresh",
       },
       {
         step: "confirm",
@@ -175,7 +186,11 @@ function Group({ group, clientId }: { group: StepGroup; clientId: string }) {
       </div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
         {group.steps.map((step) => (
-          <StepCardLink key={step.step} step={step} clientId={clientId} />
+          <StepCardLink
+            key={`${step.step}-${step.title}`}
+            step={step}
+            clientId={clientId}
+          />
         ))}
       </div>
     </section>
@@ -190,9 +205,13 @@ function StepCardLink({
   clientId: string;
 }) {
   const Icon = step.icon;
+  const href = `/app/intake?clientId=${encodeURIComponent(clientId)}&step=${step.step}${
+    step.extraQuery ? `&${step.extraQuery}` : ""
+  }`;
+
   return (
     <Link
-      href={`/app/intake?clientId=${encodeURIComponent(clientId)}&step=${step.step}`}
+      href={href}
       className="group flex items-start gap-3 bg-white px-4 py-3 transition-colors hover:bg-[rgba(15,111,222,0.04)]"
       style={{ border: "1px solid var(--ap-border)" }}
     >

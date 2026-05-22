@@ -194,13 +194,13 @@ export function LegacyEmbed() {
           background-color: var(--ap-pilot-light) !important;
         }
 
-        /* Step index → 28×28 tile to the left of the label, matching the
+        /* Step icon → 28×28 tile to the left of the label, matching the
            Roster's avatar block (h-9 w-9 with initials, square corners,
            pilot-light bg, navy text, thin border). Slightly smaller
            (28px vs 36px) because the rail is narrower than the Roster.
            On active rows the tile flips to a white background — same
            inversion pattern <ClientRow> uses for its selected avatar. */
-        .ap-legacy-embed .ap-wizard-segment-index {
+        .ap-legacy-embed .ap-wizard-segment-icon {
           display: inline-flex !important;
           align-items: center !important;
           justify-content: center !important;
@@ -211,14 +211,10 @@ export function LegacyEmbed() {
           background-color: var(--ap-pilot-light) !important;
           color: var(--ap-navy) !important;
           border: 1px solid var(--ap-border) !important;
-          font-size: 0.65rem !important;
-          font-weight: 600 !important;
-          letter-spacing: 0.02em !important;
-          line-height: 1 !important;
           flex-shrink: 0 !important;
         }
 
-        .ap-legacy-embed .ap-wizard-segment-active .ap-wizard-segment-index {
+        .ap-legacy-embed .ap-wizard-segment-active .ap-wizard-segment-icon {
           background-color: #ffffff !important;
           border-color: var(--ap-border-strong) !important;
           color: var(--ap-royal) !important;
@@ -241,7 +237,7 @@ export function LegacyEmbed() {
            a uniform sidebar pair when the viewport is too narrow for
            the full labeled rail. The WORKFLOW header label is hidden
            (no room for it); the step button labels are clipped, the
-           numbered tile stays and acts as the affordance.
+           step icon tile stays and acts as the affordance.
            ──────────────────────────────────────────────────────────── */
         @media (max-width: 1023px) {
           .ap-legacy-embed .ap-wizard-rail {
@@ -256,7 +252,7 @@ export function LegacyEmbed() {
 
           /* Centered icon-only segment. font-size: 0 + color: transparent
              clips the label text without changing the DOM. Keep the
-             index tile visible by overriding both back inside it. */
+             icon tile visible. */
           .ap-legacy-embed .ap-wizard-segment {
             justify-content: center !important;
             padding: 0.65rem 0.35rem !important;
@@ -265,12 +261,11 @@ export function LegacyEmbed() {
             color: transparent !important;
           }
 
-          .ap-legacy-embed .ap-wizard-segment-index {
-            font-size: 0.65rem !important;
+          .ap-legacy-embed .ap-wizard-segment-icon {
             color: var(--ap-navy) !important;
           }
 
-          .ap-legacy-embed .ap-wizard-segment-active .ap-wizard-segment-index {
+          .ap-legacy-embed .ap-wizard-segment-active .ap-wizard-segment-icon {
             color: var(--ap-royal) !important;
           }
         }
@@ -367,10 +362,14 @@ export function LegacyEmbed() {
             background-color: var(--ap-pilot-light) !important;
           }
 
-          .ap-legacy-embed .ap-wizard-segment-index {
+          .ap-legacy-embed .ap-wizard-segment-icon {
             width: 1.5rem !important;
             height: 1.5rem !important;
-            font-size: 0.6rem !important;
+          }
+
+          .ap-legacy-embed .ap-wizard-segment-icon svg {
+            width: 0.95rem !important;
+            height: 0.95rem !important;
           }
         }
       `}</style>

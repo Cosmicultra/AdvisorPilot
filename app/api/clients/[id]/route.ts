@@ -10,12 +10,14 @@ import {
 import type { ClientStage } from "@/lib/crm/types";
 
 const EDITABLE_STAGES: ClientStage[] = [
+  "Lead",
+  "Prospect",
+  "Onboarding",
+  "Engaged",
   "Review due",
   "Upcoming",
   "Stable",
   "At risk",
-  "Onboarding",
-  "Prospect",
 ];
 
 /**

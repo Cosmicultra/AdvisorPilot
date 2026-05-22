@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { Buffer } from "buffer";
 import { createClient } from "@supabase/supabase-js";
-import { extractHoldingsFromFileBuffer } from "@/lib/extract-statement-holdings";
+import { isAnnuityContractHolding } from "@/lib/annuity-contract-types";
+import { extractStatementFromFileBuffer } from "@/lib/statement-extract-router";
 import { writeAuditEvent } from "@/lib/audit-log";
+import { DEFAULT_NEW_CLIENT_STAGE } from "@/lib/crm/stage";
 import { flagLikelyDuplicateHoldings } from "@/lib/holding-merge";
 import { applySyntheticCashTickerIfEligible, extractLikelySymbol, validateHoldingLocally } from "@/lib/holding-validation";
 import { normalizeRegistrationType } from "@/lib/holding-registration";
@@ -49,6 +51,22 @@ async function normalizeHoldings(raw: unknown[]) {
   const out: Array<Record<string, unknown>> = [];
   for (const holding of raw) {
     const h = holding && typeof holding === "object" ? (holding as Record<string, unknown>) : {};
+    if (isAnnuityContractHolding(h)) {
+      const confUse = Number(h.confidence || 0);
+      out.push({
+        ...h,
+        rawName: String(h.rawName ?? "").trim() || "Annuity contract",
+        suggested: String(h.suggested ?? "").trim() || "Contract",
+        confidence: confUse,
+        assetClass: canonicalizeAssetClass(String(h.assetClass ?? "Unknown")),
+        value: Number(h.value ?? 0),
+        status: deriveHoldingStatus(h.status, confUse),
+        options: Array.isArray(h.options) && h.options.length > 0 ? h.options : ["Contract"],
+        registrationType: normalizeRegistrationType(h.registrationType),
+        ...validateHoldingLocally(h),
+      });
+      continue;
+    }
     const confidence = Number(h.confidence || 0);
     const rawName = String(h.rawName ?? "").trim() || "Unknown holding";
     const suggestedBase = String(h.suggested ?? "").trim() || "Needs advisor confirmation";
@@ -258,7 +276,7 @@ export async function POST(request: Request) {
       const bytes = Buffer.from(await file.arrayBuffer());
       const mimeType = file.type || "application/pdf";
       const pageHint = filePageHints[index]?.trim() || "";
-      const extracted = await extractHoldingsFromFileBuffer({
+      const extracted = await extractStatementFromFileBuffer({
         fileName: file.name || `statement-${index + 1}.pdf`,
         mimeType,
         bytes,
@@ -275,6 +293,7 @@ export async function POST(request: Request) {
           ...holding,
           sourceFileName: file.name || `statement-${index + 1}.pdf`,
           sourceFileIndex: index + 1,
+          documentKind: extracted.documentKind,
         }))
       );
     }
@@ -303,6 +322,7 @@ export async function POST(request: Request) {
         analysis: null,
         total_value: totalValue,
         status: "Draft",
+        stage: DEFAULT_NEW_CLIENT_STAGE,
       })
       .select("id")
       .single();

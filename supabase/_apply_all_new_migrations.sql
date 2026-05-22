@@ -132,3 +132,155 @@ create index if not exists advisorpilot_voice_audit_tool_idx
   on public.advisorpilot_voice_audit_log (tool, created_at desc);
 
 alter table public.advisorpilot_voice_audit_log enable row level security;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 6. advisorpilot_client_drippers.sql (+ dripper run history)
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists public.advisorpilot_client_drippers (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references public.advisorpilot_clients(id) on delete cascade,
+  template_id text not null,
+  owner_email text not null,
+  owner_user_id uuid,
+  enabled boolean not null default false,
+  starts_at timestamptz not null,
+  ends_at timestamptz,
+  frequency_days integer not null,
+  next_run_at timestamptz,
+  last_run_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (client_id, template_id)
+);
+
+create index if not exists advisorpilot_client_drippers_client_idx
+  on public.advisorpilot_client_drippers (client_id);
+
+create index if not exists advisorpilot_client_drippers_due_idx
+  on public.advisorpilot_client_drippers (next_run_at)
+  where enabled = true;
+
+drop trigger if exists set_advisorpilot_client_drippers_updated_at
+  on public.advisorpilot_client_drippers;
+
+create trigger set_advisorpilot_client_drippers_updated_at
+  before update on public.advisorpilot_client_drippers
+  for each row execute function public.set_advisorpilot_updated_at();
+
+alter table public.advisorpilot_client_drippers enable row level security;
+
+drop policy if exists "client_drippers_select_own" on public.advisorpilot_client_drippers;
+create policy "client_drippers_select_own" on public.advisorpilot_client_drippers
+  for select to authenticated
+  using ( owner_email = lower(auth.jwt() ->> 'email') );
+
+drop policy if exists "client_drippers_insert_own" on public.advisorpilot_client_drippers;
+create policy "client_drippers_insert_own" on public.advisorpilot_client_drippers
+  for insert to authenticated
+  with check ( owner_email = lower(auth.jwt() ->> 'email') );
+
+drop policy if exists "client_drippers_update_own" on public.advisorpilot_client_drippers;
+create policy "client_drippers_update_own" on public.advisorpilot_client_drippers
+  for update to authenticated
+  using ( owner_email = lower(auth.jwt() ->> 'email') );
+
+drop policy if exists "client_drippers_delete_own" on public.advisorpilot_client_drippers;
+create policy "client_drippers_delete_own" on public.advisorpilot_client_drippers
+  for delete to authenticated
+  using ( owner_email = lower(auth.jwt() ->> 'email') );
+
+create table if not exists public.advisorpilot_dripper_runs (
+  id uuid primary key default gen_random_uuid(),
+  enrollment_id uuid not null references public.advisorpilot_client_drippers(id) on delete cascade,
+  client_id uuid not null references public.advisorpilot_clients(id) on delete cascade,
+  template_id text not null,
+  owner_email text not null,
+  owner_user_id uuid,
+  status text not null,
+  output_text text,
+  error_message text,
+  provider text,
+  model text,
+  ran_at timestamptz not null default now()
+);
+
+create index if not exists advisorpilot_dripper_runs_client_ran_idx
+  on public.advisorpilot_dripper_runs (client_id, ran_at desc);
+
+create index if not exists advisorpilot_dripper_runs_enrollment_idx
+  on public.advisorpilot_dripper_runs (enrollment_id, ran_at desc);
+
+alter table public.advisorpilot_dripper_runs enable row level security;
+
+drop policy if exists "dripper_runs_select_own" on public.advisorpilot_dripper_runs;
+create policy "dripper_runs_select_own" on public.advisorpilot_dripper_runs
+  for select to authenticated
+  using ( owner_email = lower(auth.jwt() ->> 'email') );
+
+drop policy if exists "dripper_runs_insert_own" on public.advisorpilot_dripper_runs;
+create policy "dripper_runs_insert_own" on public.advisorpilot_dripper_runs
+  for insert to authenticated
+  with check ( owner_email = lower(auth.jwt() ->> 'email') );
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 7. advisorpilot_advisor_gmail_tokens.sql (+ dripper run email columns)
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists public.advisorpilot_advisor_gmail_tokens (
+  advisor_email text primary key,
+  refresh_token text not null,
+  updated_at timestamptz not null default now()
+);
+
+drop trigger if exists set_advisorpilot_advisor_gmail_tokens_updated_at
+  on public.advisorpilot_advisor_gmail_tokens;
+
+create trigger set_advisorpilot_advisor_gmail_tokens_updated_at
+  before update on public.advisorpilot_advisor_gmail_tokens
+  for each row execute function public.set_advisorpilot_updated_at();
+
+alter table public.advisorpilot_dripper_runs
+  add column if not exists email_status text,
+  add column if not exists email_error text,
+  add column if not exists client_email_to text;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 8. advisorpilot_annuity_reminder_sends.sql
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists public.advisorpilot_annuity_reminder_sends (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references public.advisorpilot_clients(id) on delete cascade,
+  template_id text not null,
+  contract_key text not null,
+  reminder_kind text not null,
+  event_date date not null,
+  sent_at timestamptz not null default now(),
+  run_id uuid references public.advisorpilot_dripper_runs(id) on delete set null,
+  unique (client_id, template_id, contract_key, reminder_kind, event_date)
+);
+
+create index if not exists advisorpilot_annuity_reminder_sends_client_idx
+  on public.advisorpilot_annuity_reminder_sends (client_id, template_id);
+
+alter table public.advisorpilot_annuity_reminder_sends enable row level security;
+
+drop policy if exists "annuity_reminder_sends_select_own" on public.advisorpilot_annuity_reminder_sends;
+create policy "annuity_reminder_sends_select_own" on public.advisorpilot_annuity_reminder_sends
+  for select to authenticated
+  using (
+    exists (
+      select 1 from public.advisorpilot_clients c
+      where c.id = client_id
+        and c.owner_email = lower(auth.jwt() ->> 'email')
+    )
+  );
+
+drop policy if exists "annuity_reminder_sends_insert_own" on public.advisorpilot_annuity_reminder_sends;
+create policy "annuity_reminder_sends_insert_own" on public.advisorpilot_annuity_reminder_sends
+  for insert to authenticated
+  with check (
+    exists (
+      select 1 from public.advisorpilot_clients c
+      where c.id = client_id
+        and c.owner_email = lower(auth.jwt() ->> 'email')
+    )
+  );

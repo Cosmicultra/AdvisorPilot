@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { DEFAULT_NEW_CLIENT_STAGE } from "@/lib/crm/stage";
 import { writeAuditEvent } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
@@ -80,6 +81,7 @@ export async function POST(req: Request) {
         total_value: 0,
         status: "Pending Inbound Import",
         source: "inbound_email",
+        stage: DEFAULT_NEW_CLIENT_STAGE,
       })
       .select("id")
       .single();

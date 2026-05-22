@@ -14,6 +14,7 @@ import {
   Calendar,
   CheckCircle2,
   ClipboardCheck,
+  Droplets,
   FileText,
   Mail,
   PhoneCall,
@@ -139,6 +140,7 @@ function iconFor(type: ActivityType) {
     case "call":      return PhoneCall;
     case "task":      return CheckCircle2;
     case "analysis":  return Wand2;
+    case "dripper":   return Droplets;
     case "system":    return ClipboardCheck;
     default:          return AlertCircle;
   }

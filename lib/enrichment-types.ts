@@ -6,6 +6,8 @@ export type EnrichmentInputHolding = {
   confidence: number;
   status: string;
   options: string[];
+  annuityContract?: unknown;
+  documentKind?: string;
 };
 
 export type EnrichmentPatch = {

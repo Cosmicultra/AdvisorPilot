@@ -123,6 +123,22 @@ Restart `npm run dev` after changing `.env.local`.
 
 Add `public/logo.png` for the Live Intake header; without it, the wordmark **AdvisorPilot** is shown.
 
+### CRM Drippers (scheduled AI templates)
+
+Per-client drip templates run on a schedule via `POST /api/drippers/cron`. In production, configure a Vercel cron (hourly recommended) to call that route with:
+
+```bash
+DRIPPER_CRON_SECRET=...   # sent as x-cron-secret header; if unset in dev, cron is open
+```
+
+Each successful drip also emails the **client’s CRM email** via the advisor’s **Gmail** (same OAuth as Client Snapshot). That requires:
+
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `NEXTAUTH_SECRET` (Google sign-in with `gmail.send`)
+- Advisor signed in with Google at least once after deploy so a refresh token is stored in `advisorpilot_advisor_gmail_tokens`
+- Client `email` populated on the CRM record (Overview / Contacts)
+
+Apply `supabase/advisorpilot_client_drippers.sql`, `supabase/advisorpilot_advisor_gmail_tokens.sql` (or sections 6–7 in `supabase/_apply_all_new_migrations.sql`) before using the Drippers tab.
+
 ### Supabase
 
 ```bash

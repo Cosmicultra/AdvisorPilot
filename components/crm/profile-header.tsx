@@ -14,7 +14,7 @@
 import { Calendar, Link2, Mail, MapPin, MoreHorizontal, Phone, User } from "lucide-react";
 import Link from "next/link";
 import type { ClientDetail } from "@/lib/crm/types";
-import { stageChipStyle } from "./stage-chip-style";
+import { ClientStageSelect } from "./client-stage-select";
 
 export type ProfileHeaderProps = {
   client: ClientDetail;
@@ -22,10 +22,16 @@ export type ProfileHeaderProps = {
   onLogNote?: () => void;
   /** Opens the EditClientDrawer. When omitted, the kebab is disabled. */
   onEditClient?: () => void;
+  /** Called after an inline stage change is saved. */
+  onClientUpdated?: (client: ClientDetail) => void;
 };
 
-export function ProfileHeader({ client, onLogNote, onEditClient }: ProfileHeaderProps) {
-  const stageStyle = client.stage ? stageChipStyle(client.stage) : null;
+export function ProfileHeader({
+  client,
+  onLogNote,
+  onEditClient,
+  onClientUpdated,
+}: ProfileHeaderProps) {
   const metaItems = buildMetaItems(client);
 
   return (
@@ -67,19 +73,34 @@ export function ProfileHeader({ client, onLogNote, onEditClient }: ProfileHeader
               className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px]"
               style={{ color: "var(--ap-gray)" }}
             >
-              {metaItems.map((item) => (
-                <span key={item.key} className="flex items-center gap-1">
-                  <item.icon size={12} strokeWidth={1.75} />
-                  {item.value}
-                </span>
-              ))}
-              {stageStyle ? (
-                <span
-                  className="px-1.5 py-0.5 text-[10.5px] font-medium uppercase tracking-wide"
-                  style={stageStyle}
-                >
-                  {client.stage}
-                </span>
+              {metaItems.map((item) =>
+                item.key === "owner" ? (
+                  <span key={item.key} className="flex items-center gap-1">
+                    <item.icon size={12} strokeWidth={1.75} />
+                    {item.value}
+                    {onClientUpdated ? (
+                      <ClientStageSelect
+                        clientId={client.id}
+                        stage={client.stage}
+                        onUpdated={onClientUpdated}
+                        variant="meta"
+                      />
+                    ) : null}
+                  </span>
+                ) : (
+                  <span key={item.key} className="flex items-center gap-1">
+                    <item.icon size={12} strokeWidth={1.75} />
+                    {item.value}
+                  </span>
+                )
+              )}
+              {onClientUpdated && !metaItems.some((i) => i.key === "owner") ? (
+                <ClientStageSelect
+                  clientId={client.id}
+                  stage={client.stage}
+                  onUpdated={onClientUpdated}
+                  variant="meta"
+                />
               ) : null}
               {client.client.magicLinkUpload ? (
                 <span

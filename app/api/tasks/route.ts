@@ -3,6 +3,7 @@ import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { ensurePersonalOrg } from "@/lib/crm/ensure-personal-org";
 import {
   isTaskPriority,
+  isTaskStatus,
   toTask,
   type TaskRow,
 } from "@/lib/crm/task-mapper";
@@ -307,7 +308,9 @@ function applyFilters(tasks: Task[], f: TaskListFilters): Task[] {
 
   return tasks.filter((t) => {
     if (f.clientId && t.clientId !== f.clientId) return false;
-    if (f.status && t.status !== f.status) return false;
+    if (f.status && f.status !== "all" && isTaskStatus(f.status) && t.status !== f.status) {
+      return false;
+    }
     if (f.priority && t.priority !== f.priority) return false;
 
     if (f.due === "overdue") {

@@ -21,6 +21,7 @@
   "Money Market Account",
   "Fixed Indexed Annuity",
   "MYGA / Fixed Annuity",
+  "Variable Annuity",
   "SPIA / Income Annuity",
   "Alternative / Other",
   "Unknown",
@@ -131,6 +132,8 @@ export function canonicalizeAssetClass(raw: string): AssetClassId {
   if (lower.includes("municipal")) return "Municipal Bond";
   if (lower.includes("fixed indexed") || lower.includes("fixed index")) return "Fixed Indexed Annuity";
   if (lower.includes("myga")) return "MYGA / Fixed Annuity";
+  if (lower.includes("variable annuity") || (lower.includes("variable") && lower.includes("annuity")))
+    return "Variable Annuity";
   if (lower.includes("spia") || lower.includes("income annuity") || lower.includes("immediate annuity"))
     return "SPIA / Income Annuity";
   if (lower.includes("alternative") || lower.includes("interval fund") || lower.includes("non-traded")) {
@@ -166,6 +169,7 @@ export function classifyAllocationBucket(
     "Municipal Bond",
     "Fixed Indexed Annuity",
     "MYGA / Fixed Annuity",
+    "Variable Annuity",
     "SPIA / Income Annuity",
   ];
   if (fixedCanon.includes(canon)) return "fixedIncome";

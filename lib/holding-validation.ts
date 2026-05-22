@@ -1,3 +1,4 @@
+import { isAnnuityContractHolding } from "./annuity-contract-types";
 import { canonicalizeAssetClass, type AssetClassId } from "./asset-classes";
 import { SYNTHETIC_CASH_TICKER } from "./cash-holding-constants";
 
@@ -126,7 +127,23 @@ export function validateHoldingLocally(holding: {
   confidence?: unknown;
   status?: unknown;
   assetClass?: unknown;
+  annuityContract?: unknown;
+  documentKind?: unknown;
 }): HoldingValidationResult {
+  if (isAnnuityContractHolding(holding)) {
+    return {
+      normalizedSymbol: "",
+      normalizedCusip: "",
+      validationStatus: "validated",
+      validationMetadata: {
+        provider: "local-heuristic",
+        reason:
+          "Annuity contract — carrier/product values stored on contract; no exchange ticker required.",
+        validatedAt: new Date().toISOString(),
+      },
+    };
+  }
+
   const normalizedCusip = extractLikelyCusip(holding.suggested, holding.rawName);
   let normalizedSymbol = normalizedCusip ? "" : extractLikelySymbol(holding.suggested, holding.rawName);
   if (cleanToken(holding.suggested) === SYNTHETIC_CASH_TICKER) {

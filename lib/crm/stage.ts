@@ -122,3 +122,26 @@ function daysBetween(from: Date, to: Date): number {
   const toUtc = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate());
   return Math.floor((toUtc - fromUtc) / MS_PER_DAY);
 }
+
+/** Stages the advisor can set manually (PATCH validation + tools). */
+export const CLIENT_STAGE_OPTIONS = [
+  "Lead",
+  "Prospect",
+  "Onboarding",
+  "Engaged",
+  "Review due",
+  "Upcoming",
+  "Stable",
+  "At risk",
+] as const satisfies readonly ClientStage[];
+
+/** Profile-header stage dropdown (display order). */
+export const CLIENT_STAGE_HEADER_SELECT_OPTIONS = [
+  "Lead",
+  "Prospect",
+  "Onboarding",
+  "Engaged",
+] as const satisfies readonly ClientStage[];
+
+/** Persisted on insert when a new client row is created. */
+export const DEFAULT_NEW_CLIENT_STAGE: ClientStage = "Prospect";

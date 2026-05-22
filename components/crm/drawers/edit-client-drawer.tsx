@@ -2,7 +2,7 @@
 
 /**
  * Edit Client drawer — lets the advisor manually set the CRM-only top-level
- * columns on advisorpilot_clients (stage, tags, location, email, phone,
+ * columns on advisorpilot_clients (tags, location, email, phone,
  * next meeting, review due date, household label, owner initials, inception
  * year, YTD return). Intake fields (name, DOB, etc.) are NOT editable here
  * — those still go through the legacy Intake flow.
@@ -17,21 +17,11 @@
 
 import { useEffect, useState } from "react";
 import { advisorFetch } from "@/lib/advisor-fetch";
-import type { ClientDetail, ClientStage } from "@/lib/crm/types";
+import type { ClientDetail } from "@/lib/crm/types";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { DrawerShell } from "./drawer-shell";
 
-const STAGE_OPTIONS: ClientStage[] = [
-  "Review due",
-  "Upcoming",
-  "Stable",
-  "At risk",
-  "Onboarding",
-  "Prospect",
-];
-
 interface FormState {
-  stage: ClientStage | "";
   tagsRaw: string;
   location: string;
   email: string;
@@ -104,10 +94,6 @@ export function EditClientDrawer({
     // Build patch — send only fields that differ from the current client.
     const patch: Record<string, unknown> = {};
     const initial = initialForm(client);
-
-    if (form.stage !== initial.stage) {
-      patch.stage = form.stage === "" ? null : form.stage;
-    }
 
     const formTags = parseTags(form.tagsRaw);
     const initialTags = client.tags ?? [];
@@ -253,24 +239,7 @@ export function EditClientDrawer({
         }}
         className="flex flex-col gap-4"
       >
-        <FieldGroup label="Lifecycle">
-          <Field label="Stage">
-            <select
-              value={form.stage}
-              onChange={(e) => update("stage", e.target.value as ClientStage | "")}
-              disabled={submitting}
-              className="w-full bg-white px-2 py-1.5 text-[13px] focus:outline-none"
-              style={{ border: "1px solid var(--ap-border)", color: "var(--ap-navy)" }}
-            >
-              <option value="">— Auto (computed) —</option>
-              {STAGE_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </Field>
-
+        <FieldGroup label="Tags">
           <Field label="Tags (comma-separated)">
             <input
               type="text"
@@ -450,7 +419,6 @@ function Field({
 
 function initialForm(client: ClientDetail): FormState {
   return {
-    stage: isStage(client.stage) ? client.stage : "",
     tagsRaw: (client.tags ?? []).join(", "),
     location: client.location ?? "",
     email: client.email ?? "",
@@ -465,10 +433,6 @@ function initialForm(client: ClientDetail): FormState {
     nextMeetingAtLocal: toDateTimeLocal(client.nextMeetingAt),
     reviewDueAtLocal: client.reviewDueAt ?? "",
   };
-}
-
-function isStage(value: unknown): value is ClientStage {
-  return STAGE_OPTIONS.includes(value as ClientStage);
 }
 
 function parseTags(raw: string): string[] {
@@ -514,7 +478,6 @@ function roundTo(value: number, decimals: number): number {
  *  PATCH payload would change. */
 function formIsDirty(form: FormState, client: ClientDetail): boolean {
   const initial = initialForm(client);
-  if (form.stage !== initial.stage) return true;
   if (!arraysEqual(parseTags(form.tagsRaw), parseTags(initial.tagsRaw))) return true;
   if (form.location.trim() !== initial.location.trim()) return true;
   if (form.email.trim() !== initial.email.trim()) return true;

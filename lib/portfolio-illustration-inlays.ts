@@ -10,18 +10,23 @@ import type { RothConversionModelResult } from "@/lib/roth-conversion-analysis";
 import { ROTH_ASSUMPTION_VERSION } from "@/lib/roth-conversion-analysis";
 import { buildFiaScenarioSummaries } from "@/lib/fia-illustration";
 import { fiaInputValue, normalizeFiaWorksheet } from "@/lib/fia-worksheet";
+import { colors as reportColors } from "@/lib/report-pdf/theme";
+
 const rothTheme = {
-  navy: rgb(0.03, 0.12, 0.22),
-  navyLight: rgb(0.07, 0.18, 0.32),
-  ink: rgb(0.16, 0.18, 0.2),
-  muted: rgb(0.38, 0.4, 0.44),
-  rule: rgb(0.78, 0.8, 0.84),
-  ruleStrong: rgb(0.55, 0.58, 0.62),
-  surface: rgb(0.97, 0.98, 0.99),
-  stayBar: rgb(0.12, 0.36, 0.55),
-  stayBarSoft: rgb(0.75, 0.84, 0.92),
-  rothBar: rgb(0.12, 0.52, 0.32),
-  rothBarSoft: rgb(0.85, 0.95, 0.88),
+  navy: reportColors.navy,
+  navyLight: reportColors.navy,
+  ink: reportColors.ink,
+  muted: reportColors.muted,
+  rule: reportColors.rule,
+  ruleStrong: reportColors.rule,
+  surface: reportColors.tableZebra,
+  pageBg: reportColors.pageBg,
+  tableHeadText: reportColors.tableHeadText,
+  stayBar: reportColors.accent,
+  stayBarSoft: reportColors.synopsisBg,
+  scoreRed: reportColors.scoreRed,
+  rothBar: reportColors.accent,
+  rothBarSoft: reportColors.synopsisBg,
 };
 
 const PAIRED_BAR_INTRO_TEXT =
@@ -46,13 +51,17 @@ export type PortfolioIllustrationLayout = {
   footerSafeY: number;
   regular: PDFFont;
   bold: PDFFont;
-  /** Report palette (navyLight, rule, etc.) */
   navyLight: ReturnType<typeof rgb>;
   stayBar: ReturnType<typeof rgb>;
   muted: ReturnType<typeof rgb>;
   rule: ReturnType<typeof rgb>;
   surface: ReturnType<typeof rgb>;
   ink: ReturnType<typeof rgb>;
+  pageBg?: ReturnType<typeof rgb>;
+  tableHeadText?: ReturnType<typeof rgb>;
+  mono?: PDFFont;
+  monoMedium?: PDFFont;
+  serif?: PDFFont;
 };
 
 function cleanText(value: unknown) {
@@ -165,7 +174,7 @@ function drawScenarioBarBlockInlay(
     y -= barH + rowGap + 10;
   };
 
-  drawPair("Current allocation path", stayVal, rothTheme.stayBar, rothTheme.stayBarSoft);
+  drawPair("Current allocation path", stayVal, rothTheme.scoreRed, rothTheme.stayBarSoft);
   drawPair("Roth conversion path", rothVal, rothTheme.rothBar, rothTheme.rothBarSoft);
   y -= blockGap - 8;
   L.setY(y);
@@ -175,81 +184,9 @@ function drawRothTableInlay(
   L: PortfolioIllustrationLayout,
   headers: string[],
   rows: string[][],
-  colWidths: number[]
+  colWidths: number[],
 ): void {
-  const fs = 6.95;
-  const rowHLocal = 10.5;
-  const x0 = L.margin;
-  /** Must use local y for breaks: L.getY() is not updated between rows during this loop. */
-  const ensureRoom = (minY: number) => {
-    if (y < minY) {
-      L.addContinuationPage();
-      page = L.getPage();
-      y = L.getY();
-    }
-  };
-
-  const targetInner = Math.max(200, L.contentW - 8);
-  const scaledWidths = scaleColWidthsToTarget(colWidths, targetInner);
-  const tableW = scaledWidths.reduce((a, b) => a + b, 0) + 8;
-
-  let page = L.getPage();
-  let y = L.getY();
-  ensureRoom(L.footerSafeY + 110);
-
-  const headerBandH = 20;
-  const bandBottom = y - headerBandH;
-  page.drawRectangle({ x: x0 - 4, y: bandBottom, width: tableW, height: headerBandH, color: rothTheme.surface });
-  page.drawLine({
-    start: { x: x0 - 4, y: bandBottom },
-    end: { x: x0 - 4 + tableW, y: bandBottom },
-    thickness: 0.9,
-    color: rothTheme.navy,
-  });
-  let cx = x0;
-  for (let i = 0; i < headers.length; i++) {
-    page.drawText(cleanText(headers[i]).slice(0, 40), {
-      x: cx + 2,
-      y: y - 3,
-      size: fs,
-      font: L.bold,
-      color: rothTheme.navy,
-    });
-    cx += scaledWidths[i]!;
-  }
-  y -= headerBandH;
-
-  let rIdx = 0;
-  for (const row of rows) {
-    ensureRoom(L.footerSafeY + 86);
-    if (rIdx % 2 === 0 && !row.includes("Total")) {
-      page.drawRectangle({ x: x0 - 4, y: y - rowHLocal + 9, width: tableW, height: rowHLocal + 1, color: rothTheme.surface });
-    }
-    cx = x0;
-    const isTotal = row.includes("Total");
-    for (let c = 0; c < row.length; c++) {
-      const cell = cleanText(row[c]).slice(0, 48);
-      page.drawText(cell, {
-        x: cx + 2,
-        y,
-        size: fs,
-        font: isTotal ? L.bold : L.regular,
-        color: isTotal ? rothTheme.navy : rothTheme.ink,
-      });
-      cx += scaledWidths[c]!;
-    }
-    rIdx++;
-    y -= rowHLocal;
-  }
-  y -= 14;
-  page.drawLine({
-    start: { x: x0, y: y + 6 },
-    end: { x: x0 + tableW - 8, y: y + 6 },
-    thickness: 0.6,
-    color: rothTheme.ruleStrong,
-  });
-  y -= 8;
-  L.setY(y);
+  drawPortfolioDataTable(L, headers, rows, colWidths, { fs: 6.8, rowH: 20, headerH: 22 });
 }
 
 /** Roth comparison figures + stay/roth tables only (no separate Roth disclosures page). */
@@ -274,27 +211,9 @@ export function appendRothIllustrationFiguresAndTables(
     L.setY(L.getY() - 4);
   };
 
-  let y = L.getY() - 12;
-  L.setY(y);
+  L.setY(L.getY() - 8);
   if (L.getY() < L.footerSafeY + 160) L.addContinuationPage();
 
-  L.getPage().drawText(cleanText("FIGURE  |  Scenario comparison"), {
-    x: left,
-    y: L.getY(),
-    size: 7,
-    font: regular,
-    color: rothTheme.muted,
-  });
-  L.setY(L.getY() - 14);
-  if (L.getY() < L.footerSafeY + 120) L.addContinuationPage();
-  L.getPage().drawText(cleanText("Comparative differences between pathways"), {
-    x: left,
-    y: L.getY(),
-    size: 16,
-    font: bold,
-    color: rothTheme.navy,
-  });
-  L.setY(L.getY() - 24);
   for (const ln of wrapPlainText((t) => regular.widthOfTextAtSize(t, 7.25), PAIRED_BAR_INTRO_TEXT, 7.25, wrapW)) {
     if (L.getY() < L.footerSafeY + 40) L.addContinuationPage();
     L.getPage().drawText(ln, { x: left, y: L.getY(), size: 7.25, font: regular, color: rothTheme.muted });
@@ -340,23 +259,8 @@ export function appendRothIllustrationFiguresAndTables(
   );
 
   L.addContinuationPage();
-  y = L.getY();
-  L.getPage().drawRectangle({ x: L.margin, y: y - 2, width: 3, height: 14, color: rothTheme.stayBar });
-  L.getPage().drawText(cleanText("Current allocation  |  10% annual growth with RMDs from age 73"), {
-    x: L.margin + 10,
-    y,
-    size: 11,
-    font: bold,
-    color: rothTheme.navyLight,
-  });
-  L.setY(y - 22);
-  L.getPage().drawLine({
-    start: { x: L.margin, y: L.getY() + 8 },
-    end: { x: L.margin + L.contentW, y: L.getY() + 8 },
-    thickness: 0.5,
-    color: rothTheme.rule,
-  });
-  L.setY(L.getY() - 14);
+  L.setY(L.getY() - 6);
+  drawPara("Current allocation path — 10% annual growth with RMDs from age 73", 8, rothTheme.navy);
 
   const stayHeaders = ["Yr", "Age", "IRA balance", "Income", "Illust. tax", "End bal", "RMD", "IRMAA"];
   const stayW = [26, 30, 56, 52, 58, 58, 52, 50];
@@ -383,23 +287,8 @@ export function appendRothIllustrationFiguresAndTables(
   drawRothTableInlay(L, stayHeaders, [...stayBody, stayFooter], stayW);
 
   L.addContinuationPage();
-  y = L.getY();
-  L.getPage().drawRectangle({ x: L.margin, y: y - 2, width: 3, height: 14, color: rothTheme.stayBar });
-  L.getPage().drawText(cleanText("Roth conversion path"), {
-    x: L.margin + 10,
-    y,
-    size: 11,
-    font: bold,
-    color: rothTheme.navyLight,
-  });
-  L.setY(y - 22);
-  L.getPage().drawLine({
-    start: { x: L.margin, y: L.getY() + 8 },
-    end: { x: L.margin + L.contentW, y: L.getY() + 8 },
-    thickness: 0.5,
-    color: rothTheme.rule,
-  });
-  L.setY(L.getY() - 14);
+  drawPara("Roth conversion path", 8, rothTheme.navy);
+  L.setY(L.getY() - 6);
 
   const rothHeaders = ["Yr", "Age", "Taxable IRA", "Income", "Gross conv", "Tax", "Net conv", "Total Roth", "RMD", "IRMAA"];
   const rothW = [20, 24, 48, 44, 44, 40, 44, 50, 40, 48];
@@ -471,75 +360,109 @@ export function getFiaDisclosureChunksForPortfolio(): ReportDisclosureChunk[] {
   ];
 }
 
+function drawTableHeaderBand(
+  L: PortfolioIllustrationLayout,
+  page: PDFPage,
+  yTop: number,
+  headers: string[],
+  scaledWidths: number[],
+  tableW: number,
+  headerH: number,
+  fs: number,
+) {
+  const x0 = L.margin;
+  const headBg = L.navyLight;
+  const headText = L.tableHeadText ?? rothTheme.tableHeadText;
+  const bandBottom = yTop - headerH;
+  page.drawRectangle({ x: x0, y: bandBottom, width: tableW, height: headerH, color: headBg });
+  let cx = x0;
+  const headerBaseline = yTop - headerH + 7;
+  for (let i = 0; i < headers.length; i++) {
+    page.drawText(cleanText(headers[i]).toUpperCase().slice(0, 40), {
+      x: cx + 8,
+      y: headerBaseline,
+      size: fs - 0.5,
+      font: L.bold,
+      color: headText,
+    });
+    cx += scaledWidths[i]!;
+  }
+}
+
+function drawPortfolioDataTable(
+  L: PortfolioIllustrationLayout,
+  headers: string[],
+  rows: string[][],
+  colWidths: number[],
+  opts?: { fs?: number; rowH?: number; headerH?: number },
+): void {
+  const fs = opts?.fs ?? 7;
+  const rowH = opts?.rowH ?? 22;
+  const headerH = opts?.headerH ?? 22;
+  const x0 = L.margin;
+  const zebra = L.surface;
+  const pageBg = L.pageBg ?? rothTheme.pageBg;
+
+  const targetInner = Math.max(200, L.contentW);
+  const scaledWidths = scaleColWidthsToTarget(colWidths, targetInner);
+  const tableW = scaledWidths.reduce((a, b) => a + b, 0);
+
+  let page = L.getPage();
+  let y = L.getY();
+
+  const startTable = () => {
+    if (y < L.footerSafeY + headerH + rowH + 24) {
+      L.addContinuationPage();
+      page = L.getPage();
+      y = L.getY();
+    }
+    drawTableHeaderBand(L, page, y, headers, scaledWidths, tableW, headerH, fs);
+    y -= headerH;
+  };
+
+  startTable();
+
+  let rIdx = 0;
+  for (const row of rows) {
+    if (y < L.footerSafeY + rowH + 12) {
+      L.addContinuationPage();
+      page = L.getPage();
+      y = L.getY();
+      drawTableHeaderBand(L, page, y, headers, scaledWidths, tableW, headerH, fs);
+      y -= headerH;
+    }
+    const rowFill = rIdx % 2 === 0 ? zebra : pageBg;
+    const rowBottom = y - rowH;
+    page.drawRectangle({ x: x0, y: rowBottom, width: tableW, height: rowH, color: rowFill });
+    let cx = x0;
+    const cellBaseline = rowBottom + rowH / 2 - 2;
+    for (let c = 0; c < row.length; c++) {
+      const cell = cleanText(row[c]).slice(0, 48);
+      const useMono = Boolean(L.mono && c > 0);
+      page.drawText(cell, {
+        x: cx + 8,
+        y: cellBaseline,
+        size: fs,
+        font: useMono ? L.mono! : L.regular,
+        color: L.ink,
+      });
+      cx += scaledWidths[c]!;
+    }
+    y = rowBottom;
+    rIdx++;
+  }
+
+  L.setY(y - 14);
+}
+
 function drawFiaTableInlay(
   L: PortfolioIllustrationLayout,
   headers: string[],
   rows: string[][],
   colWidths: number[],
-  fs = 6.6
+  fs = 6.8,
 ): void {
-  const x0 = L.margin;
-  const rowHLocal = 10;
-  const ensureRoom = (minY: number) => {
-    if (y < minY) {
-      L.addContinuationPage();
-      page = L.getPage();
-      y = L.getY();
-    }
-  };
-
-  const targetInner = Math.max(200, L.contentW - 8);
-  const scaledWidths = scaleColWidthsToTarget(colWidths, targetInner);
-  const tableW = scaledWidths.reduce((a, b) => a + b, 0) + 8;
-
-  let page = L.getPage();
-  let y = L.getY();
-  ensureRoom(L.footerSafeY + 110);
-  const headerBandH = 18;
-  const bandBottom = y - headerBandH;
-  page.drawRectangle({ x: x0 - 4, y: bandBottom, width: tableW, height: headerBandH, color: L.surface });
-  page.drawLine({
-    start: { x: x0 - 4, y: bandBottom },
-    end: { x: x0 - 4 + tableW, y: bandBottom },
-    thickness: 0.9,
-    color: L.stayBar,
-  });
-  let cx = x0;
-  for (let i = 0; i < headers.length; i++) {
-    page.drawText(cleanText(headers[i]).slice(0, 36), {
-      x: cx + 2,
-      y: y - 2,
-      size: fs,
-      font: L.bold,
-      color: L.navyLight,
-    });
-    cx += scaledWidths[i]!;
-  }
-  y -= headerBandH;
-
-  let rIdx = 0;
-  for (const row of rows) {
-    ensureRoom(L.footerSafeY + 86);
-    if (rIdx % 2 === 0) {
-      page.drawRectangle({ x: x0 - 4, y: y - rowHLocal + 8, width: tableW, height: rowHLocal + 1, color: L.surface });
-    }
-    cx = x0;
-    for (let c = 0; c < row.length; c++) {
-      page.drawText(cleanText(row[c]).slice(0, 44), { x: cx + 2, y, size: fs, font: L.regular, color: L.ink });
-      cx += scaledWidths[c]!;
-    }
-    rIdx++;
-    y -= rowHLocal;
-  }
-  y -= 12;
-  page.drawLine({
-    start: { x: x0, y: y + 6 },
-    end: { x: x0 + tableW - 8, y: y + 6 },
-    thickness: 0.6,
-    color: L.rule,
-  });
-  y -= 8;
-  L.setY(y);
+  drawPortfolioDataTable(L, headers, rows, colWidths, { fs, rowH: 20, headerH: 22 });
 }
 
 /** FIA summary + year-by-year tables (no separate FIA disclosures page). */
@@ -590,23 +513,7 @@ export function appendFiaIllustrationFiguresAndTables(
     drawPara(`Product: ${carrier}${carrier && product ? " — " : ""}${product}`, 8, L.ink);
   }
 
-  const summaryHeadY = L.getY();
-  L.getPage().drawRectangle({ x: L.margin, y: summaryHeadY - 2, width: 3, height: 14, color: L.stayBar });
-  L.getPage().drawText(cleanText("Ten-year windows (summary)"), {
-    x: L.margin + 10,
-    y: summaryHeadY,
-    size: 11,
-    font: L.bold,
-    color: L.navyLight,
-  });
-  L.setY(summaryHeadY - 22);
-  L.getPage().drawLine({
-    start: { x: L.margin, y: L.getY() + 8 },
-    end: { x: L.margin + L.contentW, y: L.getY() + 8 },
-    thickness: 0.5,
-    color: L.rule,
-  });
-  L.setY(L.getY() - 14);
+  L.setY(L.getY() - 10);
 
   const sumHeaders = ["Window", "Hypo. annual credited", "Ending value"];
   const sumW = [200, 120, 120];
@@ -632,24 +539,8 @@ export function appendFiaIllustrationFiguresAndTables(
 
   for (const s of summaries) {
     if (L.getY() < L.footerSafeY + 100) L.addContinuationPage();
-    const pathHeadY = L.getY();
-    L.getPage().drawRectangle({ x: L.margin, y: pathHeadY - 2, width: 3, height: 14, color: L.stayBar });
-    L.getPage().drawText(cleanText(`Year-by-year path · ${s.tabLabel}`), {
-      x: L.margin + 10,
-      y: pathHeadY,
-      size: 11,
-      font: L.bold,
-      color: L.navyLight,
-    });
-    L.setY(pathHeadY - 22);
-    L.getPage().drawLine({
-      start: { x: L.margin, y: L.getY() + 8 },
-      end: { x: L.margin + L.contentW, y: L.getY() + 8 },
-      thickness: 0.5,
-      color: L.rule,
-    });
-    L.setY(L.getY() - 14);
-    drawPara(`${s.label} (${s.years[0]}–${s.years[9]})`, 7.5, L.muted);
+    drawPara(`Year-by-year path — ${s.tabLabel} (${s.years[0]}–${s.years[9]})`, 8, L.navyLight);
+    L.setY(L.getY() - 6);
 
     const yHeaders = ["Year", "S&P %", "Credited %", "Start", "Interest", "End"];
     const yW = [44, 44, 52, 72, 72, 72];

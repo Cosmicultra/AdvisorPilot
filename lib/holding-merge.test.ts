@@ -13,4 +13,14 @@ describe("holding-merge", () => {
     expect(holdings[1]?.duplicateOfIndex).toBe(0);
     expect(holdings[2]?.duplicateOfIndex).toBeUndefined();
   });
+
+  it("does not flag same symbol in different accounts", () => {
+    const holdings = flagLikelyDuplicateHoldings([
+      { normalizedSymbol: "AAPL", value: 1000, accountNumber: "BRK-****-1111" },
+      { normalizedSymbol: "AAPL", value: 1000, accountNumber: "IRA-****-2222" },
+    ]);
+
+    expect(holdings[0]?.duplicateOfIndex).toBeUndefined();
+    expect(holdings[1]?.duplicateOfIndex).toBeUndefined();
+  });
 });

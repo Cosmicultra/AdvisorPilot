@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ASSET_CLASSES, canonicalizeAssetClass, isCashLikeHolding } from "./asset-classes";
+import { isAnnuityContractHolding } from "./annuity-contract-types";
 import type { EnrichmentInputHolding, EnrichmentPatch } from "./enrichment-types";
 import { extractLikelyCusip, extractLikelySymbol } from "./holding-validation";
 import { SYNTHETIC_CASH_TICKER } from "./cash-holding-constants";
@@ -105,6 +106,32 @@ export async function enrichOneHolding(
   }
 ): Promise<EnrichOneHoldingResult> {
   const now = new Date().toISOString();
+
+  if (isAnnuityContractHolding(holding as EnrichmentInputHolding & { annuityContract?: unknown })) {
+    const mapped = canonicalizeAssetClass(holding.assetClass);
+    return {
+      cacheHit: false,
+      patch: {
+        enrichmentCompletedAt: now,
+        enrichmentResolvedTicker: "",
+        enrichmentResolvedName: holding.rawName || holding.suggested,
+        enrichmentShareClass: "",
+        enrichmentMappedAssetClass: mapped,
+        enrichmentSourceUrls: [],
+        enrichmentFigi: "",
+        enrichmentFigiSecurityType: "",
+        enrichmentFigiSkippedReason: "annuity_contract_skip",
+        enrichmentConfidence: Math.max(Number(holding.confidence) || 0, 90),
+        enrichmentIsProprietaryOrThinData: true,
+        enrichmentNeedsReview: false,
+        enrichmentNotes: "Annuity contract — skipped web enrichment.",
+        suggested: holding.suggested,
+        assetClass: mapped,
+        confidence: Math.max(Number(holding.confidence) || 0, 90),
+        status: holding.status === "review" ? "review" : "matched",
+      },
+    };
+  }
 
   if (isCashLikeHolding(holding.assetClass, holding.suggested, holding.rawName)) {
     const mapped = canonicalizeAssetClass(holding.assetClass);

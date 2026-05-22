@@ -109,12 +109,14 @@ export interface DocumentWithUrls extends Document {
 // indicator render this value.
 
 export type ClientStage =
+  | "Lead"
+  | "Prospect"
+  | "Onboarding"
+  | "Engaged"
   | "Review due"
   | "Upcoming"
   | "Stable"
-  | "At risk"
-  | "Onboarding"
-  | "Prospect";
+  | "At risk";
 
 // ─── Tasks ─────────────────────────────────────────────────────────────────
 //
@@ -222,6 +224,7 @@ export type ActivityType =
   | "call"
   | "task"
   | "analysis"
+  | "dripper"
   | "system";
 
 export interface ActivityEntry {
@@ -239,6 +242,43 @@ export interface ActivityEntry {
    *  (which support delete/edit in later phases) from audit-event mirrors
    *  (read-only). */
   source: "activity_log" | "audit_event";
+}
+
+// ─── Drippers ─────────────────────────────────────────────────────────────
+//
+// Per-client scheduled AI prompts. Templates live in lib/crm/dripper-templates.ts;
+// enrollments and runs in advisorpilot_client_drippers / advisorpilot_dripper_runs.
+
+export interface ClientDripperEnrollment {
+  id: string;
+  clientId: string;
+  templateId: string;
+  enabled: boolean;
+  startsAt: string;
+  endsAt: string | null;
+  frequencyDays: number;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type DripperEmailStatus = "sent" | "skipped" | "failed";
+
+export interface DripperRun {
+  id: string;
+  enrollmentId: string;
+  clientId: string;
+  templateId: string;
+  status: "success" | "failed";
+  outputText: string | null;
+  errorMessage: string | null;
+  provider: string | null;
+  model: string | null;
+  ranAt: string;
+  emailStatus: DripperEmailStatus | null;
+  emailError: string | null;
+  clientEmailTo: string | null;
 }
 
 // ─── Roster row ───────────────────────────────────────────────────────────

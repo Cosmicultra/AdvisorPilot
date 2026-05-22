@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { Buffer } from "buffer";
-import { extractHoldingsFromFileBuffer } from "@/lib/extract-statement-holdings";
+import { isAnnuityContractHolding } from "@/lib/annuity-contract-types";
+import { extractStatementFromFileBuffer } from "@/lib/statement-extract-router";
 import { isCashLikeHolding } from "@/lib/asset-classes";
 import {
   buildCashParkingSyntheticHolding,
@@ -16,6 +17,11 @@ import {
 } from "@/lib/securities-master";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
+import {
+  detectFinancialInstitutionFromText,
+  stampFinancialInstitutionOnHoldings,
+} from "@/lib/crm/financial-institution";
+import { tryExtractPdfText, isLikelyPdf } from "@/lib/extract-pdf-text-layer";
 import { enforceUploadSize } from "@/lib/llm/attachments";
 import { LlmAttachmentError, resolveAdvisorLlmSelection } from "@/lib/llm";
 
@@ -38,6 +44,10 @@ async function enrichHoldingsWithSecuritiesMaster(
   const out: Record<string, unknown>[] = [];
   for (const row of holders) {
     const rec = row as Record<string, unknown>;
+    if (isAnnuityContractHolding(rec)) {
+      out.push(rec);
+      continue;
+    }
     const assetClass = String(rec.assetClass ?? "");
     const suggested = String(rec.suggested ?? "");
     const rawName = String(rec.rawName ?? "");
@@ -121,6 +131,7 @@ export async function POST(request: Request) {
     }
 
     const allHoldings: unknown[] = [];
+    const documentKinds: string[] = [];
 
     for (const [index, file] of files.entries()) {
       // Per-file size cap before we even allocate the buffer. The model layer
@@ -137,7 +148,7 @@ export async function POST(request: Request) {
       const bytes = Buffer.from(await file.arrayBuffer());
       const mimeType = file.type || "application/pdf";
       const pageHint = filePageHints[index]?.trim() || "";
-      const data = await extractHoldingsFromFileBuffer({
+      const data = await extractStatementFromFileBuffer({
         fileName: file.name || `statement-${index + 1}.pdf`,
         mimeType,
         bytes,
@@ -150,16 +161,30 @@ export async function POST(request: Request) {
         selection,
         request,
       });
+      documentKinds.push(data.documentKind);
       const holdings = Array.isArray(data.holdings) ? data.holdings : [];
-      const withMeta = holdings.map((holding) =>
+      let withMeta = holdings.map((holding) =>
         ({
           ...(holding && typeof holding === "object" && !Array.isArray(holding)
             ? (holding as Record<string, unknown>)
             : {}),
           sourceFileName: file.name || `statement-${index + 1}.pdf`,
           sourceFileIndex: index + 1,
+          documentKind: data.documentKind,
         }) as Record<string, unknown>
       );
+
+      if (data.documentKind === "brokerage") {
+        let pdfText: string | null = null;
+        if (isLikelyPdf(mimeType, file.name || "")) {
+          pdfText = await tryExtractPdfText(bytes);
+        }
+        const detected = detectFinancialInstitutionFromText(
+          pdfText,
+          file.name || `statement-${index + 1}.pdf`
+        );
+        withMeta = stampFinancialInstitutionOnHoldings(withMeta, detected);
+      }
 
       // Cross-check extracted tickers/names vs Supabase firm catalog before UI (ADVISORPILOT_SECURITIES_MASTER).
       const tagged = await enrichHoldingsWithSecuritiesMaster(withMeta);
@@ -176,6 +201,7 @@ export async function POST(request: Request) {
         demoMode,
         fileCount: files.length,
         holdingsCount: allHoldings.length,
+        documentKinds,
         unauthenticated: !identity,
       },
     });

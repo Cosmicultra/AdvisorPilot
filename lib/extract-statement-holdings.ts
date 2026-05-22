@@ -82,6 +82,8 @@ export type ExtractedHolding = {
   registrationType?: "qualified" | "non_qualified" | "roth" | "unknown";
   /** For non-qualified positions only: cost basis when shown on statement (0 omit). */
   costBasis?: number;
+  /** Custodian/broker name when printed on the statement (e.g. Schwab, Fidelity). */
+  financialInstitution?: string;
 };
 
 /**
@@ -150,6 +152,7 @@ Can you read this statement? Tell me the **account number**, the **holding name*
 Map into our app as JSON only (no markdown, no trailing commas):
 
 - **accountNumber** on rows in that account section when the statement shows it.
+- **financialInstitution** on each row when the statement shows a custodian/broker name (Charles Schwab, Fidelity, Vanguard, LPL, Pershing, etc.). Use the same value for all rows in that account section; omit if not visible on the document.
 - **rawName** / **suggested** for name and ticker; **value** = **market value / Mkt val** USD for that row **only** — not shares × price.
 - **costBasis** = explicit **cost basis / tax cost / avg cost** dollar amount for that holding when the statement prints it; omit or 0 otherwise.
 
@@ -175,7 +178,7 @@ AdvisorPilot client metadata (hints only — extract from document first):
 ${JSON.stringify(clientContext, null, 2)}
 ${advisorPageScope}${visionOnlySection}${pdfTextLayerSection}
 Example shape:
-{"statementAccountEndingValue":3500.84,"holdings":[{"rawName":"APPLE INC","suggested":"AAPL","confidence":90,"assetClass":"Individual Stock","value":250.01,"status":"matched","registrationType":"roth","accountNumber":"****023","options":["AAPL"],"costBasis":199.5}]}
+{"statementAccountEndingValue":3500.84,"holdings":[{"rawName":"APPLE INC","suggested":"AAPL","confidence":90,"assetClass":"Individual Stock","value":250.01,"status":"matched","registrationType":"roth","accountNumber":"****023","financialInstitution":"Charles Schwab","options":["AAPL"],"costBasis":199.5}]}
 `;
 
   // We pass `jsonSchema` solely to force `text.format: { type: "json_object" }`

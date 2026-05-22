@@ -8,7 +8,13 @@ import {
 import { canonicalizeAssetClass } from "@/lib/asset-classes";
 import { deriveHoldingStatus } from "@/lib/holding-status";
 import { applySyntheticCashTickerIfEligible } from "@/lib/holding-validation";
+import { normalizeFinancialInstitution } from "@/lib/crm/financial-institution";
 import { maskAccountNumberDisplay } from "@/lib/mask-account-number";
+import {
+  normalizeAnnuityContractFromStorage,
+  type AnnuityContractDetails,
+  type StatementDocumentKind,
+} from "@/lib/annuity-contract-types";
 
 export type UiHolding = {
   rawName: string;
@@ -46,6 +52,12 @@ export type UiHolding = {
   enrichmentNotes?: string;
   /** Advisor confirmed the proposed match on Confirm Holdings despite low AI confidence / review status. */
   confirmedMatchOverridesReview?: boolean;
+  /** Full annuity contract fields when extracted from a carrier statement. */
+  annuityContract?: AnnuityContractDetails;
+  /** Set by statement router when auto-detecting document type. */
+  documentKind?: StatementDocumentKind;
+  /** Custodian/broker when known (e.g. Schwab, Fidelity). */
+  financialInstitution?: string;
 };
 
 export type NormalizedAiAnalysis = {
@@ -117,6 +129,10 @@ export function normalizeHoldingsForUi(raw: unknown): UiHolding[] {
     }
     const acct = typeof h.accountNumber === "string" ? h.accountNumber.trim() : "";
     if (acct) base.accountNumber = maskAccountNumberDisplay(acct);
+    const institution = normalizeFinancialInstitution(
+      typeof h.financialInstitution === "string" ? h.financialInstitution : ""
+    );
+    if (institution) base.financialInstitution = institution;
     base.registrationType = normalizeRegistrationType(
       (h.registrationType as RegistrationBucket | undefined) ?? "unknown"
     );
@@ -172,6 +188,19 @@ export function normalizeHoldingsForUi(raw: unknown): UiHolding[] {
     if (typeof (h as { masterResolvedNote?: unknown }).masterResolvedNote === "string") {
       const m = String((h as { masterResolvedNote?: string }).masterResolvedNote).trim();
       if (m) base.masterResolvedNote = m;
+    }
+
+    if (h.documentKind === "brokerage" || h.documentKind === "annuity") {
+      base.documentKind = h.documentKind;
+    }
+    const annuity = normalizeAnnuityContractFromStorage(h.annuityContract);
+    if (annuity) {
+      base.annuityContract = annuity;
+      if (!base.documentKind) base.documentKind = "annuity";
+    }
+
+    if (base.documentKind === "annuity" || base.annuityContract) {
+      return base;
     }
 
     return applySyntheticCashTickerIfEligible(base);

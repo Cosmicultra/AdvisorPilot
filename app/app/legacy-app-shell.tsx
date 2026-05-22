@@ -63,13 +63,17 @@ import {
   RefreshCw,
   X,
   Landmark,
+  CheckCircle2,
+  DollarSign,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   computeRiskProfileFromQuiz,
   RISK_PROFILE_DESCRIPTORS,
   RISK_QUIZ_LENGTH,
   RISK_QUIZ_QUESTIONS,
 } from "@/lib/risk-questionnaire";
+import { isAnnuityContractHolding, maskContractNumberDisplay } from "@/lib/annuity-contract-types";
 import {
   INTAKE_STEPS,
   INTAKE_STEP_COUNT,
@@ -145,6 +149,18 @@ import {
   type RegistrationBucket,
 } from "@/lib/holding-registration";
 import { maskAccountNumberDisplay } from "@/lib/mask-account-number";
+import {
+  accountRefreshNeedsConfirmation,
+  buildAutoResolutions,
+  buildInitialResolutions,
+  groupHoldingsByAccountKey,
+  mergeAccountRefresh,
+  matchExtractedAccountsToExisting,
+  UNLABELED_ACCOUNT_KEY,
+  type AccountMatchResult,
+  type AccountRefreshResolution,
+} from "@/lib/crm/merge-account-holdings";
+import { AccountRefreshMappingPanel } from "@/components/account-refresh-mapping-panel";
 import { FiaScenarioReturnChart } from "@/components/fia-scenario-return-chart";
 import { ASSET_CLASSES, classifyAllocationBucket, isCanonicalAssetClass } from "@/lib/asset-classes";
 import {
@@ -620,6 +636,31 @@ function wizardRailLabel(item: string) {
   return item.charAt(0).toUpperCase() + item.slice(1);
 }
 
+function adjacentWizardStep(steps: readonly string[], current: string, dir: -1 | 1): string | null {
+  const i = steps.indexOf(current);
+  if (i < 0) return null;
+  const next = steps[i + dir];
+  return next ?? null;
+}
+
+const WIZARD_STEP_ICONS: Record<string, LucideIcon> = {
+  intake: User,
+  upload: Upload,
+  confirm: CheckCircle2,
+  analysis: BarChart3,
+  meeting: MessageSquareText,
+  fia: Calculator,
+  roth: Target,
+  retIncome: DollarSign,
+  feeAnalysis: Percent,
+  report: FileText,
+  saved: FolderOpen,
+};
+
+function wizardRailIcon(item: string): LucideIcon {
+  return WIZARD_STEP_ICONS[item] ?? FileText;
+}
+
 function AppTopNav({
   step,
   intakeStep,
@@ -762,25 +803,75 @@ function WizardStepRail({
   return (
     <div className="ap-wizard-rail print:hidden">
       <div className="ap-wizard-rail-inner mx-auto max-w-7xl px-4 md:px-8">
-        {wizardSteps.map((item, i) => {
+        {wizardSteps.map((item) => {
           const label = wizardRailLabel(item);
           const active = step === item;
+          const Icon = wizardRailIcon(item);
           return (
             <button
               key={item}
               type="button"
               className={`ap-wizard-segment ${active ? "ap-wizard-segment-active" : ""}`}
               aria-current={active ? "step" : undefined}
+              aria-label={label}
               onClick={() => {
                 if (item === "saved") void loadSavedReviews();
                 setStep(item);
               }}
             >
-              <span className="ap-wizard-segment-index">{String(i + 1).padStart(2, "0")}</span>
+              <span className="ap-wizard-segment-icon" aria-hidden>
+                <Icon size={18} strokeWidth={1.75} />
+              </span>
               {label}
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function WorkflowStepFooter({
+  onBack,
+  onSave,
+  onNext,
+  showBack = true,
+  showNext = true,
+  rightExtra,
+}: {
+  onBack: () => void;
+  onSave: () => void;
+  onNext: () => void;
+  showBack?: boolean;
+  showNext?: boolean;
+  rightExtra?: React.ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-3 border-t border-sky-100/60 pt-5 sm:grid-cols-3 sm:items-center">
+      <div className="justify-self-start">
+        {showBack ? (
+          <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={onBack}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back
+          </Button>
+        ) : (
+          <span className="hidden sm:block" aria-hidden />
+        )}
+      </div>
+      <div className="justify-self-center">
+        <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={onSave}>
+          <Save className="mr-2 h-4 w-4" />
+          Save Client Profile
+        </Button>
+      </div>
+      <div className="flex flex-wrap justify-end gap-2 justify-self-end">
+        {rightExtra}
+        {showNext ? (
+          <Button className="h-12 rounded-none ap-cta-solid touch-manipulation" onClick={onNext}>
+            Next
+            <ArrowRight className="ml-2 h-4 w-4" />
+          </Button>
+        ) : null}
       </div>
     </div>
   );
@@ -1005,6 +1096,12 @@ export default function AdvisorPilotPage() {
   const [demoMode, setDemoMode] = useState(true);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractError, setExtractError] = useState("");
+  const [accountRefreshPending, setAccountRefreshPending] = useState<{
+    priorHoldings: Holding[];
+    extractedHoldings: Holding[];
+    matchResults: AccountMatchResult[];
+    initialResolutions: AccountRefreshResolution[];
+  } | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
   const [analysis, setAnalysis] = useState<AIAnalysis | null>(null);
@@ -2150,6 +2247,24 @@ export default function AdvisorPilotPage() {
     setAnalysis(null);
   }
 
+  function finishExtractToConfirm(nextHoldings: Holding[]) {
+    const cleaned = flagLikelyDuplicateHoldings(nextHoldings);
+    setHoldings(cleaned);
+    setDuplicatesAcknowledged(false);
+    setDemoMode(false);
+    setAccountRefreshPending(null);
+    setStep("confirm");
+  }
+
+  function applyAccountRefreshMerge(
+    priorHoldings: Holding[],
+    extractedHoldings: Holding[],
+    resolutions: AccountRefreshResolution[]
+  ) {
+    const merged = mergeAccountRefresh(priorHoldings, extractedHoldings, resolutions);
+    finishExtractToConfirm(merged);
+  }
+
   async function handleExtractHoldings() {
     if (statementUploadQueue.length === 0) {
       setExtractError("Please upload at least one PDF, screenshot, or photo first.");
@@ -2161,7 +2276,9 @@ export default function AdvisorPilotPage() {
       setExtractProgressIndex(0);
       setExtractError("");
       setAnalysis(null);
+      setAccountRefreshPending(null);
 
+      const priorHoldings = holdings;
       const formData = new FormData();
       statementUploadQueue.forEach((item) => formData.append("files", item.file));
       formData.append(
@@ -2195,10 +2312,30 @@ export default function AdvisorPilotPage() {
       }));
       const cleaned = flagLikelyDuplicateHoldings(normalizedExtracted);
 
-      setHoldings(cleaned);
-      setDuplicatesAcknowledged(false);
-      setDemoMode(false);
-      setStep("confirm");
+      if (isAccountRefreshMode && priorHoldings.length > 0) {
+        const matchResults = matchExtractedAccountsToExisting(cleaned, priorHoldings, {
+          preferredExistingKey: intentAccountKey,
+        });
+        if (!accountRefreshNeedsConfirmation(matchResults)) {
+          applyAccountRefreshMerge(
+            priorHoldings,
+            cleaned,
+            buildAutoResolutions(matchResults)
+          );
+        } else {
+          setAccountRefreshPending({
+            priorHoldings,
+            extractedHoldings: cleaned,
+            matchResults,
+            initialResolutions: buildInitialResolutions(matchResults, {
+              preferredExistingKey: intentAccountKey,
+              existingHoldings: priorHoldings,
+            }),
+          });
+        }
+      } else {
+        finishExtractToConfirm(cleaned);
+      }
     } catch (error) {
       setExtractError(error instanceof Error ? error.message : "Something went wrong analyzing the statement.");
     } finally {
@@ -2429,6 +2566,18 @@ export default function AdvisorPilotPage() {
     }
   }
 
+  const goPrevWizardStep = useCallback(() => {
+    const prev = adjacentWizardStep(wizardSteps, step, -1);
+    if (prev) setStep(prev);
+  }, [wizardSteps, step]);
+
+  const goNextWizardStep = useCallback(() => {
+    const next = adjacentWizardStep(wizardSteps, step, 1);
+    if (!next) return;
+    if (next === "saved") void loadSavedReviews();
+    setStep(next);
+  }, [wizardSteps, step]);
+
   const startBlankReview = useCallback(() => {
     setClient({ ...INITIAL_CLIENT_STATE, riskQuizAnswers: {} });
     setHoldings([]);
@@ -2594,7 +2743,11 @@ export default function AdvisorPilotPage() {
   const searchParams = useSearchParams();
   const intentClientId = searchParams?.get("clientId") ?? null;
   const intentStep = searchParams?.get("step") ?? null;
-  const intentKey = `${intentClientId ?? ""}|${intentStep ?? ""}`;
+  const intentMode = searchParams?.get("mode") ?? null;
+  const intentAccountKey = searchParams?.get("accountKey")?.trim() || undefined;
+  const intentKey = `${intentClientId ?? ""}|${intentStep ?? ""}|${intentMode ?? ""}`;
+  const isAccountRefreshMode =
+    intentMode === "accountRefresh" && Boolean(activeReviewId || intentClientId);
   const [intentProcessedKey, setIntentProcessedKey] = useState<string | null>(null);
 
   // Reset processed flag when the URL intent CHANGES (e.g. user clicks a
@@ -3463,7 +3616,7 @@ async function downloadRothOptionPdf() {
     return;
   }
   if (!rothLiveAnalysisOpen) {
-    alert("Run Roth Analysis first, then you can download the Roth Report PDF.");
+    alert("Complete the Roth worksheet choices first, then you can download the Roth Report PDF.");
     return;
   }
   const out = await runRothReportDownload();
@@ -3497,6 +3650,18 @@ async function runRothAnalysisWithTaxPrecheck() {
     setRothAnalysisBusy(false);
   }
 }
+
+  async function maybeRunRothAnalysis() {
+    if (!showRothOptionReport || rothLiveAnalysisOpen || rothAnalysisBusy) return;
+    await runRothAnalysisWithTaxPrecheck();
+  }
+
+  function withRothAutoRun<T extends (...args: never[]) => void>(fn: T): T {
+    return ((...args: Parameters<T>) => {
+      fn(...args);
+      void maybeRunRothAnalysis();
+    }) as T;
+  }
 
 async function downloadPDFReport(mode: "client" | "advisor") {
   try {
@@ -4212,7 +4377,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         {step === "upload" && (
           <Card className="rounded-none ap-glass border-0">
             <CardContent className="space-y-6 p-6 pb-28 md:p-8 md:pb-8">
-              <div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none"><Upload className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Statement Capture</h2><p className="text-sm text-slate-500">Queue one or many statement files, note which pages hold positions, then extract.</p></div></div>
+              <div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none"><Upload className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">{isAccountRefreshMode ? "Refresh account statement" : "Statement Capture"}</h2><p className="text-sm text-slate-500">{isAccountRefreshMode ? "Upload a newer statement for one account. Other accounts on this client stay unchanged after you confirm mapping." : "Queue one or many statement files, note which pages hold positions, then extract."}</p></div></div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-3"><MetricCard icon={<User className="h-5 w-5" />} label="Client" value={clientDisplayName(client) || "Unnamed"} helper={derivedAge ? `Age ${derivedAge}` : "Age not set"} /><MetricCard icon={<Target className="h-5 w-5" />} label="Risk profile" value={client.riskProfile.replace("-", " ")} helper="Used for calibration" /><MetricCard icon={<BriefcaseBusiness className="h-5 w-5" />} label="Retirement age" value={client.retirementAge || "N/A"} helper="Timeline input" /></div>
               <div
                 id="upload-section-client-link"
@@ -4337,6 +4502,24 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               )}
               <div className="rounded-none border border-blue-100 bg-blue-50/80 p-5 text-sm text-blue-950"><Wand2 className="mb-2 h-5 w-5" />Extraction sends your queued file(s) to AI and builds a combined holdings table for you to confirm. Expect roughly <strong>20–60 seconds</strong> on a typical connection; large PDFs or slow Wi‑Fi can take longer.</div>
+              {accountRefreshPending ? (
+                <AccountRefreshMappingPanel
+                  matchResults={accountRefreshPending.matchResults}
+                  existingAccountKeys={[...groupHoldingsByAccountKey(accountRefreshPending.priorHoldings).keys()].filter(
+                    (k) => k !== UNLABELED_ACCOUNT_KEY
+                  )}
+                  existingHoldings={accountRefreshPending.priorHoldings}
+                  initialResolutions={accountRefreshPending.initialResolutions}
+                  onConfirm={(resolutions) =>
+                    applyAccountRefreshMerge(
+                      accountRefreshPending.priorHoldings,
+                      accountRefreshPending.extractedHoldings,
+                      resolutions
+                    )
+                  }
+                  onCancel={() => setAccountRefreshPending(null)}
+                />
+              ) : null}
               {extractError && <div className="rounded-none border border-red-200 bg-red-50 p-5 text-sm text-red-800">{extractError}</div>}
               {isExtracting && (
                 <p className="text-sm font-medium text-slate-700" aria-live="polite">
@@ -4345,12 +4528,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               )}
               <div className="hidden items-center gap-3 border-t border-sky-100/60 pt-5 md:flex">
                 <Button variant="outline" className="h-12 rounded-none px-5" onClick={() => setStep("intake")}><ArrowLeft className="mr-2 h-4 w-4" />Back</Button>
-                <Button className="ml-auto h-12 rounded-none ap-cta-solid px-6" onClick={handleExtractHoldings} disabled={isExtracting}>{isExtracting ? EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length] : "Extract holdings"}<ArrowRight className="ml-2 h-4 w-4" /></Button>
+                <Button className="ml-auto h-12 rounded-none ap-cta-solid px-6" onClick={handleExtractHoldings} disabled={isExtracting || Boolean(accountRefreshPending)}>{isExtracting ? EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length] : "Extract holdings"}<ArrowRight className="ml-2 h-4 w-4" /></Button>
               </div>
               <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-sky-200/50 bg-white/85 p-4 shadow-[0_-8px_32px_rgba(15,58,122,0.12)] backdrop-blur-xl md:hidden">
                 <div className="mx-auto flex max-w-3xl gap-3">
                   <Button variant="outline" className="h-14 flex-1 rounded-none touch-manipulation" onClick={() => setStep("intake")}>Back</Button>
-                  <Button className="h-14 flex-[2] rounded-none ap-cta-solid touch-manipulation" onClick={handleExtractHoldings} disabled={isExtracting}>{isExtracting ? EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length] : "Extract holdings"}</Button>
+                  <Button className="h-14 flex-[2] rounded-none ap-cta-solid touch-manipulation" onClick={handleExtractHoldings} disabled={isExtracting || Boolean(accountRefreshPending)}>{isExtracting ? EXTRACT_PROGRESS_MESSAGES[extractProgressIndex % EXTRACT_PROGRESS_MESSAGES.length] : "Extract holdings"}</Button>
                 </div>
               </div>
             </CardContent>
@@ -4466,6 +4649,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   const needsAdvisorReview = holdingAdvisorReviewBlocking(h);
                   const opts = normalizeOptions(h, needsAdvisorReview);
                   const regBucket = normalizeRegistrationType(h.registrationType);
+                  const isAnnuityRow = isAnnuityContractHolding(h);
+                  const contractNumDisplay =
+                    isAnnuityRow && h.annuityContract?.contractNumber
+                      ? maskContractNumberDisplay(h.annuityContract.contractNumber)
+                      : "";
                   return (
                     <div
                       key={`${h.rawName}-${index}`}
@@ -4507,6 +4695,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                                   >
                                     {registrationLabel(regBucket)}
                                   </Badge>
+                                  {isAnnuityRow ? (
+                                    <Badge
+                                      variant="outline"
+                                      className="h-6 rounded-sm border border-violet-200 bg-violet-50/90 px-2 py-0 text-xs font-semibold text-violet-900"
+                                    >
+                                      Annuity contract
+                                    </Badge>
+                                  ) : null}
                                   {needsAdvisorReview ? (
                                     <Badge
                                       variant="outline"
@@ -4516,13 +4712,22 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                                     </Badge>
                                   ) : null}
                                 </div>
-                                <p className={`${HOLDING_FIELD_LABEL_CLASS} mt-3`}>Market value</p>
+                                {contractNumDisplay ? (
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    Contract # <span className="font-mono font-medium text-slate-700">{contractNumDisplay}</span>
+                                  </p>
+                                ) : null}
+                                <p className={`${HOLDING_FIELD_LABEL_CLASS} mt-3`}>
+                                  {isAnnuityRow ? "Contract value" : "Market value"}
+                                </p>
                                 <p className="text-sm font-semibold tabular-nums text-slate-900">{currency(h.value)}</p>
                               </div>
                             </div>
                           </div>
                           <div className="lg:col-span-4 space-y-2">
-                            <p className={HOLDING_FIELD_LABEL_CLASS}>Security / match</p>
+                            <p className={HOLDING_FIELD_LABEL_CLASS}>
+                              {isAnnuityRow ? "Contract / match" : "Security / match"}
+                            </p>
                             <Select
                               value={h.suggested}
                               onValueChange={(value) =>
@@ -4744,15 +4949,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         {step === "analysis" && (
           <div className="space-y-4 pb-24 md:space-y-5 md:pb-5">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3"><MetricCard icon={<TrendingUp className="h-5 w-5" />} label="Total value" value={currency(totalValue)} /><MetricCard icon={<User className="h-5 w-5" />} label="Client age" value={derivedAge ? String(derivedAge) : "Not set"} /><MetricCard icon={<ShieldCheck className="h-5 w-5" />} label="Risk profile" value={client.riskProfile.replace("-", " ")} /></div>
-            <Card className="rounded-none ap-glass border-0"><CardContent className="space-y-6 p-6 pb-8 md:p-8"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none"><BarChart3 className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Portfolio Review</h2><p className="text-sm text-slate-500">Advisor-facing analysis based on confirmed holdings and selected calibration.</p></div></div>{analysisError && <div className="rounded-none border border-red-200 bg-red-50 p-5 text-sm text-red-800">{analysisError}</div>}<div className="ap-callout rounded-none p-5 md:flex md:items-center md:justify-between md:gap-4"><div><p className="ap-eyebrow">Next up</p><p className="mt-1 font-serif text-xl font-semibold text-blue-950">Sit with the client</p><p className="mt-1 text-sm text-slate-600">Meeting Guide is the default path from here. PDFs and email are easiest as a wrap-up after the conversation.</p></div><Button className="mt-4 h-12 w-full rounded-none ap-cta-solid md:mt-0 md:w-auto md:shrink-0 md:px-8" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Start Meeting Guide<ArrowRight className="ml-2 h-4 w-4" /></Button></div><div className="grid grid-cols-1 gap-5 md:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Based on confirmed holdings" data={currentPie} /><ProfessionalDonutChart title="Proposed Allocation" subtitle="Age and risk-profile calibration" data={targetPie} /></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Scores</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-3"><ScoreCard label="Risk Alignment" value={scores.riskAlignment} helper="How closely risk matches the proposed allocation" /><ScoreCard label="Diversification" value={scores.diversification} helper="Balance across major asset groups" /><ScoreCard label="Income Readiness" value={scores.incomeReadiness} helper="Support for retirement income stability" /></div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Synopsis</h3><div className="rounded-none border bg-white p-5 text-sm leading-7 text-slate-700">{displaySynopsis}</div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Hypothetical Allocation Stress</h3><p className="mb-4 text-sm text-slate-600"><strong className="font-semibold text-slate-800">Annualized geometric return (CAGR):</strong> each window chains the sleeve’s calendar-year % returns across 10 years, then applies the tenth root, not a straight sum or a cumulative decade total %. Static sleeve weights approximate annual rebalancing; illustrative only, not a forecast. Current mix weights each confirmed holding into equity (S&P calibration when no ticker history row), bonds (Bloomberg US Aggregate / AGG proxy), or cash / MM (annual-average Treasury-bill proxy); unclassified sleeves use a 50/50 equity/bond-index blend. The <strong className="font-semibold text-slate-800">biggest drawdown</strong> row is <strong className="font-semibold text-slate-800">2008 only</strong>, a single calendar-year blend using the −36.55% equity calibration alongside bond and cash proxies; not a multi-year CAGR.</p><div className="overflow-x-auto rounded-none border border-slate-200 bg-white"><table className="min-w-full text-sm"><thead><tr className="border-b border-slate-200 bg-slate-50"><th className="px-4 py-3 text-left font-semibold text-slate-700">Stress window</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Current</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Proposed</th></tr></thead><tbody>{portfolioStressScenarioRows.map(({ rowKey, title, subtitle, currentLabel, proposedLabel }) => (<tr key={rowKey} className="border-b border-slate-100 last:border-0"><td className="px-4 py-3 align-top"><p className="font-semibold text-slate-900">{title}</p><p className="text-xs text-slate-500">{subtitle}</p></td><td className="px-4 py-3 text-right font-semibold tabular-nums">{currentLabel}</td><td className="px-4 py-3 text-right font-semibold tabular-nums text-blue-900">{proposedLabel}</td></tr>))}</tbody></table></div><p className="mt-3 text-xs leading-relaxed text-slate-500">Ticker-specific equity histories can be added in code later; untouched tickers still assume the firm’s S&P calibration in each year. Bond roles use the Aggregate proxy; cash/MM uses the T-bill average proxy. Proposed path is the same index sleeves at target weights. First three rows: one CAGR each (10-year windows), read as “≈ % per year.” Biggest drawdown: modeled 2008 calendar-year blend only, not averaged over years.</p></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Retirement Success Model</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-none border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{currentSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(currentSuccessRate)} estimated success</p><Progress value={currentSuccessRate} className="mt-4" /></div><div className="rounded-none border border-sky-200 bg-sky-50/60 p-5"><p className="text-sm font-semibold text-blue-700">Proposed Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{proposedSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p><Progress value={proposedSuccessRate} className="mt-4" /></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-none border border-emerald-100 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Highlights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-3">{displayPortfolioHighlights.slice(0, 3).map((item) => <li key={item} className="rounded-none border border-slate-200 bg-slate-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-none border border-red-200 bg-red-50/60 p-4 text-sm leading-6 text-slate-700">{flag}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-none border border-indigo-200 bg-indigo-50/60 p-4 text-sm leading-6 text-slate-700">{insight}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-emerald-900">What This Means for You</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-none border border-emerald-200 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Strategic Considerations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-none border border-blue-100 bg-blue-50/60 p-4 text-sm leading-6 text-slate-700">{idea}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Advisor Example Recommendations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-none border border-amber-100 bg-amber-50/60 p-4 text-sm leading-6 text-slate-700">{rec}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Key findings</h3><ul className="space-y-2 text-sm">{findings.map((f) => <li key={f} className="rounded-none border bg-white p-4">{f}</li>)}</ul></div><div className="hidden border-t border-sky-100/60 pt-5 md:flex md:flex-wrap md:items-center md:gap-3"><Button variant="outline" className="h-12 rounded-none" onClick={() => setStep("confirm")}><ArrowLeft className="mr-2 h-4 w-4" />Back</Button><Button variant="outline" className="h-12 rounded-none" onClick={runAIAnalysis} disabled={isAnalyzing || !canRunDeepAnalysis}><BrainCircuit className="mr-2 h-4 w-4" />{isAnalyzing ? ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length] : "Regenerate analysis"}</Button><Button className="h-12 rounded-none ap-cta-solid px-5 md:ml-auto" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Meeting Guide<ArrowRight className="ml-2 h-4 w-4" /></Button></div>{isAnalyzing && <p className="hidden text-sm text-slate-600 md:block" aria-live="polite">{ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]} Often 30–90 seconds.</p>}</CardContent></Card>
+            <Card className="rounded-none ap-glass border-0"><CardContent className="space-y-6 p-6 pb-8 md:p-8"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none"><BarChart3 className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Portfolio Review</h2><p className="text-sm text-slate-500">Advisor-facing analysis based on confirmed holdings and selected calibration.</p></div></div>{analysisError && <div className="rounded-none border border-red-200 bg-red-50 p-5 text-sm text-red-800">{analysisError}</div>}<div className="ap-callout rounded-none p-5 md:flex md:items-center md:justify-between md:gap-4"><div><p className="ap-eyebrow">Next up</p><p className="mt-1 font-serif text-xl font-semibold text-blue-950">Sit with the client</p><p className="mt-1 text-sm text-slate-600">Meeting Guide is the default path from here. PDFs and email are easiest as a wrap-up after the conversation.</p></div><Button className="mt-4 h-12 w-full rounded-none ap-cta-solid md:mt-0 md:w-auto md:shrink-0 md:px-8" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Start Meeting Guide<ArrowRight className="ml-2 h-4 w-4" /></Button></div><div className="grid grid-cols-1 gap-5 md:grid-cols-2"><ProfessionalDonutChart title="Current allocation" subtitle="Based on confirmed holdings" data={currentPie} /><ProfessionalDonutChart title="Proposed Allocation" subtitle="Age and risk-profile calibration" data={targetPie} /></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Scores</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-3"><ScoreCard label="Risk Alignment" value={scores.riskAlignment} helper="How closely risk matches the proposed allocation" /><ScoreCard label="Diversification" value={scores.diversification} helper="Balance across major asset groups" /><ScoreCard label="Income Readiness" value={scores.incomeReadiness} helper="Support for retirement income stability" /></div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Synopsis</h3><div className="rounded-none border bg-white p-5 text-sm leading-7 text-slate-700">{displaySynopsis}</div></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Hypothetical Allocation Stress</h3><p className="mb-4 text-sm text-slate-600"><strong className="font-semibold text-slate-800">Annualized geometric return (CAGR):</strong> each window chains the sleeve’s calendar-year % returns across 10 years, then applies the tenth root, not a straight sum or a cumulative decade total %. Static sleeve weights approximate annual rebalancing; illustrative only, not a forecast. Current mix weights each confirmed holding into equity (S&P calibration when no ticker history row), bonds (Bloomberg US Aggregate / AGG proxy), or cash / MM (annual-average Treasury-bill proxy); unclassified sleeves use a 50/50 equity/bond-index blend. The <strong className="font-semibold text-slate-800">biggest drawdown</strong> row is <strong className="font-semibold text-slate-800">2008 only</strong>, a single calendar-year blend using the −36.55% equity calibration alongside bond and cash proxies; not a multi-year CAGR.</p><div className="overflow-x-auto rounded-none border border-slate-200 bg-white"><table className="min-w-full text-sm"><thead><tr className="border-b border-slate-200 bg-slate-50"><th className="px-4 py-3 text-left font-semibold text-slate-700">Stress window</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Current</th><th className="px-4 py-3 text-right font-semibold text-slate-700">Proposed</th></tr></thead><tbody>{portfolioStressScenarioRows.map(({ rowKey, title, subtitle, currentLabel, proposedLabel }) => (<tr key={rowKey} className="border-b border-slate-100 last:border-0"><td className="px-4 py-3 align-top"><p className="font-semibold text-slate-900">{title}</p><p className="text-xs text-slate-500">{subtitle}</p></td><td className="px-4 py-3 text-right font-semibold tabular-nums">{currentLabel}</td><td className="px-4 py-3 text-right font-semibold tabular-nums text-blue-900">{proposedLabel}</td></tr>))}</tbody></table></div><p className="mt-3 text-xs leading-relaxed text-slate-500">Ticker-specific equity histories can be added in code later; untouched tickers still assume the firm’s S&P calibration in each year. Bond roles use the Aggregate proxy; cash/MM uses the T-bill average proxy. Proposed path is the same index sleeves at target weights. First three rows: one CAGR each (10-year windows), read as “≈ % per year.” Biggest drawdown: modeled 2008 calendar-year blend only, not averaged over years.</p></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Retirement Success Model</h3><div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className="rounded-none border border-slate-200 bg-white p-5"><p className="text-sm font-semibold text-slate-500">Current Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{currentSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(currentSuccessRate)} estimated success</p><Progress value={currentSuccessRate} className="mt-4" /></div><div className="rounded-none border border-sky-200 bg-sky-50/60 p-5"><p className="text-sm font-semibold text-blue-700">Proposed Allocation</p><p className="mt-2 text-4xl font-bold text-slate-950">{proposedSuccessRate}<span className="text-lg text-slate-400">/100</span></p><p className="mt-1 text-sm text-slate-500">{successLabel(proposedSuccessRate)} estimated success</p><Progress value={proposedSuccessRate} className="mt-4" /></div></div><ul className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{retirementModelInsights.map((item) => <li key={item} className="rounded-none border border-emerald-100 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Portfolio Highlights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-3">{displayPortfolioHighlights.slice(0, 3).map((item) => <li key={item} className="rounded-none border border-slate-200 bg-slate-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-red-900">Advisor Red Flags</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRedFlags.map((flag) => <li key={flag} className="rounded-none border border-red-200 bg-red-50/60 p-4 text-sm leading-6 text-slate-700">{flag}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-indigo-900">Overlap & Concentration Insights</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayOverlapInsights.map((insight) => <li key={insight} className="rounded-none border border-indigo-200 bg-indigo-50/60 p-4 text-sm leading-6 text-slate-700">{insight}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold text-emerald-900">What This Means for You</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayWhatThisMeans.map((item) => <li key={item} className="rounded-none border border-emerald-200 bg-emerald-50/60 p-4 text-sm leading-6 text-slate-700">{item}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Strategic Considerations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayStrategies.map((idea) => <li key={idea} className="rounded-none border border-blue-100 bg-blue-50/60 p-4 text-sm leading-6 text-slate-700">{idea}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Advisor Example Recommendations</h3><ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{displayRecommendations.map((rec) => <li key={rec} className="rounded-none border border-amber-100 bg-amber-50/60 p-4 text-sm leading-6 text-slate-700">{rec}</li>)}</ul></div><div><h3 className="mb-3 font-serif text-2xl font-bold">Key findings</h3><ul className="space-y-2 text-sm">{findings.map((f) => <li key={f} className="rounded-none border bg-white p-4">{f}</li>)}</ul></div><div className="hidden flex-col gap-3 border-t border-sky-100/60 pt-5 md:flex"><div className="flex flex-wrap items-center gap-3"><Button variant="outline" className="h-12 rounded-none" onClick={runAIAnalysis} disabled={isAnalyzing || !canRunDeepAnalysis}><BrainCircuit className="mr-2 h-4 w-4" />{isAnalyzing ? ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length] : "Regenerate analysis"}</Button></div><WorkflowStepFooter onBack={goPrevWizardStep} onSave={() => void saveCurrentReview()} onNext={goNextWizardStep} /></div>{isAnalyzing && <p className="hidden text-sm text-slate-600 md:block" aria-live="polite">{ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]} Often 30–90 seconds.</p>}</CardContent></Card>
           <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-sky-200/50 bg-white/85 p-4 shadow-[0_-8px_32px_rgba(15,58,122,0.12)] backdrop-blur-xl md:hidden">
             <div className="mx-auto flex max-w-3xl flex-col gap-2">
               {isAnalyzing && <p className="text-center text-xs text-slate-600" aria-live="polite">{ANALYSIS_PROGRESS_MESSAGES[analysisProgressIndex % ANALYSIS_PROGRESS_MESSAGES.length]}</p>}
-              <Button className="h-14 w-full rounded-none ap-cta-solid touch-manipulation" onClick={() => setStep("meeting")}><MessageSquareText className="mr-2 h-4 w-4" />Meeting Guide</Button>
-              <div className="flex gap-2">
-                <Button variant="outline" className="h-12 flex-1 rounded-none text-sm touch-manipulation" onClick={() => setStep("confirm")}>Back</Button>
-                <Button variant="outline" className="h-12 flex-1 rounded-none text-sm touch-manipulation" onClick={runAIAnalysis} disabled={isAnalyzing || !canRunDeepAnalysis}>Regenerate</Button>
-              </div>
+              <WorkflowStepFooter onBack={goPrevWizardStep} onSave={() => void saveCurrentReview()} onNext={goNextWizardStep} />
+              <Button variant="outline" className="h-12 w-full rounded-none text-sm touch-manipulation" onClick={runAIAnalysis} disabled={isAnalyzing || !canRunDeepAnalysis}>Regenerate</Button>
             </div>
           </div>
           </div>
@@ -4828,23 +5030,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <p>{closingScript}</p>
               </div>
 
-              <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:items-center sm:justify-between">
-                <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => setStep("analysis")}>
-                  <ArrowLeft className="mr-2 h-4 w-4" />
-                  Back to analysis
-                </Button>
-                <p className="hidden text-center text-xs text-slate-500 sm:block">
-                  After the conversation, optionally use the FIA calculator, Roth worksheet, Ret. Inc Calculator, then Wrap-up for the Client Snapshot PDF, Gmail send, and follow-up copy.
-                </p>
-                <Button className="h-12 rounded-none ap-cta-solid px-5 touch-manipulation" onClick={() => setStep("fia")}>
-                  <Calculator className="mr-2 h-4 w-4" />
-                  FIA calculator
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-              </div>
-              <p className="text-xs text-slate-500 sm:hidden">
-                After the meeting, optionally use the FIA, Roth, and Ret. Inc screens, then open Wrap-up for PDFs and email.
-              </p>
+              <WorkflowStepFooter
+                onBack={goPrevWizardStep}
+                onSave={() => void saveCurrentReview()}
+                onNext={goNextWizardStep}
+              />
             </CardContent>
           </Card>
         )}
@@ -5575,36 +5765,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               ) : null}
 
-              <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-                <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => setStep("meeting")}>
-                  <ArrowLeft className="mr-2 h-4 w-4" />
-                  Back to Meeting Guide
-                </Button>
-                <div className="flex flex-wrap gap-2 sm:justify-end">
-                  <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => void saveCurrentReview()}>
-                    <Save className="mr-2 h-4 w-4" />
-                    Save client profile
-                  </Button>
-                  {showRothOptionReport ? (
-                    <Button
-                      variant="outline"
-                      className="h-12 rounded-none border-amber-200 bg-amber-50/90 touch-manipulation hover:bg-amber-100/90"
-                      onClick={() => setStep("roth")}
-                    >
-                      <Target className="mr-2 h-4 w-4" />
-                      Roth worksheet
-                    </Button>
-                  ) : null}
-                  <Button
-                    variant="outline"
-                    className="h-12 rounded-none border-sky-200 bg-sky-50/90 touch-manipulation hover:bg-sky-100/90"
-                    onClick={() => setStep("retIncome")}
-                  >
-                    <Landmark className="mr-2 h-4 w-4" />
-                    Ret. Inc Calculator
-                  </Button>
-                </div>
-              </div>
+              <WorkflowStepFooter
+                onBack={goPrevWizardStep}
+                onSave={() => void saveCurrentReview()}
+                onNext={goNextWizardStep}
+              />
             </CardContent>
           </Card>
         )}
@@ -5700,7 +5865,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     type="button"
                     variant={rothWorksheet.useEntireQualifiedBalance === true ? "default" : "outline"}
                     className="h-11 rounded-none"
-                    onClick={() =>
+                    onClick={withRothAutoRun(() =>
                       setRothWorksheet((w) => {
                         const next = { ...w, useEntireQualifiedBalance: true as const };
                         if (traditionalQualifiedTotal > 0 && parseRothMoneyInput(w.qualifiedAssetValue) <= 0) {
@@ -5709,7 +5874,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         }
                         return next;
                       })
-                    }
+                    )}
                   >
                     Yes
                   </Button>
@@ -5717,7 +5882,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     type="button"
                     variant={rothWorksheet.useEntireQualifiedBalance === false ? "default" : "outline"}
                     className="h-11 rounded-none"
-                    onClick={() => setRothWorksheet((w) => ({ ...w, useEntireQualifiedBalance: false }))}
+                    onClick={withRothAutoRun(() => setRothWorksheet((w) => ({ ...w, useEntireQualifiedBalance: false })))}
                   >
                     No
                   </Button>
@@ -5764,12 +5929,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     type="button"
                     role="switch"
                     aria-checked={rothWorksheet.fic.protectInitialInvestment}
-                    onClick={() =>
+                    onClick={withRothAutoRun(() =>
                       setRothWorksheet((w) => ({
                         ...w,
                         fic: { ...w.fic, protectInitialInvestment: !w.fic.protectInitialInvestment },
                       }))
-                    }
+                    )}
                     className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${
                       rothWorksheet.fic.protectInitialInvestment ? "bg-sky-500" : "bg-slate-200"
                     }`}
@@ -5826,17 +5991,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <p className="text-xs text-slate-500">
                   Pulled from intake as AGI (Form 1040, line 11 on recent-year returns).
                 </p>
-                <div className="flex h-12 max-w-md items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
-                  <span className="pl-4 text-lg font-medium text-slate-600">$</span>
-                  <Input
-                    className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
-                    type="text"
-                    inputMode="decimal"
-                    value={client.adjustedGrossIncomeAnnual}
-                    onChange={(e) => setClient({ ...client, adjustedGrossIncomeAnnual: e.target.value })}
-                    placeholder="165432"
-                  />
-                </div>
+                <CurrencyAmountInput
+                  className="h-12 max-w-md border-blue-100 focus-within:ring-sky-500"
+                  value={client.adjustedGrossIncomeAnnual}
+                  onChange={(v) => setClient({ ...client, adjustedGrossIncomeAnnual: v })}
+                  placeholder="165,432"
+                />
               </div>
 
               <div className="space-y-3 rounded-none border border-slate-200 bg-white p-5 md:p-6">
@@ -5844,19 +6004,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <p className="text-xs text-slate-500">
                   From intake: how much spendable income the client needs in retirement annually. Edits here update the client profile.
                 </p>
-                <div className="flex h-12 max-w-md items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
-                  <span className="pl-4 text-lg font-medium text-slate-600">$</span>
-                  <Input
-                    className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
-                    type="text"
-                    inputMode="decimal"
-                    value={client.retirementSpendableIncomeAnnual}
-                    onChange={(e) =>
-                      setClient({ ...client, retirementSpendableIncomeAnnual: e.target.value })
-                    }
-                    placeholder="85000"
-                  />
-                </div>
+                <CurrencyAmountInput
+                  className="h-12 max-w-md border-blue-100 focus-within:ring-sky-500"
+                  value={client.retirementSpendableIncomeAnnual}
+                  onChange={(v) => setClient({ ...client, retirementSpendableIncomeAnnual: v })}
+                  placeholder="85,000"
+                />
               </div>
 
               <div className="space-y-3 rounded-none border border-slate-200 bg-white p-5 md:p-6">
@@ -5882,7 +6035,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     type="button"
                     variant={rothWorksheet.useFixedIndexContract === true ? "default" : "outline"}
                     className="h-11 rounded-none"
-                    onClick={() => setRothWorksheet((w) => ({ ...w, useFixedIndexContract: true }))}
+                    onClick={withRothAutoRun(() => setRothWorksheet((w) => ({ ...w, useFixedIndexContract: true })))}
                   >
                     Yes
                   </Button>
@@ -5890,7 +6043,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     type="button"
                     variant={rothWorksheet.useFixedIndexContract === false ? "default" : "outline"}
                     className="h-11 rounded-none"
-                    onClick={() => setRothWorksheet((w) => ({ ...w, useFixedIndexContract: false }))}
+                    onClick={withRothAutoRun(() => setRothWorksheet((w) => ({ ...w, useFixedIndexContract: false })))}
                   >
                     No
                   </Button>
@@ -6192,7 +6345,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         type="button"
                         variant="outline"
                         className="h-11 rounded-none border-slate-300"
-                        onClick={() => {
+                        onClick={withRothAutoRun(() => {
                           const row = rothFicPendingLoadTemplate;
                           setRothFicTemplateLoadSpecConfirmOpen(false);
                           setRothFicPendingLoadTemplate(null);
@@ -6202,14 +6355,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                             variant: "success",
                             message: `Loaded Roth FIC template "${row.displayName}".`,
                           });
-                        }}
+                        })}
                       >
                         No, load as saved
                       </Button>
                       <Button
                         type="button"
                         className="h-11 rounded-none ap-cta-solid"
-                        onClick={() => {
+                        onClick={withRothAutoRun(() => {
                           const row = rothFicPendingLoadTemplate;
                           setRothFicTemplateLoadSpecConfirmOpen(false);
                           setRothFicPendingLoadTemplate(null);
@@ -6219,7 +6372,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                             variant: "success",
                             message: `Carrier and product set from "${row.displayName}". Enter remaining Roth FIC terms, then Update template.`,
                           });
-                        }}
+                        })}
                       >
                         Yes, remap specs
                       </Button>
@@ -6294,13 +6447,28 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               ) : null}
 
+              {rothAnalysisBusy ? (
+                <p className="text-sm text-amber-900" role="status" aria-live="polite">
+                  Running Roth check…
+                </p>
+              ) : null}
+
               {rothLiveAnalysisOpen && rothLiveIllustration ? (
                 <div className="space-y-5 rounded-none border border-amber-200 bg-amber-50/85 p-5 md:p-6">
-                  <div>
-                    <p className="font-serif text-xl font-bold text-slate-950">Illustrative Roth analysis</p>
-                    <p className="mt-1 max-w-4xl text-xs leading-relaxed text-slate-700">
-                      Year-by-year view uses the same model as the Roth Option PDF. Change inputs above — values update live for client conversations. Illustrative only, not tax or investment advice.
-                    </p>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="font-serif text-xl font-bold text-slate-950">Illustrative Roth analysis</p>
+                      <p className="mt-1 max-w-4xl text-xs leading-relaxed text-slate-700">
+                        Year-by-year view uses the same model as the Roth Option PDF. Change inputs above — values update live for client conversations. Illustrative only, not tax or investment advice.
+                      </p>
+                    </div>
+                    <Button
+                      className="h-12 shrink-0 rounded-none ap-cta-solid touch-manipulation"
+                      onClick={() => void downloadRothOptionPdf()}
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      Roth Report
+                    </Button>
                   </div>
                   {rothAnalysisPrecheckMessages.length > 0 ? (
                     <div className="rounded-none border border-slate-200 bg-white px-4 py-3 text-xs text-slate-700" role="status">
@@ -6502,60 +6670,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               ) : null}
 
-              <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-                <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => setStep("fia")}>
-                  <ArrowLeft className="mr-2 h-4 w-4" />
-                  Back to FIA calculator
-                </Button>
-                <div className="flex flex-wrap gap-2 sm:justify-end">
-                  <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={saveCurrentReview}>
-                    <Save className="mr-2 h-4 w-4" />
-                    Save client profile
-                  </Button>
-                  {rothLiveAnalysisOpen ? (
-                    <Button
-                      className="h-12 rounded-none ap-cta-solid touch-manipulation"
-                      onClick={() => void downloadRothOptionPdf()}
-                    >
-                      <Download className="mr-2 h-4 w-4" />
-                      Roth Report
-                    </Button>
-                  ) : null}
-                  <Button
-                    variant="outline"
-                    className="h-12 rounded-none border-slate-300 touch-manipulation"
-                    onClick={() => setStep("retIncome")}
-                  >
-                    <Landmark className="mr-2 h-4 w-4" />
-                    Ret. Inc Calculator
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-12 rounded-none border-slate-300 touch-manipulation"
-                    onClick={() => setStep("feeAnalysis")}
-                  >
-                    <Percent className="mr-2 h-4 w-4" />
-                    Fee analysis
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-12 rounded-none border-slate-300 touch-manipulation"
-                    onClick={() => setStep("report")}
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    Wrap-up: PDFs and email
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-12 rounded-none border-amber-200 bg-amber-50/90 touch-manipulation hover:bg-amber-100/90"
-                    disabled={rothAnalysisBusy}
-                    onClick={() => void runRothAnalysisWithTaxPrecheck()}
-                  >
-                    <BrainCircuit className="mr-2 h-4 w-4" />
-                    {rothAnalysisBusy ? "Running…" : "Roth Analysis"}
-                  </Button>
-                </div>
-              </div>
+              <WorkflowStepFooter
+                onBack={goPrevWizardStep}
+                onSave={() => void saveCurrentReview()}
+                onNext={goNextWizardStep}
+              />
             </CardContent>
           </Card>
         )}
@@ -6671,17 +6790,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   ) : null}
                   <div className="md:col-span-2">
                     <label className="text-sm font-semibold text-slate-700">Annual spendable income need in retirement</label>
-                    <div className="mt-2 flex h-12 max-w-md items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
-                      <span className="pl-4 text-lg font-medium text-slate-600">$</span>
-                      <Input
-                        className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
-                        type="text"
-                        inputMode="decimal"
-                        value={client.retirementSpendableIncomeAnnual}
-                        onChange={(e) => setClient({ ...client, retirementSpendableIncomeAnnual: e.target.value })}
-                        placeholder="85000"
-                      />
-                    </div>
+                    <CurrencyAmountInput
+                      className="mt-2 h-12 max-w-md border-blue-100 focus-within:ring-sky-500"
+                      value={client.retirementSpendableIncomeAnnual}
+                      onChange={(v) => setClient({ ...client, retirementSpendableIncomeAnnual: v })}
+                      placeholder="85,000"
+                    />
                   </div>
                   <div className="md:col-span-2 flex flex-col gap-4 rounded-none border border-slate-200 bg-white px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -7271,26 +7385,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </>
               )}
 
-              <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-                <Button
-                  variant="outline"
-                  className="h-12 rounded-none touch-manipulation"
-                  onClick={() => setStep(showRothOptionReport ? "roth" : "fia")}
-                >
-                  <ArrowLeft className="mr-2 h-4 w-4" />
-                  {showRothOptionReport ? "Back to Roth worksheet" : "Back to FIA calculator"}
-                </Button>
-                <div className="flex flex-wrap gap-2 sm:justify-end">
-                  <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => void saveCurrentReview()}>
-                    <Save className="mr-2 h-4 w-4" />
-                    Save client profile
-                  </Button>
-                  <Button className="h-12 rounded-none ap-cta-solid touch-manipulation" onClick={() => setStep("feeAnalysis")}>
-                    <Percent className="mr-2 h-4 w-4" />
-                    Fee analysis
-                  </Button>
-                </div>
-              </div>
+              <WorkflowStepFooter
+                onBack={goPrevWizardStep}
+                onSave={() => void saveCurrentReview()}
+                onNext={goNextWizardStep}
+              />
             </CardContent>
           </Card>
         )}
@@ -7503,16 +7602,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
               ) : null}
 
-              <div className="flex flex-col gap-3 border-t border-sky-100/60 pt-5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-                <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => setStep("retIncome")}>
-                  <ArrowLeft className="mr-2 h-4 w-4" />
-                  Back to Ret. Inc Calculator
-                </Button>
-                <div className="flex flex-wrap gap-2 sm:justify-end">
-                  <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => void saveCurrentReview()}>
-                    <Save className="mr-2 h-4 w-4" />
-                    Save client profile
-                  </Button>
+              <WorkflowStepFooter
+                onBack={goPrevWizardStep}
+                onSave={() => void saveCurrentReview()}
+                onNext={goNextWizardStep}
+                rightExtra={
                   <Button
                     variant="outline"
                     className="h-12 rounded-none border-violet-300 bg-violet-50/90 touch-manipulation hover:bg-violet-100/90"
@@ -7520,14 +7614,10 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     onClick={() => void runFeeAnalysis()}
                   >
                     <BrainCircuit className="mr-2 h-4 w-4" />
-                    {feeAnalysisBusy ? "Running…" : "Run fee analysis"}
+                    {feeAnalysisBusy ? "Running…" : "Run"}
                   </Button>
-                  <Button className="h-12 rounded-none ap-cta-solid touch-manipulation" onClick={() => setStep("report")}>
-                    <Download className="mr-2 h-4 w-4" />
-                    Wrap-up: PDFs and email
-                  </Button>
-                </div>
-              </div>
+                }
+              />
             </CardContent>
           </Card>
         )}
@@ -7546,13 +7636,6 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       <p className="text-sm text-slate-500">Clean report preview for PDF, email, or print.</p>
                     </div>
                   </div>
-                  <Button
-                    className="h-12 rounded-none ap-cta-solid px-5 touch-manipulation"
-                    onClick={() => setStep("meeting")}
-                  >
-                    <MessageSquareText className="mr-2 h-4 w-4" />
-                    Back to Meeting Guide
-                  </Button>
                 </div>
 
                 <div className="ap-callout rounded-none p-5">
@@ -7572,7 +7655,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                           aria-checked={snapshotIncludeFiaAppendix}
                           onClick={() => setSnapshotIncludeFiaAppendix((v) => !v)}
                           className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                            snapshotIncludeFiaAppendix ? "bg-teal-600" : "bg-slate-200"
+                            snapshotIncludeFiaAppendix ? "bg-[var(--ap-royal)]" : "bg-slate-200"
                           }`}
                         >
                           <span className="sr-only">Include FIA calculator in PDF</span>
@@ -7592,7 +7675,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                             aria-checked={snapshotIncludeRothAppendix}
                             onClick={() => setSnapshotIncludeRothAppendix((v) => !v)}
                             className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                              snapshotIncludeRothAppendix ? "bg-amber-500" : "bg-slate-200"
+                              snapshotIncludeRothAppendix ? "bg-[var(--ap-royal)]" : "bg-slate-200"
                             }`}
                           >
                             <span className="sr-only">Include Roth comparison in PDF</span>
@@ -7778,18 +7861,22 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 {meetingNotes && <div><h2 className="font-serif text-2xl font-bold text-slate-950">Meeting Notes</h2><p className="mt-2 text-sm leading-7 text-slate-700">{meetingNotes}</p></div>}
                 <p className="border-t border-slate-200 pt-3 text-xs text-gray-600">For discussion purposes only. This report is not a trade instruction and must be reviewed by a licensed financial professional before implementation. Investment recommendations should consider the client’s full financial situation, risk tolerance, time horizon, tax status, and objectives.</p>
               </div>
-              <div className="no-print flex flex-wrap items-center justify-between gap-3 border-t border-sky-100/60 pt-5">
-                <Button variant="outline" className="h-12 rounded-none touch-manipulation" onClick={() => setStep("meeting")}>
-                  <ArrowLeft className="mr-2 h-4 w-4" />
-                  Back to Meeting Guide
-                </Button>
-                <Button
-                  className="h-12 rounded-none ap-cta-solid px-5 touch-manipulation"
-                  onClick={() => void handleNewReviewIntent()}
-                >
-                  Start new review
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
+              <div className="no-print space-y-3 border-t border-sky-100/60 pt-5">
+                <WorkflowStepFooter
+                  onBack={goPrevWizardStep}
+                  onSave={() => void saveCurrentReview()}
+                  onNext={goNextWizardStep}
+                />
+                <div className="flex justify-end">
+                  <Button
+                    variant="outline"
+                    className="h-12 rounded-none touch-manipulation"
+                    onClick={() => void handleNewReviewIntent()}
+                  >
+                    Start new review
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>

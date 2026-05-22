@@ -33,6 +33,7 @@ export type OverviewTabProps = {
   refreshKey: number;
   onLogNote(): void;
   onAddTask(): void;
+  onClientUpdated?(client: ClientDetail): void;
 };
 
 export function OverviewTab({
@@ -40,6 +41,7 @@ export function OverviewTab({
   refreshKey,
   onLogNote,
   onAddTask,
+  onClientUpdated,
 }: OverviewTabProps) {
   return (
     <div className="grid grid-cols-1 gap-4 px-6 py-5 lg:grid-cols-2">

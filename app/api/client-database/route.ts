@@ -7,6 +7,7 @@ import {
   clientSaveUpdateSummary,
   type ClientSaveSnapshot,
 } from "@/lib/crm/client-update-summary";
+import { DEFAULT_NEW_CLIENT_STAGE } from "@/lib/crm/stage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -240,7 +241,7 @@ export const POST = async (req: Request) => {
           .single()
       : await supabaseAdmin
           .from("advisorpilot_clients")
-          .insert(payload)
+          .insert({ ...payload, stage: DEFAULT_NEW_CLIENT_STAGE })
           .select("*")
           .single();
 

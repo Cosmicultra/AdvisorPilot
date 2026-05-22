@@ -27,6 +27,8 @@ const HARDCODED_DEFAULT_PROVIDER: LlmProvider = "openai";
 const HARDCODED_MODEL_DEFAULTS: Record<LlmProvider, Record<LlmPass, string>> = {
   openai: {
     extraction: "gpt-4o",
+    "extraction.classify": "gpt-4o-mini",
+    "extraction.annuity": "gpt-4o",
     "intake.turn": "gpt-4o-mini",
     "research.fast-grounded": "gpt-4o",
     "research.agentic": "gpt-4o",
@@ -34,11 +36,15 @@ const HARDCODED_MODEL_DEFAULTS: Record<LlmProvider, Record<LlmPass, string>> = {
     "synthesis.json": "gpt-4o",
     "fee-analysis": "gpt-4o-mini",
     chat: "gpt-4o",
+    dripper: "gpt-4o-mini",
+    "dripper.client-email": "gpt-4o-mini",
     tts: "gpt-4o-mini-tts",
     stt: "whisper-1",
   },
   gemini: {
     extraction: "gemini-3-flash-preview",
+    "extraction.classify": "gemini-3.1-flash-lite",
+    "extraction.annuity": "gemini-3-flash-preview",
     "intake.turn": "gemini-3.1-flash-lite",
     "research.fast-grounded": "gemini-3-flash-preview",
     "research.agentic": "gemini-3.1-pro-preview",
@@ -46,11 +52,15 @@ const HARDCODED_MODEL_DEFAULTS: Record<LlmProvider, Record<LlmPass, string>> = {
     "synthesis.json": "gemini-3.1-flash-lite",
     "fee-analysis": "gemini-3.1-flash-lite",
     chat: "gemini-2.5-flash",
+    dripper: "gemini-3.1-flash-lite",
+    "dripper.client-email": "gemini-3.1-flash-lite",
     tts: "gemini-3.1-flash-tts-preview",
     stt: "gemini-3-flash-preview",
   },
   grok: {
     extraction: "grok-4.3",
+    "extraction.classify": "grok-4.3",
+    "extraction.annuity": "grok-4.3",
     "intake.turn": "grok-4.3",
     "research.fast-grounded": "grok-4.3",
     "research.agentic": "grok-4.3",
@@ -58,6 +68,8 @@ const HARDCODED_MODEL_DEFAULTS: Record<LlmProvider, Record<LlmPass, string>> = {
     "synthesis.json": "grok-4.3",
     "fee-analysis": "grok-4.3",
     chat: "grok-4.3",
+    dripper: "grok-4.3",
+    "dripper.client-email": "grok-4.3",
     tts: "grok-4.3",
     stt: "grok-4.3",
   },
@@ -70,6 +82,8 @@ const HARDCODED_MODEL_DEFAULTS: Record<LlmProvider, Record<LlmPass, string>> = {
 /** Pass → env-var-friendly snake (e.g. "research.fast-grounded" → "RESEARCH_FAST"). */
 const PASS_TO_ENV: Record<LlmPass, string> = {
   extraction: "EXTRACTION",
+  "extraction.classify": "EXTRACTION_CLASSIFY",
+  "extraction.annuity": "EXTRACTION_ANNUITY",
   "intake.turn": "INTAKE",
   "research.fast-grounded": "RESEARCH_FAST",
   "research.agentic": "RESEARCH_AGENTIC",
@@ -77,6 +91,8 @@ const PASS_TO_ENV: Record<LlmPass, string> = {
   "synthesis.json": "SYNTHESIS",
   "fee-analysis": "FEE_ANALYSIS",
   chat: "CHAT",
+  dripper: "DRIPPER",
+  "dripper.client-email": "DRIPPER_CLIENT_EMAIL",
   tts: "TTS",
   stt: "STT",
 };
@@ -94,6 +110,10 @@ function legacyOpenAiAlias(pass: LlmPass): string | undefined {
   switch (pass) {
     case "extraction":
       return trimEnv("OPENAI_EXTRACTION_MODEL");
+    case "extraction.classify":
+      return trimEnv("OPENAI_EXTRACTION_CLASSIFY_MODEL") ?? trimEnv("OPENAI_EXTRACTION_MODEL");
+    case "extraction.annuity":
+      return trimEnv("OPENAI_EXTRACTION_ANNUITY_MODEL") ?? trimEnv("OPENAI_EXTRACTION_MODEL");
     case "intake.turn":
       return trimEnv("OPENAI_INTAKE_MODEL");
     case "research.fast-grounded":

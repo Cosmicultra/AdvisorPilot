@@ -85,7 +85,16 @@ export async function POST(req: Request) {
           : {};
       const base = { ...row };
 
-      const { patch, cacheHit } = await enrichOneHolding(toInput(base), {
+      const { patch, cacheHit } = await enrichOneHolding(
+        {
+          ...toInput(base),
+          annuityContract: base.annuityContract,
+          documentKind:
+            base.documentKind === "annuity" || base.documentKind === "brokerage"
+              ? base.documentKind
+              : undefined,
+        },
+        {
         openfigiApiKey,
         supabaseCache,
         supabaseMaster: supabaseCache,

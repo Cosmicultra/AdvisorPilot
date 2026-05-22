@@ -19,6 +19,7 @@ import { advisorFetch } from "@/lib/advisor-fetch";
 import { ClientTabs } from "./client-tabs";
 import { ProfileHeader } from "./profile-header";
 import { OverviewTab } from "./overview/overview-tab";
+import { PortfolioTab } from "./tabs/portfolio-tab";
 import { AddTaskDrawer } from "./drawers/add-task-drawer";
 import { LogNoteDrawer } from "./drawers/log-note-drawer";
 import { ContactsTab } from "./tabs/contacts-tab";
@@ -27,6 +28,7 @@ import { NotesTab } from "./tabs/notes-tab";
 import { TasksTab } from "./tabs/tasks-tab";
 import { TimelineTab } from "./tabs/timeline-tab";
 import { WorkflowTab } from "./tabs/workflow-tab";
+import { DrippersTab } from "./tabs/drippers-tab";
 import { EditClientDrawer } from "./drawers/edit-client-drawer";
 import type { ClientDetail } from "@/lib/crm/types";
 
@@ -56,7 +58,9 @@ const PHASE_3_TABS = new Set([
 
 const TAB_LABELS: Record<string, string> = {
   overview: "Overview",
+  portfolio: "Portfolio",
   workflow: "Workflow",
+  drippers: "Drippers",
   intake: "Intake",
   upload: "Upload",
   confirm: "Confirm holdings",
@@ -217,6 +221,10 @@ export function ClientDetailContent({
         client={client}
         onLogNote={openLogNote}
         onEditClient={openEditClient}
+        onClientUpdated={(updatedClient) => {
+          setState({ status: "ready", client: updatedClient });
+          bumpRefresh();
+        }}
       />
       <ClientTabs
         clientId={clientId}
@@ -234,6 +242,10 @@ export function ClientDetailContent({
         onAddTask={openAddTask}
         onEditClient={openEditClient}
         onMutated={bumpRefresh}
+        onClientUpdated={(updatedClient) => {
+          setState({ status: "ready", client: updatedClient });
+          bumpRefresh();
+        }}
       />
 
       <LogNoteDrawer
@@ -276,6 +288,7 @@ function TabBody({
   onAddTask,
   onEditClient,
   onMutated,
+  onClientUpdated,
 }: {
   tab: string;
   client: ClientDetail;
@@ -285,6 +298,7 @@ function TabBody({
   onAddTask(): void;
   onEditClient(): void;
   onMutated(): void;
+  onClientUpdated(client: ClientDetail): void;
 }) {
   if (tab === "overview") {
     return (
@@ -293,7 +307,14 @@ function TabBody({
         refreshKey={refreshKey}
         onLogNote={onLogNote}
         onAddTask={onAddTask}
+        onClientUpdated={onClientUpdated}
       />
+    );
+  }
+
+  if (tab === "portfolio") {
+    return (
+      <PortfolioTab client={client} onClientUpdated={onClientUpdated} />
     );
   }
 
@@ -335,6 +356,17 @@ function TabBody({
 
   if (tab === "workflow") {
     return <WorkflowTab client={client} />;
+  }
+
+  if (tab === "drippers") {
+    return (
+      <DrippersTab
+        clientId={client.id}
+        clientEmail={client.email}
+        holdings={client.holdings}
+        refreshKey={refreshKey}
+      />
+    );
   }
 
   const label = TAB_LABELS[tab] ?? tab;

@@ -1,5 +1,9 @@
 ﻿import { describe, expect, it } from "vitest";
-import { bucketValuesToPercents, allocationForRiskModel } from "./allocation-math";
+import {
+  allocationForRiskModel,
+  bucketValuesToPercents,
+  targetAllocationBuckets,
+} from "./allocation-math";
 
 describe("allocation-math", () => {
   it("percent buckets sum to 100", () => {
@@ -15,5 +19,11 @@ describe("allocation-math", () => {
     expect(Math.round(m.equity + m.fixedIncome + m.cash)).toBe(100);
     expect(m.equity).toBeGreaterThan(40);
     expect(m.fixedIncome).toBeGreaterThan(30);
+  });
+
+  it("targetAllocationBuckets sums to 100 for age 62 moderate-conservative", () => {
+    const t = targetAllocationBuckets(62, "moderate-conservative");
+    expect(t.equity + t.fixedIncome + t.cash).toBe(100);
+    expect(t.equity).toBe(33);
   });
 });

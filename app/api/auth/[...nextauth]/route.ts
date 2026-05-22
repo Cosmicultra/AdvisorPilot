@@ -1,5 +1,6 @@
 import NextAuth, { type NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
+import { persistGmailRefreshToken } from "@/lib/gmail/token-store";
 
 export const authOptions: NextAuthOptions = {
   secret: process.env.NEXTAUTH_SECRET,
@@ -17,13 +18,19 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
-    async jwt({ token, account }) {
+    async jwt({ token, account, user }) {
       if (account?.access_token) {
         token.accessToken = account.access_token;
       }
 
       if (account?.refresh_token) {
         token.refreshToken = account.refresh_token;
+        const email =
+          (typeof user?.email === "string" ? user.email : null) ||
+          (typeof token.email === "string" ? token.email : null);
+        if (email) {
+          void persistGmailRefreshToken(email, account.refresh_token);
+        }
       }
 
       return token;

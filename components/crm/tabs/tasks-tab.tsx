@@ -117,7 +117,7 @@ export function TasksTab({
 
     // Fetch ALL tasks for the client (no server-side filter); filter/sort
     // client-side for snappy interactivity.
-    const url = `/api/tasks?clientId=${encodeURIComponent(clientId)}&status=all&limit=500`;
+    const url = `/api/tasks?clientId=${encodeURIComponent(clientId)}&limit=200`;
 
     advisorFetch(url, { cache: "no-store" })
       .then(async (res) => {
@@ -133,9 +133,6 @@ export function TasksTab({
       })
       .then((body) => {
         if (cancelled || body === null) return;
-        // The API supports status filter on the server too; we passed "all"
-        // but that's not a recognized API value — it returns everything
-        // because the API only filters when status matches a real enum value.
         setState({ status: "ready", tasks: (body?.tasks ?? []) as Task[] });
       })
       .catch((err) => {

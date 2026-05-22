@@ -30,6 +30,8 @@ export type LlmProvider = "openai" | "gemini" | "grok";
  */
 export type LlmPass =
   | "extraction" // vision/PDF → holdings JSON
+  | "extraction.classify" // brokerage vs annuity statement routing
+  | "extraction.annuity" // vision/PDF → annuity contract JSON
   | "intake.turn" // chat → IntakeTurn JSON
   | "research.fast-grounded" // single-call grounded search, sub-30s
   | "research.agentic" // multi-step server-side tool loop, 30s–3min
@@ -37,6 +39,8 @@ export type LlmPass =
   | "synthesis.json" // narrative + structured JSON consuming research result
   | "fee-analysis" // ETF/fund expense-ratio lookup → byTicker JSON
   | "chat" // interactive multi-turn chat with the orchestrator
+  | "dripper" // scheduled CRM drip — advisor-facing brief from client context
+  | "dripper.client-email" // rewrite drip output → client-safe email body
   | "tts"
   | "stt";
 

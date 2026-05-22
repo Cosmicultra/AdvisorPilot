@@ -10,18 +10,39 @@
 import type { CSSProperties } from "react";
 import type { ClientStage } from "@/lib/crm/types";
 
+/** Text color for lifecycle stages (dropdown + chips). */
+export function stageTextColor(stage: ClientStage): string {
+  switch (stage) {
+    case "Engaged":
+      return "#15803D";
+    case "Onboarding":
+      return "#B45309";
+    case "Lead":
+    case "Prospect":
+      return "var(--ap-royal)";
+    default:
+      return "var(--ap-gray)";
+  }
+}
+
 /** Returns inline styles for a stage chip given the stage value. */
 export function stageChipStyle(stage: ClientStage): CSSProperties {
   switch (stage) {
+    case "Lead":
+    case "Prospect":
+      return {
+        backgroundColor: "rgba(15, 111, 222, 0.1)",
+        color: stageTextColor(stage),
+      };
+    case "Onboarding":
+      return { backgroundColor: "#FFF5E6", color: stageTextColor(stage) };
+    case "Engaged":
+      return { backgroundColor: "#E6F4EE", color: stageTextColor(stage) };
     case "Review due":
     case "At risk":
       return { backgroundColor: "#FDECEC", color: "#9B1C1C" };
     case "Upcoming":
       return { backgroundColor: "#FFF5E6", color: "#92400E" };
-    case "Onboarding":
-      return { backgroundColor: "#E6F4EE", color: "#065F46" };
-    case "Prospect":
-      return { backgroundColor: "var(--ap-pilot-light)", color: "var(--ap-navy)" };
     case "Stable":
     default:
       return {

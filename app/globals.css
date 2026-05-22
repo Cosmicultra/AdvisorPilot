@@ -417,15 +417,14 @@
   border-top-color: var(--ap-royal);
   background-color: #fafbfc;
 }
-.ap-wizard-segment-index {
-  display: block;
-  font-size: 0.68rem;
-  font-weight: 700;
+.ap-wizard-segment-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 0.35rem;
   color: #94a3b8;
-  margin-bottom: 0.35rem;
-  letter-spacing: 0.04em;
 }
-.ap-wizard-segment-active .ap-wizard-segment-index {
+.ap-wizard-segment-active .ap-wizard-segment-icon {
   color: var(--ap-royal);
 }
 

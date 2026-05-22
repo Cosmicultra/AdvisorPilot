@@ -72,6 +72,7 @@ export function classifyLocation(pathname: string): VoiceLocation {
 const TAB_DESCRIPTIONS: Record<string, string> = {
   overview: "the client's overview (snapshot card, pinned note, summary).",
   workflow: "the workflow tab (Roth, FIA, fee analysis, retirement income).",
+  drippers: "the drippers tab (scheduled AI template automations).",
   notes: "the notes tab.",
   timeline: "the timeline / activity feed.",
   tasks: "the tasks tab for this client.",

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { holdingsForAnalysisPrompt } from "@/lib/holdings-for-analysis";
 import { buildRegistrationSummaryForAnalysis } from "@/lib/holding-registration";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
@@ -33,6 +34,9 @@ export async function POST(req: Request) {
     const registrationSummary = buildRegistrationSummaryForAnalysis(
       Array.isArray(holdings) ? holdings : []
     );
+    const holdingsForPrompt = holdingsForAnalysisPrompt(
+      Array.isArray(holdings) ? holdings : []
+    );
 
     const selection = await resolveAdvisorLlmSelection(identity?.email);
 
@@ -54,7 +58,7 @@ Client:
 ${JSON.stringify(client, null, 2)}
 
 Holdings:
-${JSON.stringify(holdings, null, 2)}
+${JSON.stringify(holdingsForPrompt, null, 2)}
 
 Registration / account summary (from holdings; advisor may have edited):
 ${JSON.stringify(registrationSummary, null, 2)}
@@ -64,6 +68,8 @@ ${JSON.stringify(allocation, null, 2)}
 
 Total Value:
 ${totalValue}
+
+For rows with annuityContractSummary, treat as insurance annuity contracts (surrender, income base, indexing rates) — not exchange-traded securities.
 
 Write concise research notes only. Do not return JSON.
 `;
@@ -100,7 +106,7 @@ Client:
 ${JSON.stringify(client, null, 2)}
 
 Holdings:
-${JSON.stringify(holdings, null, 2)}
+${JSON.stringify(holdingsForPrompt, null, 2)}
 
 Registration / account summary:
 ${JSON.stringify(registrationSummary, null, 2)}
@@ -110,6 +116,8 @@ ${JSON.stringify(allocation, null, 2)}
 
 Total Value:
 ${totalValue}
+
+Annuity contract rows include annuityContractSummary when present — reference surrender value, income base, and indexing terms in analysis when material.
 
 Market Research Notes:
 ${researchNotes}

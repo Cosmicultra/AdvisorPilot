@@ -43,12 +43,14 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
 const VALID_STAGES: ClientStage[] = [
+  "Lead",
+  "Prospect",
+  "Onboarding",
+  "Engaged",
   "Review due",
   "Upcoming",
   "Stable",
   "At risk",
-  "Onboarding",
-  "Prospect",
 ];
 
 type SortKey =

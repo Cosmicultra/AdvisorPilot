@@ -144,6 +144,7 @@ const VALID_ACTIVITY_TYPES: ActivityType[] = [
   "call",
   "task",
   "analysis",
+  "dripper",
   "system",
 ];
 

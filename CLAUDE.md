@@ -74,6 +74,8 @@ SQL files in `supabase/` are the source of truth for tables; apply them in this 
    - `advisorpilot_deep_research_jobs` — async job table for `/api/research/*`.
    - `advisorpilot_voice_settings` — per-advisor voice agent prefs.
    - `advisorpilot_voice_audit_log` — append-only tool-call log for the Gemini Live agent.
+   - `advisorpilot_client_drippers` + `advisorpilot_dripper_runs` — per-client scheduled AI drip enrollments and run history (`supabase/advisorpilot_client_drippers.sql`). Cron: `POST /api/drippers/cron` with `DRIPPER_CRON_SECRET`. Successful runs email the client via Gmail using `advisorpilot_advisor_gmail_tokens` (refresh token saved on Google sign-in).
+   - LLM passes `dripper` (advisor brief) and `dripper.client-email` (client-safe rewrite before send).
 
 Both `/api/advisor-profile` and `LlmSettingsDrawer` gracefully detect missing LLM columns (`PGRST204 / "Could not find the 'llm_provider' column"`) and surface a clear "run this migration" message — so the app still works against an old DB, it just can't persist LLM preferences.
 

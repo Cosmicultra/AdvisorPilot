@@ -9,6 +9,7 @@
  */
 
 import { Search } from "lucide-react";
+import { CLIENT_STAGE_HEADER_SELECT_OPTIONS } from "@/lib/crm/stage";
 import type { ClientStage } from "@/lib/crm/types";
 
 export type RosterSort =
@@ -29,13 +30,6 @@ const SORT_LABELS: Record<RosterSort, string> = {
   "name-asc": "Sort · Name (A → Z)",
   "last-contact-desc": "Sort · Recent contact",
 };
-
-const STAGE_CHIPS: ClientStage[] = [
-  "Review due",
-  "Upcoming",
-  "At risk",
-  "Onboarding",
-];
 
 export type RosterFilterBarProps = {
   filters: RosterFilters;
@@ -77,7 +71,7 @@ export function RosterFilterBar({
       </label>
 
       <div className="flex flex-wrap items-center gap-1.5">
-        {STAGE_CHIPS.map((stage) => {
+        {CLIENT_STAGE_HEADER_SELECT_OPTIONS.map((stage) => {
           const active = filters.stage === stage;
           return (
             <button

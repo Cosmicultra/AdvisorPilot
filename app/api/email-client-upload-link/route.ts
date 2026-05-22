@@ -1,66 +1,11 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { google } from "googleapis";
 import { authOptions } from "../auth/[...nextauth]/route";
+import { escapeHtml } from "@/lib/gmail/mime";
+import { sendGmailMessage } from "@/lib/gmail/send";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function base64UrlEncode(value: Buffer | string) {
-  return Buffer.from(value)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-function sanitizeHeader(value: string) {
-  return String(value || "").replace(/[\r\n]/g, " ").trim();
-}
-
-function escapeHtml(value: string) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-function buildSimpleEmail(params: {
-  from?: string;
-  to: string;
-  subject: string;
-  plainBody: string;
-  htmlBody: string;
-}) {
-  const boundary = `ap_upload_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const to = sanitizeHeader(params.to);
-  const subject = sanitizeHeader(params.subject);
-  const from = params.from ? sanitizeHeader(params.from) : "";
-
-  const head = [
-    ...(from ? [`From: ${from}`] : []),
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    "MIME-Version: 1.0",
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    "",
-    `--${boundary}`,
-    'Content-Type: text/plain; charset="UTF-8"',
-    "",
-    params.plainBody || "",
-    "",
-    `--${boundary}`,
-    'Content-Type: text/html; charset="UTF-8"',
-    "",
-    params.htmlBody || "",
-    "",
-    `--${boundary}--`,
-  ];
-
-  return head.join("\r\n");
-}
 
 /**
  * Sends a simple Gmail message with the client upload link (no attachment).
@@ -119,24 +64,21 @@ export async function POST(req: Request) {
       </div>
     `;
 
-    const oauth2Client = new google.auth.OAuth2();
-    oauth2Client.setCredentials({ access_token: accessToken });
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-
-    const rawMessage = buildSimpleEmail({
-      from: senderEmail,
+    const sendResult = await sendGmailMessage({
+      advisorEmail: senderEmail,
       to,
       subject,
       plainBody,
       htmlBody,
+      accessTokenOverride: accessToken,
     });
 
-    await gmail.users.messages.send({
-      userId: "me",
-      requestBody: {
-        raw: base64UrlEncode(rawMessage),
-      },
-    });
+    if (!sendResult.ok) {
+      return NextResponse.json(
+        { error: sendResult.error, needsGoogleReconnect: sendResult.needsGoogleReconnect },
+        { status: sendResult.needsGoogleReconnect ? 401 : 502 }
+      );
+    }
 
     return NextResponse.json({ ok: true, message: "Upload link email sent." });
   } catch (err: unknown) {
