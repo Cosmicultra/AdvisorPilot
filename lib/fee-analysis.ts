@@ -153,3 +153,9 @@ export function groupFeeAnalysisFundRowsByAccount(
   out.sort((a, b) => b.totalAccountValue - a.totalAccountValue);
   return out;
 }
+
+export type UniqueFundForLookup = {
+  ticker: string;
+  label: string;
+  assetClass: string;
+};

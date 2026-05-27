@@ -35,7 +35,7 @@ export function suggestedPrompts(clientName: string | null): string[] {
     return [
       `Summarize ${clientName}'s portfolio and current allocation.`,
       `What are the open tasks and recent activity for ${clientName}?`,
-      `Run a fresh fee analysis for ${clientName}.`,
+      `Run a comparative fee analysis for ${clientName} (current vs proposed management).`,
       `Draft a Q3 review report for ${clientName}.`,
       `Compare ${clientName}'s allocation to my target model.`,
     ];

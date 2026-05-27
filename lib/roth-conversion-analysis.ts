@@ -5,15 +5,21 @@
 
 import {
   incrementalFederalTaxFromConversion,
+  incrementalStateTaxFromConversion,
   federalIncomeTaxAfterStandardDeduction,
   illustrationFiling,
   irmaaAnnualSurchargeIllustrative,
   maxRothConversionGrossThisYear,
+  parseStateTaxRateFraction,
+  standardDeductionBreakdownIllustration,
   standardDeductionIllustration,
+  stateIncomeTaxIllustrative,
+  taxableOrdinaryAfterDeduction,
+  type IllustrationDeductionInput,
   type IllustrationFiling,
 } from "@/lib/federal-tax-illustration";
 
-export const ROTH_ASSUMPTION_VERSION = "2026-05-advisorpilot-v2";
+export const ROTH_ASSUMPTION_VERSION = "2026-05-advisorpilot-v3-protect-floor";
 
 /** IRS Uniform Lifetime Table distribution periods (ages 73–95), 2023+ SECURE-era. */
 export const RMD_DISTRIBUTION_PERIOD: Record<number, number> = {
@@ -42,9 +48,12 @@ export const RMD_DISTRIBUTION_PERIOD: Record<number, number> = {
   95: 8.9,
 };
 
+/** Illustration RMD start age (SECURE-era Uniform Lifetime table in this module). */
+export const RMD_ILLUSTRATION_START_AGE = 73;
+
 /** Divisor for Uniform Lifetime RMD factor; null below age 73 (illustration start age). Also used by FIA qualified illustration. */
 export function uniformLifetimeRmdDivisor(age: number): number | null {
-  if (age < 73) return null;
+  if (age < RMD_ILLUSTRATION_START_AGE) return null;
   const d = RMD_DISTRIBUTION_PERIOD[age];
   if (d) return d;
   if (age > 95) return Math.max(2.0, 8.9 - (age - 95) * 0.35);
@@ -64,6 +73,74 @@ export const FEDERAL_MARGINAL_RATE: Record<string, number> = {
 
 function rmdDivisor(age: number): number | null {
   return uniformLifetimeRmdDivisor(age);
+}
+
+function netConversionToRoth(
+  otherGrossOrdinaryForBracketCap: number,
+  grossConversion: number,
+  deduction: IllustrationDeductionInput,
+  stateTaxRateFraction: number
+): number {
+  if (grossConversion <= 0) return 0;
+  const taxOnConversionFed = incrementalFederalTaxFromConversion(
+    otherGrossOrdinaryForBracketCap,
+    grossConversion,
+    deduction
+  );
+  const taxOnConversionState = incrementalStateTaxFromConversion(
+    otherGrossOrdinaryForBracketCap,
+    grossConversion,
+    deduction,
+    stateTaxRateFraction
+  );
+  return Math.max(0, grossConversion - taxOnConversionFed - taxOnConversionState);
+}
+
+/**
+ * Largest gross conversion in [0, maxGross] that keeps total Roth (after growth + net conversion) at or above the entered premium floor.
+ */
+export function maxGrossConversionRespectingRothFloor(params: {
+  rothBalanceAfterGrowth: number;
+  maxGross: number;
+  otherGrossOrdinaryForBracketCap: number;
+  protectedPrincipalFloor: number;
+  deduction: IllustrationDeductionInput;
+  stateTaxRateFraction: number;
+}): number {
+  const maxG = Math.max(0, Math.floor(params.maxGross));
+  if (maxG <= 0) return 0;
+
+  const rothTotalAfter = (gross: number) =>
+    params.rothBalanceAfterGrowth +
+    netConversionToRoth(
+      params.otherGrossOrdinaryForBracketCap,
+      gross,
+      params.deduction,
+      params.stateTaxRateFraction
+    );
+
+  const satisfies = (gross: number) => rothTotalAfter(gross) >= params.protectedPrincipalFloor;
+
+  if (!satisfies(maxG)) {
+    if (!satisfies(0)) return 0;
+    let lo = 0;
+    let hi = maxG;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (satisfies(mid)) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  }
+
+  let lo = 0;
+  let hi = maxG;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (satisfies(mid)) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
 }
 
 /**
@@ -150,6 +227,8 @@ export type StayTraditionalYearRow = {
   socialSecurityAnnualGross: number;
   /** Amount of Q5 need still funded from IRA after Social Security (illustration). */
   portfolioIncomeShortfall: number;
+  /** Retirement need modeled as non-IRA ordinary income when not sourced from qualified account. */
+  nonIraRetirementIncome: number;
   /** Total distribution from IRA: max(RMD, shortfall) in retirement so RMD is always satisfied. */
   totalIraDistribution: number;
   /** PDF "Income": illustrated AGI before retirement age only; annual spendable retirement income at/after retirement. */
@@ -157,7 +236,10 @@ export type StayTraditionalYearRow = {
   endBalance: number;
   /** gross ordinary for tax / IRMAA: modeled SS plus IRA distributions (illustration). */
   totalOrdinaryForIllustration: number;
+  standardDeductionTotal: number;
+  additionalDeduction65Plus: number;
   illustrativeFederalTax: number;
+  illustrativeStateTax: number;
   irmaaSurchargeAnnual: number;
 };
 
@@ -242,7 +324,7 @@ export function buildRothConversionModel(input: {
    * and in the report Income column alone (not combined with retirement income in that column).
    */
   annualAdjustedGrossIncomePreRetirement?: number;
-  /** When true, pace conversions (pre- and post-retirement) with amortization caps; when false, convert as fast as bracket allows. */
+  /** When true, cap each year's conversion so total Roth after net conversion stays at or above the entered premium (`totalAccountValue`); when false, convert as fast as bracket allows. */
   protectInitialInvestment?: boolean;
   /** Worksheet: using fixed index contract path (affects Roth bucket return assumption). */
   useFixedIndexContract?: boolean;
@@ -256,6 +338,12 @@ export function buildRothConversionModel(input: {
   ficTrailBonusYears?: string;
   /** After this many Roth-path illustration years, Roth growth steps up to {@link stayTraditionalReturn} when FIC. Blank keeps contract-phase rates through the modeled horizon. */
   ficSurrenderYears?: string;
+  /** Spouse age at illustration start (MFJ); null when unknown or not married. */
+  spouseStartAge?: number | null;
+  /** Worksheet flat state tax rate % string; blank = 0%. */
+  stateTaxRatePct?: string;
+  /** When true, retirement spendable need after SS is funded from the qualified IRA/conversion bucket. */
+  retirementIncomeFromConversionAccount: boolean;
 }): RothConversionModelResult {
   const stayR = input.stayTraditionalReturn ?? 0.1;
   const endAge = input.endAge ?? 95;
@@ -269,7 +357,22 @@ export function buildRothConversionModel(input: {
   const startBal = Math.max(0, Number(input.totalAccountValue) || 0);
   const married = Boolean(input.marriedFilingJointly);
   const filing = illustrationFiling(married);
-  const sd = standardDeductionIllustration(filing);
+  const spouseStartAge =
+    married && input.spouseStartAge != null && Number.isFinite(input.spouseStartAge)
+      ? Math.floor(input.spouseStartAge)
+      : null;
+  const stateTaxRateFraction = parseStateTaxRateFraction(input.stateTaxRatePct);
+  const fundNeedFromIra = input.retirementIncomeFromConversionAccount === true;
+
+  const deductionInputForAge = (age: number): IllustrationDeductionInput => ({
+    filing,
+    calendarYearOffset: age - startAge,
+    clientAge: age,
+    spouseAge: spouseStartAge != null ? spouseStartAge + (age - startAge) : null,
+  });
+
+  const startDeduction = standardDeductionBreakdownIllustration(deductionInputForAge(startAge));
+  const sd = startDeduction.total;
   const agiAnnual = Math.max(0, Number(input.annualAdjustedGrossIncomePreRetirement) || 0);
   const protectPrincipal = Boolean(input.protectInitialInvestment);
   const useFic = Boolean(input.useFixedIndexContract);
@@ -320,20 +423,27 @@ export function buildRothConversionModel(input: {
       ? `Roth conversion path begins with qualified balance modeled at starting balance plus a ${(premiumBonusFrac * 100).toFixed(2)}% premium bonus (${rothPathStartingQualifiedBalance.toLocaleString("en-US")}); current-allocation path uses the same starting balance without that bonus (${startBal.toLocaleString("en-US")}). Paths are otherwise not cross-linked.`
       : "Current allocation and Roth conversion paths each begin with the same starting qualified balance and are not cross-linked.",
     filing === "married"
-      ? `Filing illustration: married filing jointly — standard deduction about ${sd.toLocaleString("en-US")}/yr; ordinary tax uses progressive MFJ taxable income brackets (2024-style). IRMAA uses illustrative married thresholds.`
-      : `Filing illustration: single — standard deduction about ${sd.toLocaleString("en-US")}/yr; progressive single brackets. IRMAA uses illustrative single thresholds.`,
+      ? `Filing illustration: married filing jointly — standard deduction about ${sd.toLocaleString("en-US")}/yr at start (inflation-indexed base plus age 65+ add-ons per spouse); ordinary tax uses progressive MFJ taxable income brackets (2024-style). IRMAA uses illustrative married thresholds.`
+      : `Filing illustration: single — standard deduction about ${sd.toLocaleString("en-US")}/yr at start (inflation-indexed base plus age 65+ add-on when applicable); progressive single brackets. IRMAA uses illustrative single thresholds.`,
     `Current allocation (stay-traditional): ${(stayR * 100).toFixed(0)}% annual growth; RMDs begin at age 73 using Uniform Lifetime divisors (IRS tables).`,
     protectPrincipal
-      ? "Roth conversion pacing: protect initial investment — annual conversion is smoothed (pre-retirement: spread to retirement age; post-retirement: spread over remaining modeled years) while respecting the stated marginal bracket ceiling."
-      : "Roth conversion pacing: maximize annual conversion within the stated marginal bracket ceiling (no smoothing cap).",
+      ? `Roth conversion pacing: protect initial investment — convert as fast as the stated marginal bracket allows until the traditional IRA is depleted; once Roth reaches the entered premium (${startBal.toLocaleString("en-US")}), later conversions are capped so Roth does not fall below that amount.`
+      : "Roth conversion pacing: maximize annual conversion within the stated marginal bracket ceiling until the traditional IRA is depleted.",
     "Report Income column (Current allocation and Roth tables): before intake retirement age, shows illustrated AGI only; at/after intake retirement age, shows annual spendable retirement income goal only.",
     agiAnnual > 0
       ? `Pre-retirement ordinary income stack for conversion headroom: AGI about ${agiAnnual.toLocaleString("en-US")}/yr plus annual spendable income need from intake; AGI is removed from the stack at/after retirement age (spendable income need and Social Security apply in retirement).`
       : "Pre-retirement AGI for conversion stacking: not modeled (zero or blank).",
     `Roth conversion path: while assets remain in traditional IRA, modeled RMDs apply from age 73; conversions stay within the stated marginal bracket ceiling (after standard deduction). Through age ${endAge}.`,
     annualSS > 0
-      ? `Social Security (intake): about ${annualSS.toLocaleString("en-US")}/yr gross counted toward retirement cash flow and ordinary income (illustration; not tax-exact). Remaining annual need after SS is modeled as coming from the qualified IRA until converted to Roth.`
-      : "Social Security: not modeled (not taking or no amounts on intake).",
+      ? fundNeedFromIra
+        ? `Social Security (intake): about ${annualSS.toLocaleString("en-US")}/yr gross counted toward retirement cash flow and ordinary income (illustration; not tax-exact). Remaining annual need after SS is modeled as coming from the qualified IRA until converted to Roth.`
+        : `Social Security (intake): about ${annualSS.toLocaleString("en-US")}/yr gross counted toward retirement cash flow and ordinary income (illustration; not tax-exact). Remaining annual need after SS is modeled as non-IRA income; qualified account distributions are RMD-only (plus conversions on the Roth path).`
+      : fundNeedFromIra
+        ? "Social Security: not modeled (not taking or no amounts on intake). Remaining retirement need is modeled from the qualified IRA."
+        : "Social Security: not modeled (not taking or no amounts on intake). Retirement spendable income is modeled as non-IRA income; qualified account distributions are RMD-only.",
+    stateTaxRateFraction > 0
+      ? `State income tax: illustrative flat ${(stateTaxRateFraction * 100).toFixed(2)}% on federal taxable ordinary income after deductions.`
+      : "State income tax: not modeled (blank or 0%).",
   ];
 
   const stayTraditional: StayTraditionalYearRow[] = [];
@@ -346,11 +456,20 @@ export function buildRothConversionModel(input: {
     const retirementNeedAnnual = retired ? need : 0;
     /** SS treated as flowing in retirement only for this illustration. */
     const ssThisYear = retired && annualSS > 0 ? annualSS : 0;
-    const portfolioIncomeShortfall = retired ? Math.max(0, need - ssThisYear) : 0;
+    const portfolioIncomeShortfall =
+      retired && fundNeedFromIra ? Math.max(0, need - ssThisYear) : 0;
+    const nonIraRetirementIncome =
+      retired && !fundNeedFromIra ? Math.max(0, need - ssThisYear) : 0;
     const totalIraDistribution =
       retired ? Math.max(rmd, portfolioIncomeShortfall) : rmd;
-    const totalOrd = retired ? ssThisYear + totalIraDistribution : agiAnnual + totalIraDistribution;
-    const illustrativeFedTax = federalIncomeTaxAfterStandardDeduction(totalOrd, filing);
+    const totalOrd = retired
+      ? ssThisYear + nonIraRetirementIncome + totalIraDistribution
+      : agiAnnual + totalIraDistribution;
+    const dedInput = deductionInputForAge(age);
+    const dedBreakdown = standardDeductionBreakdownIllustration(dedInput);
+    const taxableOrd = taxableOrdinaryAfterDeduction(totalOrd, dedInput);
+    const illustrativeFedTax = federalIncomeTaxAfterStandardDeduction(totalOrd, dedInput);
+    const illustrativeStateTax = stateIncomeTaxIllustrative(taxableOrd, stateTaxRateFraction);
     const irmaa = irmaaAnnualSurchargeIllustrative(totalOrd, filing);
     const reportIncomeAnnual = retired ? need : agiAnnual;
 
@@ -364,11 +483,15 @@ export function buildRothConversionModel(input: {
       retirementNeedAnnual,
       socialSecurityAnnualGross: ssThisYear,
       portfolioIncomeShortfall,
+      nonIraRetirementIncome,
       totalIraDistribution,
       reportIncomeAnnual,
       endBalance: endBal,
       totalOrdinaryForIllustration: totalOrd,
+      standardDeductionTotal: dedBreakdown.total,
+      additionalDeduction65Plus: dedBreakdown.additional65Plus,
       illustrativeFederalTax: illustrativeFedTax,
+      illustrativeStateTax,
       irmaaSurchargeAnnual: irmaa,
     });
 
@@ -399,7 +522,8 @@ export function buildRothConversionModel(input: {
     const rothAtYearStart = rothBalance;
     const retired = age >= retireAge;
     const ssThisYear = retired && annualSS > 0 ? annualSS : 0;
-    const portfolioIncomeShortfall = retired ? Math.max(0, need - ssThisYear) : 0;
+    const portfolioIncomeShortfall =
+      retired && fundNeedFromIra ? Math.max(0, need - ssThisYear) : 0;
     const retirementIncomeAnnual = retired ? need : 0;
     const reportIncomeAnnual = retired ? need : agiAnnual;
 
@@ -413,26 +537,41 @@ export function buildRothConversionModel(input: {
       const baseOrdinaryBracketStack = retired ? need + ssThisYear : agiAnnual + need;
       const otherGrossOrdinaryCashFlow = baseOrdinaryBracketStack + totalIraWithdrawalPreConversion;
       const otherGrossOrdinaryForBracketCap = baseOrdinaryBracketStack + rmdTake;
+      const dedInput = deductionInputForAge(age);
 
       const bracketMaxConvThisYear = maxRothConversionGrossThisYear({
         otherGrossOrdinaryIncome: otherGrossOrdinaryForBracketCap,
         tradBalanceAvailableAfterRmd: tradAfterSpendingAndRmd,
         statedBracketId: bracketId,
-        filing,
+        deduction: dedInput,
       });
-      let amortCap = Number.POSITIVE_INFINITY;
-      if (protectPrincipal) {
-        if (!retired) {
-          amortCap = tradAfterSpendingAndRmd / Math.max(1, retireAge - age);
-        } else {
-          amortCap = tradAfterSpendingAndRmd / Math.max(1, endAge - age + 1);
-        }
-      }
-      const grossConv = Math.min(bracketMaxConvThisYear, amortCap);
-
-      const taxOnConversion = incrementalFederalTaxFromConversion(otherGrossOrdinaryForBracketCap, grossConv, filing);
-      const net = Math.max(0, grossConv - taxOnConversion);
+      const maxGrossThisYear = Math.min(bracketMaxConvThisYear, tradAfterSpendingAndRmd);
       const rothAfterGrowth = rothAtYearStart * (1 + rGrowth);
+      const grossConv =
+        protectPrincipal && rothAfterGrowth >= startBal
+          ? maxGrossConversionRespectingRothFloor({
+              rothBalanceAfterGrowth: rothAfterGrowth,
+              maxGross: maxGrossThisYear,
+              otherGrossOrdinaryForBracketCap,
+              protectedPrincipalFloor: startBal,
+              deduction: dedInput,
+              stateTaxRateFraction,
+            })
+          : maxGrossThisYear;
+
+      const taxOnConversionFed = incrementalFederalTaxFromConversion(
+        otherGrossOrdinaryForBracketCap,
+        grossConv,
+        dedInput
+      );
+      const taxOnConversionState = incrementalStateTaxFromConversion(
+        otherGrossOrdinaryForBracketCap,
+        grossConv,
+        dedInput,
+        stateTaxRateFraction
+      );
+      const taxOnConversion = taxOnConversionFed + taxOnConversionState;
+      const net = Math.max(0, grossConv - taxOnConversion);
       rothBalance = rothAfterGrowth + net;
       const endTrad = Math.max(0, tradAfterSpendingAndRmd - grossConv);
 
@@ -443,7 +582,7 @@ export function buildRothConversionModel(input: {
         otherGrossOrdinaryIncome: otherGrossOrdinaryForBracketCap,
         tradBalanceAvailableAfterRmd: tradAfterGrowth,
         statedBracketId: bracketId,
-        filing,
+        deduction: dedInput,
       });
 
       rothConversion.push({
@@ -508,6 +647,19 @@ export function buildRothConversionModel(input: {
     }
   }
   const endingTotalRothBalance = rothConversion.length ? rothConversion[rothConversion.length - 1]!.totalRothBalance : 0;
+
+  if (protectPrincipal) {
+    const lastTradRow = [...rothConversion].reverse().find((r) => !r.rothOnlyPhase);
+    if (lastTradRow && lastTradRow.endTraditionalBalance > 1) {
+      assumptions.push(
+        "Protect initial investment: the traditional IRA was not fully depleted within the modeled age horizon — review bracket ceiling, taxes, or horizon."
+      );
+    } else if (endingTotalRothBalance < startBal) {
+      assumptions.push(
+        `Protect initial investment: after depleting the traditional IRA, illustrative Roth (${endingTotalRothBalance.toLocaleString("en-US")}) is below the entered premium (${startBal.toLocaleString("en-US")}) — conversion taxes exceeded the floor in this scenario.`
+      );
+    }
+  }
 
   return {
     assumptions,

@@ -31,14 +31,21 @@ export function PinnedNoteCard({
   clientId,
   refreshKey,
   onLogNote,
-}: PinnedNoteCardProps) {
+  prefetchedNote,
+  bundleLoading = false,
+}: PinnedNoteCardProps & {
+  prefetchedNote?: Note | null;
+  bundleLoading?: boolean;
+}) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
 
   useEffect(() => {
+    if (prefetchedNote !== undefined) {
+      setState({ status: "ready", note: prefetchedNote });
+      return;
+    }
     let cancelled = false;
     setState({ status: "loading" });
-    // Fetch all notes for this client; the API sorts pinned-first then most-recent.
-    // We just take the first one (or null if there are none).
     advisorFetch(
       `/api/notes?clientId=${encodeURIComponent(clientId)}&limit=1`,
       { cache: "no-store" }
@@ -69,7 +76,15 @@ export function PinnedNoteCard({
     return () => {
       cancelled = true;
     };
-  }, [clientId, refreshKey]);
+  }, [clientId, refreshKey, prefetchedNote]);
+
+  if (bundleLoading && prefetchedNote === undefined) {
+    return (
+      <OverviewCard title="Latest note">
+        <p className="text-[12px] text-slate-500">Loading…</p>
+      </OverviewCard>
+    );
+  }
 
   return (
     <OverviewCard

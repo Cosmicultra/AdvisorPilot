@@ -149,6 +149,8 @@ export interface ClientSnapshot {
   analysis: Record<string, unknown> | null;
   /** Persisted total value column. */
   totalValue: number;
+  /** Comparative fee worksheet JSONB when column exists. */
+  feeAnalysisWorksheet: unknown | null;
 }
 
 /**
@@ -170,7 +172,7 @@ export async function fetchVisibleClientSnapshot(
 
   const { data, error } = await supabase
     .from("advisorpilot_clients")
-    .select("id, owner_email, client, holdings, analysis, total_value")
+    .select("id, owner_email, client, holdings, analysis, total_value, fee_analysis_worksheet")
     .eq("id", clientId)
     .maybeSingle();
   if (error) throw new Error(`client snapshot failed: ${error.message}`);
@@ -186,6 +188,7 @@ export async function fetchVisibleClientSnapshot(
     totalValue: typeof row.total_value === "number"
       ? row.total_value
       : Number(row.total_value ?? 0),
+    feeAnalysisWorksheet: row.fee_analysis_worksheet ?? null,
   };
 }
 

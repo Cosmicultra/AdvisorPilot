@@ -3,7 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import { clientDisplayName } from "@/lib/intake-config";
 import { buildRothConversionModel, ROTH_ASSUMPTION_VERSION, type RothConversionModelResult } from "@/lib/roth-conversion-analysis";
-import { annualSocialSecurityGrossForIllustration, parseClientAgeForIllustration } from "@/lib/roth-inputs";
+import { annualSocialSecurityGrossForIllustration, parseClientAgeForIllustration, parseSpouseAgeForIllustration } from "@/lib/roth-inputs";
 import { federalBracketIdFromWorksheetPct, normalizeRothWorksheet } from "@/lib/roth-worksheet";
 
 /** McKinsey-inspired palette: deep navy, cool neutrals, disciplined accent pair. */
@@ -204,6 +204,12 @@ export function buildRothReportModelBundle(body: unknown): RothReportModelBundle
   const useFixedIndexContract = rothWorksheet?.useFixedIndexContract === true;
   const protectInitialInvestment = Boolean(rothWorksheet?.fic?.protectInitialInvestment);
 
+  if (rothWorksheet === null || rothWorksheet.retirementIncomeFromConversionAccount === null) {
+    throw new Error(
+      'Answer "Income received from conversion account?" (Yes or No) on the Roth worksheet before generating this report.'
+    );
+  }
+
   const model = buildRothConversionModel({
     totalAccountValue: totalValue,
     currentAge: age,
@@ -220,6 +226,9 @@ export function buildRothReportModelBundle(body: unknown): RothReportModelBundle
     ficTrailingBonusPct: rothWorksheet?.fic?.trailingBonusPct,
     ficTrailBonusYears: rothWorksheet?.fic?.trailBonusYears,
     ficSurrenderYears: rothWorksheet?.fic?.surrenderYears,
+    spouseStartAge: parseSpouseAgeForIllustration(client),
+    stateTaxRatePct: rothWorksheet?.fic?.stateTaxPct,
+    retirementIncomeFromConversionAccount: rothWorksheet.retirementIncomeFromConversionAccount,
   });
 
   return { client, model, need, age, totalValue };

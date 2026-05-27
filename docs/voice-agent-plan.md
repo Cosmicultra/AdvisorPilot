@@ -45,7 +45,7 @@ No other migrations are required by this plan.
 
 ### 1.2 Voice indicator overlay
 - When active, a low-profile bar appears at the bottom of the screen showing live transcript (user side) + assistant captions + an "interrupt" hint.
-- The existing `LiveIntakeOverlay` (`components/live-intake-overlay.tsx`) is a separate feature (pause-based intake voice) and stays as-is. The new global agent lives alongside it but doesn't open the overlay.
+- Live Intake overlay (`LiveIntakeOverlay`) was removed; Nova chat + Gemini Live voice in `ChatWidget` is the only advisor voice surface.
 
 ### 1.3 What it looks like (script)
 > Advisor (mid-screen, looking at Sarah Chen's analysis): "What's her income readiness score?"

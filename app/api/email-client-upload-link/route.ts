@@ -2,14 +2,18 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../auth/[...nextauth]/route";
 import { escapeHtml } from "@/lib/gmail/mime";
-import { sendGmailMessage } from "@/lib/gmail/send";
+import {
+  advisorEmailReconnectFlags,
+  resolveInteractiveEmailProvider,
+  sendAdvisorEmail,
+} from "@/lib/advisor-email/send";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Sends a simple Gmail message with the client upload link (no attachment).
- * Requires Google sign-in with gmail.send scope (same as Client Snapshot email).
+ * Sends a simple email with the client upload link (no attachment).
+ * Requires Google or Microsoft sign-in with send-mail scope.
  */
 export async function POST(req: Request) {
   try {
@@ -17,9 +21,30 @@ export async function POST(req: Request) {
     const accessToken = (session as { accessToken?: string })?.accessToken;
     const senderEmail = session?.user?.email || "";
 
-    if (!session || !accessToken) {
+    if (!session || !senderEmail) {
       return NextResponse.json(
-        { error: "You must sign in with Google before sending email." },
+        {
+          error: "You must sign in with Google or Microsoft before sending email.",
+          needsGoogleReconnect: true,
+          needsOutlookReconnect: true,
+        },
+        { status: 401 }
+      );
+    }
+
+    const { provider, accessTokenOverride } = await resolveInteractiveEmailProvider(
+      senderEmail,
+      req,
+      accessToken
+    );
+
+    if (!provider) {
+      return NextResponse.json(
+        {
+          error: "No email provider connected. Sign in with Google or Microsoft first.",
+          needsGoogleReconnect: true,
+          needsOutlookReconnect: true,
+        },
         { status: 401 }
       );
     }
@@ -64,19 +89,23 @@ export async function POST(req: Request) {
       </div>
     `;
 
-    const sendResult = await sendGmailMessage({
+    const sendResult = await sendAdvisorEmail({
       advisorEmail: senderEmail,
       to,
       subject,
       plainBody,
       htmlBody,
-      accessTokenOverride: accessToken,
+      provider,
+      accessTokenOverride,
     });
 
     if (!sendResult.ok) {
       return NextResponse.json(
-        { error: sendResult.error, needsGoogleReconnect: sendResult.needsGoogleReconnect },
-        { status: sendResult.needsGoogleReconnect ? 401 : 502 }
+        { error: sendResult.error, ...advisorEmailReconnectFlags(sendResult) },
+        {
+          status:
+            sendResult.needsGoogleReconnect || sendResult.needsOutlookReconnect ? 401 : 502,
+        }
       );
     }
 

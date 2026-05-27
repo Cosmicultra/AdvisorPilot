@@ -9,6 +9,7 @@
 
 import type { IntakeClient } from "@/lib/intake-config";
 import type { UiHolding, NormalizedAiAnalysis } from "@/lib/saved-review-normalize";
+import type { FeeAnalysisWorksheet } from "@/lib/comparative-fee-analysis";
 import type { RothWorksheet } from "@/lib/roth-worksheet";
 
 // ─── Visibility primitive ─────────────────────────────────────────────────
@@ -340,6 +341,7 @@ export interface ClientDetail extends ClientRosterItem {
   holdings: UiHolding[];
   analysis: NormalizedAiAnalysis | null;
   rothWorksheet: RothWorksheet | null;
+  feeAnalysisWorksheet: FeeAnalysisWorksheet | null;
   meetingNotes: string;
   email: string | null;
   phone: string | null;

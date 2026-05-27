@@ -25,6 +25,7 @@ describe("fia-illustration", () => {
       trailingBonusPct: 0,
       trailBonusYears: 0,
       hasRider: false,
+      incomeBaseBonusPct: 0,
       riderGuaranteePct: 0,
       contractEarningsAddToRider: false,
       riderFeePct: 0,
@@ -44,6 +45,7 @@ describe("fia-illustration", () => {
       trailingBonusPct: 4,
       trailBonusYears: 3,
       hasRider: false,
+      incomeBaseBonusPct: 0,
       riderGuaranteePct: 0,
       contractEarningsAddToRider: false,
       riderFeePct: 0,
@@ -107,5 +109,61 @@ describe("fia-illustration", () => {
     const rows = buildFiaScenarioSummaries(ws, 500_000, 75);
     expect(rows[0]!.totalRmdDuringWindow).toBe(0);
     expect(rows[0]!.rows.every((r) => r.rmdWithdrawal === 0)).toBe(true);
+  });
+
+  const tenYears = [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025] as const;
+
+  it("applies income base bonus on premium at issue only", () => {
+    const sim = simulateFiaTenYearWindow(tenYears, {
+      premium: 100_000,
+      capPct: 10,
+      premiumBonusPct: 0,
+      trailingBonusPct: 0,
+      trailBonusYears: 0,
+      hasRider: true,
+      incomeBaseBonusPct: 20,
+      riderGuaranteePct: 0,
+      contractEarningsAddToRider: false,
+      riderFeePct: 0,
+      rmdClientStartingAge: null,
+    });
+    expect(sim.rows[0]!.startingContractValue).toBe(100_000);
+    expect(sim.rows[0]!.riderBenefitBase).toBe(120_000);
+  });
+
+  it("keeps contract premium bonus and income base bonus independent", () => {
+    const sim = simulateFiaTenYearWindow(tenYears, {
+      premium: 100_000,
+      capPct: 10,
+      premiumBonusPct: 10,
+      trailingBonusPct: 0,
+      trailBonusYears: 0,
+      hasRider: true,
+      incomeBaseBonusPct: 20,
+      riderGuaranteePct: 0,
+      contractEarningsAddToRider: false,
+      riderFeePct: 0,
+      rmdClientStartingAge: null,
+    });
+    expect(sim.rows[0]!.startingContractValue).toBeCloseTo(110_000, 0);
+    expect(sim.rows[0]!.riderBenefitBase).toBe(120_000);
+  });
+
+  it("falls back to contract after premium bonus when income base bonus is blank", () => {
+    const sim = simulateFiaTenYearWindow(tenYears, {
+      premium: 100_000,
+      capPct: 10,
+      premiumBonusPct: 10,
+      trailingBonusPct: 0,
+      trailBonusYears: 0,
+      hasRider: true,
+      incomeBaseBonusPct: 0,
+      riderGuaranteePct: 0,
+      contractEarningsAddToRider: false,
+      riderFeePct: 0,
+      rmdClientStartingAge: null,
+    });
+    expect(sim.rows[0]!.startingContractValue).toBeCloseTo(110_000, 0);
+    expect(sim.rows[0]!.riderBenefitBase).toBeCloseTo(110_000, 0);
   });
 });

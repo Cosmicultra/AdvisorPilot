@@ -1,10 +1,11 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
+import { WorkflowLoadingShell } from "@/components/workflow-loading-shell";
 import {
   crmLandingRedirectTarget,
   crmShellEnabled,
 } from "@/lib/crm/feature-flag";
-import LegacyAppShell from "./legacy-app-shell";
+import LegacyAppShell from "./legacy-app-shell-loader";
 
 /**
  * /app entry point.
@@ -26,7 +27,7 @@ export default function AppPage() {
     redirect(crmLandingRedirectTarget());
   }
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<WorkflowLoadingShell />}>
       <LegacyAppShell />
     </Suspense>
   );

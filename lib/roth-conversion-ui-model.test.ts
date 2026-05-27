@@ -41,6 +41,7 @@ describe("buildRothConversionModelForAdvisorUi", () => {
       useEntireQualifiedBalance: true,
       qualifiedAssetValue: "500000",
       useFixedIndexContract: false as const,
+      retirementIncomeFromConversionAccount: true as const,
       fic: { ...emptyRothWorksheet().fic, maxTaxRatePct: "22" },
     };
 
@@ -59,5 +60,19 @@ describe("buildRothConversionModelForAdvisorUi", () => {
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.error).toMatch(/retirement spendable income/i);
+  });
+
+  it("rejects when conversion-account income toggle is unanswered", () => {
+    const client = intakeFixture();
+    const ws = {
+      ...emptyRothWorksheet(),
+      useEntireQualifiedBalance: true,
+      qualifiedAssetValue: "500000",
+      retirementIncomeFromConversionAccount: null,
+    };
+    const out = buildRothConversionModelForAdvisorUi(client, ws, 500_000);
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.error).toMatch(/conversion account/i);
   });
 });

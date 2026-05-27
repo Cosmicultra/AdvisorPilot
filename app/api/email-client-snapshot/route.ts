@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { google } from "googleapis";
 import { createClient } from "@supabase/supabase-js";
 import { authOptions } from "../auth/[...nextauth]/route";
 import { clientDisplayName, clientFirstNameSalutation } from "@/lib/intake-config";
 import { writeAuditEvent } from "@/lib/audit-log";
+import {
+  advisorEmailReconnectFlags,
+  resolveInteractiveEmailProvider,
+  sendAdvisorEmail,
+} from "@/lib/advisor-email/send";
+import { buildClientSnapshotPdfBytes } from "@/app/api/generate-report/route";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -481,12 +486,31 @@ export async function POST(req: Request) {
     const accessToken = (session as SessionWithAccessToken | null)?.accessToken;
     const senderEmail = session?.user?.email || "";
 
-    if (!session || !accessToken) {
+    if (!session || !senderEmail) {
       return NextResponse.json(
         {
           error:
-            "Google is not connected or your Gmail send session expired. Use “Reconnect Google for Gmail” on the report page, then try again.",
+            "Sign in with Google or Microsoft before sending email. Email/password accounts can connect Google or Microsoft from the login page.",
           needsGoogleReconnect: true,
+          needsOutlookReconnect: true,
+        },
+        { status: 401 }
+      );
+    }
+
+    const { provider, accessTokenOverride } = await resolveInteractiveEmailProvider(
+      senderEmail,
+      req,
+      accessToken
+    );
+
+    if (!provider) {
+      return NextResponse.json(
+        {
+          error:
+            "No email provider connected. Sign in with Google for Gmail or Microsoft for Outlook, then try again.",
+          needsGoogleReconnect: true,
+          needsOutlookReconnect: true,
         },
         { status: 401 }
       );
@@ -553,71 +577,46 @@ export async function POST(req: Request) {
             htmlSignature,
           });
 
-    const origin = new URL(req.url).origin;
-
-    const pdfResponse = await fetch(`${origin}/api/generate-report`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(req.headers.get("cookie") ? { Cookie: req.headers.get("cookie")! } : {}),
-      },
-      body: JSON.stringify({
-        ...body,
-        mode: "client",
-      }),
-    });
-
-    if (!pdfResponse.ok) {
-      const errorText = await pdfResponse.text();
+    let pdfBytes: Buffer;
+    try {
+      pdfBytes = await buildClientSnapshotPdfBytes(body, req);
+    } catch (pdfErr: unknown) {
+      const errorText =
+        pdfErr instanceof Error ? pdfErr.message : "Failed to generate Client Snapshot PDF.";
       return NextResponse.json(
         { error: `Failed to generate Client Snapshot PDF: ${errorText}` },
         { status: 500 }
       );
     }
 
-    const pdfBytes = Buffer.from(await pdfResponse.arrayBuffer());
-
-    const oauth2Client = new google.auth.OAuth2();
-    oauth2Client.setCredentials({
-      access_token: accessToken,
-    });
-
-    const gmail = google.gmail({
-      version: "v1",
-      auth: oauth2Client,
-    });
-
-    // Single MIME message for Gmail `users.messages.send` (see `buildEmailWithAttachment`).
-    const rawMessage = buildEmailWithAttachment({
-      from: senderEmail,
+    const sendResult = await sendAdvisorEmail({
+      advisorEmail: senderEmail,
       to,
       subject,
       plainBody: emailBodies.plainText,
       htmlBody: emailBodies.html,
-      pdfBytes,
-      filename: "Client_Snapshot.pdf",
+      provider,
+      accessTokenOverride,
+      attachments: [
+        {
+          filename: "Client_Snapshot.pdf",
+          contentType: "application/pdf",
+          contentBytes: pdfBytes.toString("base64"),
+        },
+      ],
     });
 
-    try {
-      await gmail.users.messages.send({
-        userId: "me",
-        requestBody: {
-          raw: base64UrlEncode(rawMessage),
-        },
-      });
-    } catch (sendErr: unknown) {
-      console.error("GMAIL SEND ERROR:", sendErr);
-      const reconnect = gmailSendNeedsGoogleReconnect(sendErr);
-      const fallbackMsg =
-        sendErr instanceof Error ? sendErr.message : "Gmail rejected the send request.";
+    if (!sendResult.ok) {
+      const reconnect = advisorEmailReconnectFlags(sendResult);
+      const providerLabel = sendResult.provider === "outlook" ? "Outlook" : "Gmail";
       return NextResponse.json(
         {
-          error: reconnect
-            ? "Gmail could not send with your saved Google connection. Reconnect Google below (Consent may ask you to allow sending again), then try “Send via Gmail” once more."
-            : fallbackMsg,
-          needsGoogleReconnect: reconnect,
+          error:
+            sendResult.error ||
+            `${providerLabel} could not send. Reconnect your email provider on the report page, then try again.`,
+          ...reconnect,
         },
-        { status: reconnect ? 401 : 502 }
+        { status: reconnect.needsGoogleReconnect || reconnect.needsOutlookReconnect ? 401 : 502 }
       );
     }
 
@@ -656,18 +655,12 @@ export async function POST(req: Request) {
     });
   } catch (err: unknown) {
     console.error("EMAIL CLIENT SNAPSHOT ERROR:", err);
-    const reconnect = gmailSendNeedsGoogleReconnect(err);
 
     return NextResponse.json(
       {
-        error: reconnect
-          ? "Gmail could not send with your saved Google connection. Reconnect Google on the report page, then try again."
-          : err instanceof Error
-            ? err.message
-            : "Failed to send Client Snapshot email.",
-        needsGoogleReconnect: reconnect,
+        error: err instanceof Error ? err.message : "Failed to send Client Snapshot email.",
       },
-      { status: reconnect ? 401 : 500 }
+      { status: 500 }
     );
   }
 }

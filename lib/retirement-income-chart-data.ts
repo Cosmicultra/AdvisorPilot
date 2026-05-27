@@ -13,6 +13,8 @@ export type RetirementIncomeChartRow = {
   incomeGapWithdrawal: number;
   totalWithdrawalsPreTax: number;
   portfolioEnd: number;
+  /** Annual shortfall (same basis as incomeNeed). */
+  unmetIncomeNeed: number;
   /** True when RMD applies this year (for axis emphasis). */
   hasRmd: boolean;
 };
@@ -27,6 +29,8 @@ export type RetirementIncomeChartSummary = {
   portfolioLongevityAge: number | null;
   /** First client age where ending portfolio is zero (if any). */
   firstPortfolioDepletionAge: number | null;
+  /** First client age with positive unmet income need (if any). */
+  firstIncomeShortfallAge: number | null;
   /** Sum of annual deficits discounted to the first row year (illustrative). */
   presentValueUnmetNeed: number;
 };
@@ -46,11 +50,12 @@ export function mapRetirementIncomeProjectionToChartRows(
     incomeGapWithdrawal: r.portfolioWithdrawalBeyondRmd,
     totalWithdrawalsPreTax: r.totalPortfolioWithdrawal,
     portfolioEnd: r.endingPortfolio,
+    unmetIncomeNeed: r.unmetIncomeNeed,
     hasRmd: r.rmd > 1e-6,
   }));
 }
 
-function totalIncomeSources(r: RetirementIncomeChartRow): number {
+export function totalIncomeSources(r: RetirementIncomeChartRow): number {
   return (
     r.earnedIncome +
     r.socialSecurity +
@@ -59,12 +64,6 @@ function totalIncomeSources(r: RetirementIncomeChartRow): number {
     r.rmd +
     r.incomeGapWithdrawal
   );
-}
-
-function deficit(r: RetirementIncomeChartRow): number {
-  const need = Math.max(0, r.incomeNeed);
-  const src = totalIncomeSources(r);
-  return Math.max(0, need - src);
 }
 
 /**
@@ -85,13 +84,15 @@ export function computeRetirementIncomeChartSummary(
   let highestGapAge: number | null = null;
   let pvUnmet = 0;
 
+  let firstIncomeShortfallAge: number | null = null;
+
   rows.forEach((r, idx) => {
     const need = Math.max(0, r.incomeNeed);
-    const src = totalIncomeSources(r);
-    const def = deficit(r);
+    const def = Math.max(0, r.unmetIncomeNeed);
     if (need <= 0) return;
-    if (src + 1e-6 >= need) yearsFullyFunded += 1;
-    if (def > 0) {
+    if (def <= 1) yearsFullyFunded += 1;
+    if (def > 1) {
+      if (firstIncomeShortfallAge == null) firstIncomeShortfallAge = r.age;
       totalUnmetNeed += def;
       pvUnmet += def / (1 + discount) ** idx;
       if (def > highestGapAmount + 1e-6) {
@@ -117,6 +118,7 @@ export function computeRetirementIncomeChartSummary(
     highestGapAmount,
     portfolioLongevityAge,
     firstPortfolioDepletionAge,
+    firstIncomeShortfallAge,
     presentValueUnmetNeed: pvUnmet,
   };
 }

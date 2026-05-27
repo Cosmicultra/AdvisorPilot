@@ -20,6 +20,8 @@ export type FiaWorksheet = {
   penaltyFreeWithdrawalPct: string;
   surrenderYears: string;
   hasIncomeRider: boolean | null;
+  /** Front-end bonus on income/rider benefit base only (on premium); separate from contract premium bonus. */
+  incomeBaseBonusPct: string;
   incomeRiderGuaranteePct: string;
   /** If true, credited interest this year is added to rider benefit base (simplified illustration). */
   contractEarningsAddToRiderBase: boolean | null;
@@ -40,6 +42,7 @@ export function emptyFiaWorksheet(): FiaWorksheet {
     penaltyFreeWithdrawalPct: "",
     surrenderYears: "",
     hasIncomeRider: null,
+    incomeBaseBonusPct: "",
     incomeRiderGuaranteePct: "",
     contractEarningsAddToRiderBase: null,
     incomeRiderFeePct: "",
@@ -87,6 +90,7 @@ export function normalizeFiaWorksheet(raw: unknown): FiaWorksheet {
     penaltyFreeWithdrawalPct: normStr(r.penaltyFreeWithdrawalPct, base.penaltyFreeWithdrawalPct),
     surrenderYears: normStr(r.surrenderYears, base.surrenderYears),
     hasIncomeRider: triBool(r.hasIncomeRider),
+    incomeBaseBonusPct: normStr(r.incomeBaseBonusPct, base.incomeBaseBonusPct),
     incomeRiderGuaranteePct: normStr(r.incomeRiderGuaranteePct, base.incomeRiderGuaranteePct),
     contractEarningsAddToRiderBase: triBool(r.contractEarningsAddToRiderBase),
     incomeRiderFeePct: normStr(r.incomeRiderFeePct, base.incomeRiderFeePct),

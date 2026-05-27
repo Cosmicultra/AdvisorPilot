@@ -49,7 +49,11 @@ export function RosterList() {
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    advisorFetch("/api/clients?limit=200", { cache: "no-store" })
+    const params = new URLSearchParams({ limit: "200", sort: filters.sort });
+    const search = filters.search.trim();
+    if (search) params.set("search", search);
+    if (filters.stage) params.set("stage", filters.stage);
+    advisorFetch(`/api/clients?${params.toString()}`, { cache: "no-store" })
       .then(async (res) => {
         if (res.status === 401) {
           if (!cancelled) setState({ status: "unauthorized" });
@@ -79,7 +83,7 @@ export function RosterList() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [filters.search, filters.stage, filters.sort]);
 
   const visibleItems = useMemo<ClientRosterItem[]>(() => {
     if (state.status !== "ready") return [];

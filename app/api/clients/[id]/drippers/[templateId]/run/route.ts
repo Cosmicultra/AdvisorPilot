@@ -135,6 +135,7 @@ export const POST = async (
       emailStatus: result.emailStatus,
       emailError: result.emailError,
       needsGoogleReconnect: result.needsGoogleReconnect,
+      needsOutlookReconnect: result.needsOutlookReconnect,
       contractsProcessed:
         "contractsProcessed" in result ? result.contractsProcessed : undefined,
       contractsSent: "contractsSent" in result ? result.contractsSent : undefined,

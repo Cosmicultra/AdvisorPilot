@@ -1686,7 +1686,7 @@ export async function POST(req: Request) {
           newPage({ illustrative: true });
           sectionTitle(
             "Hypothetical fixed index annuity",
-            "Advisor-entered terms; illustrative only, not a carrier illustration.",
+            "Most recent 10 years illustrative comparison",
             { exhibit: true },
           );
           y -= 4;
@@ -1698,7 +1698,15 @@ export async function POST(req: Request) {
             })
           ) {
             fiaIllustrationRendered = true;
-            illustrationDisclosureChunks.push(...getFiaDisclosureChunksForPortfolio());
+            const fiaCarrier = fiaInputValue(ws.carrierName).trim();
+            const fiaProduct = fiaInputValue(ws.productName).trim();
+            const fiaProductLine =
+              fiaCarrier || fiaProduct
+                ? `${fiaCarrier}${fiaCarrier && fiaProduct ? " — " : ""}${fiaProduct}`
+                : undefined;
+            illustrationDisclosureChunks.push(
+              ...getFiaDisclosureChunksForPortfolio({ productLine: fiaProductLine }),
+            );
           }
         }
       } catch (e) {
@@ -1716,13 +1724,15 @@ export async function POST(req: Request) {
           totalValue: rothTotal,
         });
         newPage({ illustrative: true });
-        sectionTitle(
-          "Roth conversion comparison",
-          "Illustrative stay vs. conversion paths; see Disclosures for assumptions.",
-          { exhibit: true },
-        );
+        sectionTitle("Roth conversion comparison", undefined, { exhibit: true });
+        const rothExhibitNumber = exhibitCounter;
         y -= 4;
-        appendRothIllustrationFiguresAndTables(illustrationLayout, bundle.model);
+        appendRothIllustrationFiguresAndTables(
+          illustrationLayout,
+          bundle.model,
+          clientDisplayName(client) || undefined,
+          rothExhibitNumber,
+        );
         illustrationDisclosureChunks.push(...getRothDisclosureChunksForPortfolio(bundle.model, bundle.need));
         rothIllustrationRendered = true;
       } catch (e) {
@@ -1762,7 +1772,7 @@ export async function POST(req: Request) {
     // Archive the generated PDF to advisorpilot_documents so it surfaces in
     // the Documents tab. Best-effort — doesn't block the download.
     // Skip for unauthenticated demos (no real owner_email to attribute to).
-    if (identity && !demoMode) {
+    if (identity && !demoMode && !body?.skipPersist) {
       await saveGeneratedPdf({
         pdfBytes,
         originalFileName: fileName,
@@ -1798,4 +1808,27 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+}
+
+/** In-process PDF generation (avoids HTTP round-trip from email-client-snapshot). */
+export async function buildClientSnapshotPdfBytes(
+  body: Record<string, unknown>,
+  req: Request
+): Promise<Buffer> {
+  const internalReq = new Request(new URL("/api/generate-report", req.url).href, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(req.headers.get("cookie") ? { Cookie: req.headers.get("cookie")! } : {}),
+      ...(req.headers.get("authorization")
+        ? { Authorization: req.headers.get("authorization")! }
+        : {}),
+    },
+    body: JSON.stringify({ ...body, mode: "client", skipPersist: true }),
+  });
+  const res = await POST(internalReq);
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return Buffer.from(await res.arrayBuffer());
 }

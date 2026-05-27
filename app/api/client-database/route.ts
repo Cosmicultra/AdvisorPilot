@@ -37,6 +37,7 @@ type ClientRecord = {
   status?: string | null;
   last_contacted_at?: string | null;
   roth_worksheet?: unknown | null;
+  fee_analysis_worksheet?: unknown | null;
 };
 
 type ClientPayload = {
@@ -51,6 +52,7 @@ type ClientPayload = {
   status?: string;
   last_contacted_at?: string;
   roth_worksheet?: unknown | null;
+  fee_analysis_worksheet?: unknown | null;
 };
 
 function errorMessage(err: unknown, fallback: string) {
@@ -75,6 +77,7 @@ function snapshotFromRecord(record: ClientRecord): ClientSaveSnapshot {
     status: record.status || "Analyzed",
     last_contacted_at: record.last_contacted_at || null,
     roth_worksheet: record.roth_worksheet ?? null,
+    fee_analysis_worksheet: record.fee_analysis_worksheet ?? null,
   };
 }
 
@@ -94,6 +97,9 @@ function snapshotFromPayload(
   const rothWorksheet = Object.prototype.hasOwnProperty.call(body, "rothWorksheet")
     ? (payload.roth_worksheet ?? null)
     : (existing?.roth_worksheet ?? null);
+  const feeAnalysisWorksheet = Object.prototype.hasOwnProperty.call(body, "feeAnalysisWorksheet")
+    ? (payload.fee_analysis_worksheet ?? null)
+    : (existing?.fee_analysis_worksheet ?? null);
 
   return {
     client: payload.client,
@@ -105,6 +111,7 @@ function snapshotFromPayload(
     status,
     last_contacted_at: lastContacted,
     roth_worksheet: rothWorksheet,
+    fee_analysis_worksheet: feeAnalysisWorksheet,
   };
 }
 
@@ -121,6 +128,7 @@ function mapRecord(record: ClientRecord) {
     status: record.status || "Analyzed",
     lastContactedAt: record.last_contacted_at || null,
     rothWorksheet: record.roth_worksheet ?? null,
+    feeAnalysisWorksheet: record.fee_analysis_worksheet ?? null,
   };
 }
 
@@ -219,6 +227,10 @@ export const POST = async (req: Request) => {
 
     if (Object.prototype.hasOwnProperty.call(body || {}, "rothWorksheet")) {
       payload.roth_worksheet = body?.rothWorksheet ?? null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(body || {}, "feeAnalysisWorksheet")) {
+      payload.fee_analysis_worksheet = body?.feeAnalysisWorksheet ?? null;
     }
 
     if (typeof body?.status === "string" && body.status.trim()) {

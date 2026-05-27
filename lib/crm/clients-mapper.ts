@@ -23,6 +23,10 @@ import {
   type UiHolding,
 } from "@/lib/saved-review-normalize";
 import {
+  normalizeFeeAnalysisWorksheet,
+  type FeeAnalysisWorksheet,
+} from "@/lib/comparative-fee-analysis";
+import {
   normalizeRothWorksheet,
   type RothWorksheet,
 } from "@/lib/roth-worksheet";
@@ -49,6 +53,7 @@ export interface ClientRow {
   last_contacted_at: string | null;
   source: string | null;
   roth_worksheet: unknown;
+  fee_analysis_worksheet?: unknown;
   created_at: string;
   updated_at: string;
   // Phase 0 additive columns:
@@ -125,6 +130,9 @@ export function toClientDetail(
   const rothWorksheet = row.roth_worksheet
     ? (normalizeRothWorksheet(row.roth_worksheet) as RothWorksheet)
     : null;
+  const feeAnalysisWorksheet = row.fee_analysis_worksheet
+    ? normalizeFeeAnalysisWorksheet(row.fee_analysis_worksheet)
+    : null;
 
   return {
     ...base,
@@ -132,6 +140,7 @@ export function toClientDetail(
     holdings,
     analysis,
     rothWorksheet,
+    feeAnalysisWorksheet,
     meetingNotes: row.meeting_notes ?? "",
     email: deriveClientEmail(row, intake),
     phone: row.phone,

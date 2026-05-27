@@ -19,8 +19,11 @@
  * and the launcher renders nothing.
  */
 
-import { useEffect, useState } from "react";
-import { advisorFetch } from "@/lib/advisor-fetch";
+import { useMemo } from "react";
+import {
+  useAdvisorProfileContextOptional,
+  type AdvisorProfileApiBody,
+} from "@/lib/advisor-profile-context";
 
 export interface AdvisorProfileForChat {
   email: string;
@@ -39,72 +42,26 @@ export interface UseAdvisorProfileReturn {
  * Endpoint response shape (subset of what /api/advisor-profile returns).
  * Field names match `mapProfile` in the route handler.
  */
-interface AdvisorProfileResponse {
-  profile?: {
-    ownerEmail?: string | null;
-    advisorName?: string | null;
-    advisorTitle?: string | null;
-    // The endpoint doesn't currently surface timezone — we derive from
-    // Intl when the profile lacks one. Once `advisorpilot_advisor_profiles`
-    // adds a `timezone` column we'll honor it here.
-  } | null;
+function toChatProfile(body: AdvisorProfileApiBody | null): AdvisorProfileForChat | null {
+  const email = body?.profile?.ownerEmail?.trim() || null;
+  if (!email) return null;
+  return {
+    email,
+    displayName: body?.profile?.advisorName?.trim() || null,
+    timezone: deriveBrowserTimezone(),
+  };
 }
 
 export function useAdvisorProfile(): UseAdvisorProfileReturn {
-  const [profile, setProfile] = useState<AdvisorProfileForChat | null>(null);
-  const [status, setStatus] = useState<AdvisorProfileStatus>("loading");
-
-  useEffect(() => {
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const res = await advisorFetch("/api/advisor-profile", {
-          method: "GET",
-          cache: "no-store",
-        });
-        if (cancelled) return;
-
-        if (res.status === 401 || res.status === 403) {
-          setStatus("unauthenticated");
-          setProfile(null);
-          return;
-        }
-        if (!res.ok) {
-          setStatus("error");
-          return;
-        }
-
-        const body = (await res.json().catch(() => null)) as AdvisorProfileResponse | null;
-        if (cancelled) return;
-
-        const email = body?.profile?.ownerEmail?.trim() || null;
-        if (!email) {
-          // Profile row missing — treat as unauthenticated since the chat
-          // route would reject without an email anyway.
-          setStatus("unauthenticated");
-          setProfile(null);
-          return;
-        }
-
-        setProfile({
-          email,
-          displayName: body?.profile?.advisorName?.trim() || null,
-          // Browser-derived; safe fallback when the profile row lacks one.
-          timezone: deriveBrowserTimezone(),
-        });
-        setStatus("ready");
-      } catch {
-        if (!cancelled) setStatus("error");
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return { profile, status };
+  const ctx = useAdvisorProfileContextOptional();
+  return useMemo(() => {
+    if (!ctx) {
+      return { profile: null, status: "loading" as AdvisorProfileStatus };
+    }
+    const profile =
+      ctx.status === "ready" ? toChatProfile(ctx.body) : null;
+    return { profile, status: ctx.status };
+  }, [ctx]);
 }
 
 function deriveBrowserTimezone(): string | null {

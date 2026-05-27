@@ -1,4 +1,8 @@
 import { normalizeIntakeClient, type IntakeClient } from "@/lib/intake-config";
+import {
+  normalizeFeeAnalysisWorksheet,
+  type FeeAnalysisWorksheet,
+} from "@/lib/comparative-fee-analysis";
 import { normalizeRothWorksheet, type RothWorksheet } from "@/lib/roth-worksheet";
 import type { HoldingValidationMetadata, HoldingValidationStatus } from "@/lib/holding-validation";
 import {
@@ -85,6 +89,7 @@ export type SavedReviewNormalized = {
   lastContactedAt?: string;
   totalValue?: number;
   rothWorksheet?: RothWorksheet | null;
+  feeAnalysisWorksheet?: FeeAnalysisWorksheet | null;
 };
 
 export function normalizeHoldingsForUi(raw: unknown): UiHolding[] {
@@ -253,6 +258,11 @@ export function normalizeSavedReviewRow(raw: unknown): SavedReviewNormalized {
       if (r.rothWorksheet === undefined) return undefined;
       if (r.rothWorksheet === null) return null;
       return normalizeRothWorksheet(r.rothWorksheet);
+    })(),
+    feeAnalysisWorksheet: (() => {
+      if (r.feeAnalysisWorksheet === undefined) return undefined;
+      if (r.feeAnalysisWorksheet === null) return null;
+      return normalizeFeeAnalysisWorksheet(r.feeAnalysisWorksheet);
     })(),
   };
 }

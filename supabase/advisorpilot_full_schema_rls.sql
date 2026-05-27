@@ -28,11 +28,13 @@ create table if not exists public.advisorpilot_clients (
   source text not null default 'advisor',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  roth_worksheet jsonb
+  roth_worksheet jsonb,
+  fee_analysis_worksheet jsonb
 );
 
 alter table public.advisorpilot_clients
   add column if not exists roth_worksheet jsonb,
+  add column if not exists fee_analysis_worksheet jsonb,
   add column if not exists owner_user_id uuid references auth.users(id) on delete set null,
   add column if not exists owner_email text,
   add column if not exists client jsonb not null default '{}'::jsonb,

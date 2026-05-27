@@ -26,6 +26,11 @@ export type FiaYearSimulationRow = {
   riderBenefitBase: number;
 };
 
+/** PDF-safe year window label (ASCII only — survives cleanPdfText sanitization). */
+export function formatFiaYearWindowLabel(startYear: number, endYear: number): string {
+  return `${startYear} to ${endYear}`;
+}
+
 export type FiaScenarioSummary = {
   scenarioId: string;
   label: string;
@@ -54,14 +59,22 @@ export function creditedIndexRatePct(indexReturnPct: number, capPct: number): nu
   return Math.min(cap, indexReturnPct);
 }
 
+/** Scenario ID for the most recent 10-year FIA comparison window (2016–2025). */
+export const FIA_MOST_RECENT_SCENARIO_ID = "most_recent_2016_2025";
+
 const FIA_SCENARIO_TAB_LABEL: Record<string, string> = {
   low_recent_2000_2009: "Lowest",
   high_recent_2010_2019: "Highest",
-  most_recent_2016_2025: "Most recent",
+  [FIA_MOST_RECENT_SCENARIO_ID]: "Most recent",
 };
 
 export function fiaScenarioTabLabel(scenarioId: string): string {
   return FIA_SCENARIO_TAB_LABEL[scenarioId] ?? scenarioId;
+}
+
+/** Returns the most-recent decade scenario summary, if present. */
+export function pickMostRecentFiaScenario(summaries: readonly FiaScenarioSummary[]): FiaScenarioSummary | null {
+  return summaries.find((s) => s.scenarioId === FIA_MOST_RECENT_SCENARIO_ID) ?? null;
 }
 
 export type SimulateFiaOptions = {
@@ -71,6 +84,8 @@ export type SimulateFiaOptions = {
   trailingBonusPct: number;
   trailBonusYears: number;
   hasRider: boolean;
+  /** Front-end bonus on rider benefit base (on premium); 0 = start rider at contract value after premium bonus. */
+  incomeBaseBonusPct: number;
   riderGuaranteePct: number;
   contractEarningsAddToRider: boolean;
   riderFeePct: number;
@@ -103,7 +118,13 @@ export function simulateFiaTenYearWindow(
 
   let contractValue = opts.premium * (1 + opts.premiumBonusPct / 100);
   const initialAfterBonus = contractValue;
-  let riderBase = opts.hasRider ? initialAfterBonus : 0;
+  let riderBase = 0;
+  if (opts.hasRider) {
+    riderBase =
+      opts.incomeBaseBonusPct > 0
+        ? opts.premium * (1 + opts.incomeBaseBonusPct / 100)
+        : initialAfterBonus;
+  }
 
   const creditedRatesForCagr: number[] = [];
   const rows: FiaYearSimulationRow[] = [];
@@ -203,6 +224,7 @@ export function worksheetToSimulateOptions(
     trailingBonusPct,
     trailBonusYears,
     hasRider: ws.hasIncomeRider === true,
+    incomeBaseBonusPct: parsePct(ws.incomeBaseBonusPct),
     riderGuaranteePct: parsePct(ws.incomeRiderGuaranteePct),
     contractEarningsAddToRider: ws.contractEarningsAddToRiderBase === true,
     riderFeePct: parsePct(ws.incomeRiderFeePct),

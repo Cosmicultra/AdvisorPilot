@@ -59,6 +59,7 @@ export function isFiaWorksheetPopulated(ws: FiaWorksheet | null | undefined): bo
       ws.penaltyFreeWithdrawalPct,
       ws.surrenderYears,
       ws.incomeRiderGuaranteePct,
+      ws.incomeBaseBonusPct,
       ws.incomeRiderFeePct
     )
   ) {

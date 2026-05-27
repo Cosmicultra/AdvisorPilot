@@ -12,6 +12,7 @@ export type ClientSaveSnapshot = {
   status: string | null;
   last_contacted_at: string | null;
   roth_worksheet: unknown | null;
+  fee_analysis_worksheet: unknown | null;
 };
 
 const SECTION_LABELS: Record<string, string> = {
@@ -20,6 +21,7 @@ const SECTION_LABELS: Record<string, string> = {
   meeting_notes: "Meeting notes",
   analysis: "Portfolio analysis",
   roth_worksheet: "Roth worksheet",
+  fee_analysis_worksheet: "Comparative fee analysis",
   status: "Status",
   total_value: "Portfolio value",
   demo_mode: "Demo mode",
@@ -51,6 +53,9 @@ export function clientSaveChangedSections(
   }
   if (stableJson(before.roth_worksheet) !== stableJson(after.roth_worksheet)) {
     changed.push(SECTION_LABELS.roth_worksheet);
+  }
+  if (stableJson(before.fee_analysis_worksheet) !== stableJson(after.fee_analysis_worksheet)) {
+    changed.push(SECTION_LABELS.fee_analysis_worksheet);
   }
   if ((before.status || null) !== (after.status || null)) {
     changed.push(SECTION_LABELS.status);

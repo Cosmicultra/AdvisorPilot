@@ -10,9 +10,54 @@ export function illustrationFiling(married: boolean): IllustrationFiling {
   return married ? "married" : "single";
 }
 
-/** 2024 standard deduction (both under age 65; illustration). */
-export function standardDeductionIllustration(filing: IllustrationFiling): number {
-  return filing === "married" ? 29_200 : 14_600;
+export type IllustrationDeductionInput = {
+  filing: IllustrationFiling;
+  /** 0 = illustration start year */
+  calendarYearOffset: number;
+  clientAge: number;
+  /** MFJ only; null/undefined when spouse age unknown */
+  spouseAge?: number | null;
+};
+
+const DEDUCTION_INFLATION_ANNUAL = 0.025;
+const BASE_STD_SINGLE_2024 = 14_600;
+const BASE_STD_MFJ_2024 = 29_200;
+const ADDITIONAL_65_PER_PERSON_2024 = 1_550;
+
+function deductionInflationFactor(calendarYearOffset: number): number {
+  return Math.pow(1 + DEDUCTION_INFLATION_ANNUAL, Math.max(0, calendarYearOffset));
+}
+
+function baseStandardDeductionAmount(filing: IllustrationFiling, calendarYearOffset: number): number {
+  const base = filing === "married" ? BASE_STD_MFJ_2024 : BASE_STD_SINGLE_2024;
+  return Math.round(base * deductionInflationFactor(calendarYearOffset));
+}
+
+function additional65PlusDeductionAmount(params: IllustrationDeductionInput): number {
+  const perPerson = Math.round(ADDITIONAL_65_PER_PERSON_2024 * deductionInflationFactor(params.calendarYearOffset));
+  let count = 0;
+  if (params.clientAge >= 65) count += 1;
+  if (params.filing === "married" && params.spouseAge != null && params.spouseAge >= 65) count += 1;
+  return count * perPerson;
+}
+
+export type StandardDeductionBreakdown = {
+  total: number;
+  base: number;
+  additional65Plus: number;
+};
+
+export function standardDeductionBreakdownIllustration(
+  params: IllustrationDeductionInput
+): StandardDeductionBreakdown {
+  const base = baseStandardDeductionAmount(params.filing, params.calendarYearOffset);
+  const additional65Plus = additional65PlusDeductionAmount(params);
+  return { total: base + additional65Plus, base, additional65Plus };
+}
+
+/** Total standard deduction (base + age 65+ add-ons) for the illustration year. */
+export function standardDeductionIllustration(params: IllustrationDeductionInput): number {
+  return standardDeductionBreakdownIllustration(params).total;
 }
 
 type RateBand = { low: number; high: number; rate: number };
@@ -51,14 +96,21 @@ export function federalIncomeTaxOnTaxable(taxableOrdinaryIncome: number, filing:
   return tax;
 }
 
-/** Federal income tax on gross ordinary income after standard deduction. */
+export function taxableOrdinaryAfterDeduction(
+  grossOrdinaryIncome: number,
+  deduction: IllustrationDeductionInput
+): number {
+  const sd = standardDeductionIllustration(deduction);
+  return Math.max(0, grossOrdinaryIncome - sd);
+}
+
+/** Federal income tax on gross ordinary income after standard deduction (age/year-aware). */
 export function federalIncomeTaxAfterStandardDeduction(
   grossOrdinaryIncome: number,
-  filing: IllustrationFiling
+  deduction: IllustrationDeductionInput
 ): number {
-  const sd = standardDeductionIllustration(filing);
-  const taxable = Math.max(0, grossOrdinaryIncome - sd);
-  return federalIncomeTaxOnTaxable(taxable, filing);
+  const taxable = taxableOrdinaryAfterDeduction(grossOrdinaryIncome, deduction);
+  return federalIncomeTaxOnTaxable(taxable, deduction.filing);
 }
 
 /**
@@ -67,12 +119,45 @@ export function federalIncomeTaxAfterStandardDeduction(
 export function incrementalFederalTaxFromConversion(
   otherGrossOrdinaryIncome: number,
   grossConversionAmount: number,
-  filing: IllustrationFiling
+  deduction: IllustrationDeductionInput
 ): number {
-  const sd = standardDeductionIllustration(filing);
-  const baseTax = federalIncomeTaxOnTaxable(Math.max(0, otherGrossOrdinaryIncome - sd), filing);
-  const withConvTax = federalIncomeTaxOnTaxable(Math.max(0, otherGrossOrdinaryIncome + grossConversionAmount - sd), filing);
+  const sd = standardDeductionIllustration(deduction);
+  const baseTax = federalIncomeTaxOnTaxable(Math.max(0, otherGrossOrdinaryIncome - sd), deduction.filing);
+  const withConvTax = federalIncomeTaxOnTaxable(
+    Math.max(0, otherGrossOrdinaryIncome + grossConversionAmount - sd),
+    deduction.filing
+  );
   return Math.max(0, withConvTax - baseTax);
+}
+
+/** Parse worksheet state tax % string to a 0–1 fraction (0 when blank/invalid). */
+export function parseStateTaxRateFraction(raw: string | undefined): number {
+  const n = Number(String(raw ?? "").replace(/%/g, "").trim());
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n, 100) / 100;
+}
+
+/** Flat illustrative state income tax on federal taxable ordinary income. */
+export function stateIncomeTaxIllustrative(taxableOrdinaryIncome: number, rateFraction: number): number {
+  const t = Math.max(0, taxableOrdinaryIncome);
+  const r = Math.max(0, Math.min(1, rateFraction));
+  return t * r;
+}
+
+/** Incremental state tax from adding conversion gross (parallel to federal incremental). */
+export function incrementalStateTaxFromConversion(
+  otherGrossOrdinaryIncome: number,
+  grossConversionAmount: number,
+  deduction: IllustrationDeductionInput,
+  rateFraction: number
+): number {
+  if (rateFraction <= 0) return 0;
+  const baseTaxable = taxableOrdinaryAfterDeduction(otherGrossOrdinaryIncome, deduction);
+  const withConvTaxable = taxableOrdinaryAfterDeduction(
+    otherGrossOrdinaryIncome + grossConversionAmount,
+    deduction
+  );
+  return Math.max(0, stateIncomeTaxIllustrative(withConvTaxable, rateFraction) - stateIncomeTaxIllustrative(baseTaxable, rateFraction));
 }
 
 /** Maximum taxable ordinary income allowed before entering the bracket above user's stated marginal (illustration cap). */
@@ -113,10 +198,10 @@ export function maxRothConversionGrossThisYear(params: {
   otherGrossOrdinaryIncome: number;
   tradBalanceAvailableAfterRmd: number;
   statedBracketId: string;
-  filing: IllustrationFiling;
+  deduction: IllustrationDeductionInput;
 }): number {
-  const sd = standardDeductionIllustration(params.filing);
-  const C = taxableIncomeCeilingForStatedBracket(params.statedBracketId, params.filing);
+  const sd = standardDeductionIllustration(params.deduction);
+  const C = taxableIncomeCeilingForStatedBracket(params.statedBracketId, params.deduction.filing);
   if (!Number.isFinite(C)) return Math.max(0, params.tradBalanceAvailableAfterRmd);
 
   const og = Math.max(0, params.otherGrossOrdinaryIncome);
@@ -144,4 +229,4 @@ export function irmaaAnnualSurchargeIllustrative(magi: number, filing: Illustrat
  * AdvisorPilot does not query the IRS in real time; parameters are revised in shipped releases when law changes are incorporated.
  */
 export const FEDERAL_TAX_ILLUSTRATION_REFERENCE =
-  "Ordinary taxable income brackets and standard deduction mirror Rev. Proc. 2023–34 (2024-era) illustrative bands for single and MFJ; IRMAA uses simplified tier surcharges.";
+  "Ordinary taxable income brackets mirror Rev. Proc. 2023–34 (2024-era) illustrative bands for single and MFJ; standard deduction is inflation-indexed from 2024 base with additional amounts for taxpayers age 65+; IRMAA uses simplified tier surcharges.";

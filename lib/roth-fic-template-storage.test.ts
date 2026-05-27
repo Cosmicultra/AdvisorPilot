@@ -50,6 +50,13 @@ describe("roth-fic-template-storage", () => {
     expect(next.fic.contractEstimatedRateOfReturnPct).toBe("6");
   });
 
+  it("apply fills missing fic string fields from legacy templates", () => {
+    const legacyTemplate = sampleRothFic();
+    delete (legacyTemplate as Partial<typeof legacyTemplate>).stateTaxPct;
+    const next = applyRothFicProductTemplate(emptyRothWorksheet(), legacyTemplate);
+    expect(next.fic.stateTaxPct).toBe("");
+  });
+
   it("carrier-product only clears other specs", () => {
     const ws = emptyRothWorksheet();
     ws.fic = sampleRothFic();

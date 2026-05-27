@@ -318,11 +318,42 @@ describe("run_fee_analysis", () => {
     mockFeeAnalysisPOST.mockResolvedValue(
       new Response(
         JSON.stringify({
+          schemaVersion: 2,
           disclaimer: "Illustrative.",
           portfolioValue: 100_000,
           totalEstimatedFundFeesDollars: 300,
           weightedFundExpensePctOfPortfolio: 0.003,
+          current: {
+            totalEstimatedFundFeesDollars: 300,
+            totalAdvisorFeesDollars: 1000,
+            totalEstimatedAnnualCostDollars: 1300,
+            blendedAnnualDragPct: 0.013,
+            fundExpenseLoadPct: 0.003,
+            advisorFeeLoadPct: 0.01,
+            householdValue: 100_000,
+          },
+          proposed: {
+            totalEstimatedFundFeesDollars: 300,
+            totalAdvisorFeesDollars: 1000,
+            totalEstimatedAnnualCostDollars: 1300,
+            blendedAnnualDragPct: 0.013,
+            fundExpenseLoadPct: 0.003,
+            advisorFeeLoadPct: 0.01,
+            householdValue: 100_000,
+          },
+          coverage: {
+            proposedCoveragePct: 1,
+            proposedManagedAssets: 100_000,
+            selfManagedAssets: 0,
+            excludedAssets: 0,
+          },
+          comparison: {
+            annualCostDifferenceDollars: 0,
+            blendedDragDifferencePct: 0,
+            narrativeHints: [],
+          },
           accounts: [],
+          advisorFeeAnnual: 0.01,
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       ),
@@ -344,17 +375,25 @@ describe("run_fee_analysis", () => {
     expect(Array.isArray(body.accounts)).toBe(true);
     expect(body.accounts[0].fundRows[0].ticker).toBe("SPY");
 
-    const out = r.result as { advisorFeeAnnual: number; portfolioValue: number };
+    const out = r.result as { advisorFeeAnnual: number; portfolioValue: number; schemaVersion: number };
+    expect(out.schemaVersion).toBe(2);
     expect(out.advisorFeeAnnual).toBe(0.01);
     expect(out.portfolioValue).toBe(100_000);
   });
 
-  it("rejects when no holdings have value", async () => {
+  it("rejects when no classified fund holdings", async () => {
     const { supabase } = makeMockSupabase({
       tables: {
         advisorpilot_clients: {
           data: clientSnapshotRow({
-            holdings: [{ accountNumber: "1234", value: 0, suggested: "X" }],
+            holdings: [
+              {
+                accountNumber: "1234",
+                value: 0,
+                assetClass: "Individual Stock",
+                suggested: "X",
+              },
+            ],
           }),
           error: null,
         },
@@ -365,7 +404,7 @@ describe("run_fee_analysis", () => {
       { clientId: CLIENT_ID },
       CTX({ supabase, request: makeRequest() }),
     );
-    expect(r.error).toMatch(/No fund rows with values/);
+    expect(r.error).toMatch(/No ETF or mutual fund holdings classified/);
   });
 });
 

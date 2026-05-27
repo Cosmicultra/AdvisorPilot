@@ -69,7 +69,7 @@ const TAB_LABELS: Record<string, string> = {
   fia: "FIA calculator",
   roth: "Roth worksheet",
   "ret-income": "Retirement income",
-  "fee-analysis": "Fee analysis",
+  "fee-analysis": "Comparative fee analysis",
   report: "Report",
   notes: "Notes",
   timeline: "Timeline",
@@ -119,7 +119,7 @@ export function ClientDetailContent({
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    advisorFetch(`/api/clients/${clientId}`, { cache: "no-store" })
+    advisorFetch(`/api/clients/${clientId}?view=summary`, { cache: "no-store" })
       .then(async (res) => {
         if (res.status === 401) {
           if (!cancelled) setState({ status: "unauthorized" });

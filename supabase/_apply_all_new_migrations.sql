@@ -284,3 +284,57 @@ create policy "annuity_reminder_sends_insert_own" on public.advisorpilot_annuity
         and c.owner_email = lower(auth.jwt() ->> 'email')
     )
   );
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 10. advisorpilot_advisor_outlook_tokens.sql
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists public.advisorpilot_advisor_outlook_tokens (
+  advisor_email text primary key,
+  refresh_token text not null,
+  updated_at timestamptz not null default now()
+);
+
+drop trigger if exists set_advisorpilot_advisor_outlook_tokens_updated_at
+  on public.advisorpilot_advisor_outlook_tokens;
+
+create trigger set_advisorpilot_advisor_outlook_tokens_updated_at
+  before update on public.advisorpilot_advisor_outlook_tokens
+  for each row execute function public.set_advisorpilot_updated_at();
+
+-- No RLS: only server routes with service role access this table.
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 11. advisorpilot_fee_analysis_worksheet.sql (column must exist before roster RPC)
+-- ─────────────────────────────────────────────────────────────────────────────
+alter table public.advisorpilot_clients
+  add column if not exists fee_analysis_worksheet jsonb;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 12. advisorpilot_roster_list_rpc.sql
+-- ─────────────────────────────────────────────────────────────────────────────
+create or replace function public.list_visible_clients_roster(viewer_email text)
+returns setof public.advisorpilot_clients
+language plpgsql
+stable
+as $$
+declare
+  r public.advisorpilot_clients;
+begin
+  for r in
+    select c.*
+    from public.advisorpilot_clients c
+    where public.clients_visible_to(viewer_email, c.id)
+  loop
+    r.meeting_notes := null;
+    r.analysis := null;
+    r.roth_worksheet := null;
+    r.fee_analysis_worksheet := null;
+    return next r;
+  end loop;
+  return;
+end;
+$$;
+
+grant execute on function public.list_visible_clients_roster(text)
+  to anon, authenticated, service_role;
+

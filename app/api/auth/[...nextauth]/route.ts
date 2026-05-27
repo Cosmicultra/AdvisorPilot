@@ -1,6 +1,8 @@
 import NextAuth, { type NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
+import AzureADProvider from "next-auth/providers/azure-ad";
 import { persistGmailRefreshToken } from "@/lib/gmail/token-store";
+import { persistOutlookRefreshToken } from "@/lib/outlook/token-store";
 
 export const authOptions: NextAuthOptions = {
   secret: process.env.NEXTAUTH_SECRET,
@@ -16,6 +18,16 @@ export const authOptions: NextAuthOptions = {
         },
       },
     }),
+    AzureADProvider({
+      clientId: process.env.AZURE_AD_CLIENT_ID || "",
+      clientSecret: process.env.AZURE_AD_CLIENT_SECRET || "",
+      tenantId: process.env.AZURE_AD_TENANT_ID || "common",
+      authorization: {
+        params: {
+          scope: "openid profile email offline_access Mail.Send",
+        },
+      },
+    }),
   ],
   callbacks: {
     async jwt({ token, account, user }) {
@@ -25,11 +37,22 @@ export const authOptions: NextAuthOptions = {
 
       if (account?.refresh_token) {
         token.refreshToken = account.refresh_token;
+      }
+
+      if (account?.provider) {
+        token.authProvider = account.provider;
+      }
+
+      if (account?.refresh_token) {
         const email =
           (typeof user?.email === "string" ? user.email : null) ||
           (typeof token.email === "string" ? token.email : null);
         if (email) {
-          void persistGmailRefreshToken(email, account.refresh_token);
+          if (account.provider === "google") {
+            void persistGmailRefreshToken(email, account.refresh_token);
+          } else if (account.provider === "azure-ad") {
+            void persistOutlookRefreshToken(email, account.refresh_token);
+          }
         }
       }
 
@@ -39,6 +62,7 @@ export const authOptions: NextAuthOptions = {
       return {
         ...session,
         accessToken: token.accessToken,
+        authProvider: token.authProvider,
       };
     },
   },

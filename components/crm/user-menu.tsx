@@ -17,8 +17,9 @@
 import { ChevronDown, LogOut, Settings, User } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { DropdownMenu } from "radix-ui";
-import { useCallback, useEffect, useState } from "react";
-import { advisorFetch, AP_SUPABASE_AT, AP_SUPABASE_RT } from "@/lib/advisor-fetch";
+import { useCallback, useMemo, useState } from "react";
+import { AP_SUPABASE_AT, AP_SUPABASE_RT } from "@/lib/advisor-fetch";
+import { useAdvisorProfileContextOptional } from "@/lib/advisor-profile-context";
 import { LlmSettingsDrawer } from "@/components/llm-settings-drawer";
 import { useSettingsDialog } from "./settings-dialog-provider";
 
@@ -33,48 +34,33 @@ import { useSettingsDialog } from "./settings-dialog-provider";
  * user isn't on that path, so doing both is always safe.
  */
 
-interface AdvisorProfileResponse {
-  profile?: {
-    ownerEmail?: string | null;
-    advisorName?: string | null;
-  } | null;
-  emailConnected?: boolean;
-}
-
 export function UserMenu() {
   const settingsDialog = useSettingsDialog();
-  const [profileEmail, setProfileEmail] = useState<string | null>(null);
-  const [profileName, setProfileName] = useState<string | null>(null);
-  const [emailConnected, setEmailConnected] = useState<boolean | null>(null);
+  const profileCtx = useAdvisorProfileContextOptional();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // Fetch the advisor profile (works for both Google + email/password) so
-  // we always have a real email/name to render the avatar from.
-  useEffect(() => {
-    let cancelled = false;
-    advisorFetch("/api/advisor-profile", { method: "GET", cache: "no-store" })
-      .then(async (res) => {
-        if (!res.ok) return null;
-        return (await res.json()) as AdvisorProfileResponse;
-      })
-      .then((body) => {
-        if (cancelled || !body) return;
-        setProfileEmail(body.profile?.ownerEmail ?? null);
-        setProfileName(body.profile?.advisorName ?? null);
-        setEmailConnected(body.emailConnected === true);
-      })
-      .catch(() => {
-        // Soft-fail — avatar shows "?" instead of initials.
-      });
-    return () => {
-      cancelled = true;
+  const { profileEmail, profileName, emailConnected, emailProvider } = useMemo(() => {
+    const body = profileCtx?.body;
+    return {
+      profileEmail: body?.profile?.ownerEmail ?? null,
+      profileName: body?.profile?.advisorName ?? null,
+      emailConnected:
+        profileCtx?.status === "ready" ? body?.emailConnected === true : null,
+      emailProvider:
+        profileCtx?.status === "ready" ? (body?.emailProvider ?? null) : null,
     };
-  }, []);
+  }, [profileCtx?.body, profileCtx?.status]);
 
   const email = profileEmail;
   const triggerLabel = formatAdvisorFirstName(profileName, email);
   const emailStatusHint =
-    emailConnected === true ? "Connected to email" : "Re-Authenticate email";
+    emailConnected === true
+      ? emailProvider === "outlook"
+        ? "Connected to Outlook"
+        : emailProvider === "gmail"
+          ? "Connected to Gmail"
+          : "Connected to email"
+      : "Re-Authenticate email";
 
   const handleSignOut = useCallback(() => {
     // Clear email/password Bearer tokens (no-op if Google user).

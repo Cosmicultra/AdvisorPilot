@@ -59,9 +59,9 @@ Attachment intake is centralized in `lib/llm/attachments.ts` (MIME sniff → siz
 4. `POST /api/generate-report` (or `/api/generate-roth-report`) — `pdf-lib` assembly; embeds `public/logo.png` when present.
 5. `POST /api/research/start` + `GET /api/research/[id]` + `GET /api/research/cron` — async deep-research jobs backed by `advisorpilot_deep_research_jobs` (OpenAI `background:true`, Gemini Interactions, Grok runs synchronously). Lifecycle in `lib/llm/deep-research-jobs.ts`.
 
-### Two voice surfaces (don't conflate them)
-- **Live Intake overlay** (`components/live-intake-overlay.tsx`) is a *pause-based* helper bound to the 10-question wizard. Mic → `MediaRecorder` → `/api/intake-stt` (Whisper) → `/api/intake-voice` (`pass: "intake.turn"`) returns an `IntakeClient` patch → `/api/intake-tts` plays back. Not the Realtime API.
-- **Voice Agent** (`components/voice/voice-agent.tsx` + `lib/voice/*`) is a global, app-wide Gemini Live agent. `/api/voice/token` mints `{ apiKey, model, voice, systemPrompt, tools }` for an authenticated advisor; the browser opens a Live WebSocket via `@google/genai`'s `live.connect`. Tool surface is read-only / navigational only (`navigate`, `open_client`, `search_clients`, `get_holdings_breakdown`, `client_overview`, etc. — see `lib/voice/token-config.ts`). Per-advisor settings live in `advisorpilot_voice_settings`; every tool call is logged to `advisorpilot_voice_audit_log`. `lib/voice/focus.ts` is the only function that serializes React state for the agent and is where PII redaction happens.
+### Nova chat + voice (single surface)
+- **Nova** is the text chat orchestrator (`lib/chat/`, `POST /api/chat/stream`). System prompt: "You are Nova…"
+- **Voice mode** lives inside `components/chat/chat-widget.tsx` via `VoiceAgentController` (`components/voice/voice-agent.tsx` + `lib/voice/*`). `/api/voice/token` mints Gemini Live config; voice can fire-and-forget to Nova via the `chat()` tool (`lib/voice/chat-bridge.ts`). Per-advisor settings: `advisorpilot_voice_settings`; tool audit: `advisorpilot_voice_audit_log`. `lib/voice/focus.ts` serializes React state for the agent (PII redaction).
 
 ### Supabase schema
 SQL files in `supabase/` are the source of truth for tables; apply them in this order on a fresh database. **Any schema change you make must be backwards-compatible** — see `.cursor/rules/40-supabase-schema-changes.mdc` (prefer a new sidecar table; if you must add a column, it must be additive and nullable; migrations must be idempotent).

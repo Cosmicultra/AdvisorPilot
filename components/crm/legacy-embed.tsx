@@ -55,7 +55,7 @@
  * — so none of them interfere with the two-column flex.
  */
 
-import LegacyAppShell from "@/app/app/legacy-app-shell";
+import LegacyAppShell from "@/app/app/legacy-app-shell-loader";
 
 export function LegacyEmbed() {
   return (

@@ -40,6 +40,8 @@ interface ProfileAPIResponse {
     defaultResearchTier: ResearchTier | null;
     [k: string]: unknown;
   };
+  migrationRequired?: string;
+  message?: string;
 }
 
 export interface LlmSettingsDrawerProps {
@@ -116,9 +118,19 @@ export function LlmSettingsDrawer({ open, onClose, onSaved }: LlmSettingsDrawerP
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      const body = (await res.json().catch(() => ({}))) as ProfileAPIResponse;
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error || `Save failed (${res.status})`);
+        throw new Error(
+          (body as { error?: string }).error || `Save failed (${res.status})`
+        );
+      }
+      if (body.migrationRequired) {
+        setLastSavedAt(null);
+        setError(
+          body.message ||
+            `AI model preferences could not be saved. Run ${body.migrationRequired} in the Supabase SQL editor.`
+        );
+        return;
       }
       setLastSavedAt(new Date().toLocaleTimeString());
       if (onSaved) onSaved(provider);

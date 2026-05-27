@@ -16,6 +16,27 @@ export function parseClientAgeForIllustration(client: Partial<IntakeClient> & Re
   return Math.max(0, age);
 }
 
+export function parseSpouseAgeForIllustration(
+  client: Partial<IntakeClient> & Record<string, unknown>
+): number | null {
+  const married = client.married === true || String(client.married || "").toLowerCase() === "true";
+  if (!married) return null;
+
+  const explicitAge = Number(client.spouseAge);
+  if (Number.isFinite(explicitAge) && explicitAge > 0) return Math.floor(explicitAge);
+
+  const dob = String(client.spouseDob || "");
+  if (!dob) return null;
+  const birth = new Date(`${dob}T12:00:00`);
+  if (Number.isNaN(birth.getTime())) return null;
+
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const monthDelta = today.getMonth() - birth.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && today.getDate() < birth.getDate())) age -= 1;
+  return Math.max(0, age);
+}
+
 export function annualSocialSecurityGrossForIllustration(client: Partial<IntakeClient> & Record<string, unknown>): number {
   const taking = client.takingSocialSecurity === true || String(client.takingSocialSecurity || "").toLowerCase() === "true";
   if (!taking) return 0;

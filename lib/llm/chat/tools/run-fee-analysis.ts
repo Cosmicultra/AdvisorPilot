@@ -1,21 +1,18 @@
 /**
- * `run_fee_analysis` — estimate fund expense ratios for a client's portfolio.
+ * `run_fee_analysis` — comparative illustrative fee analysis for a client.
  *
- * What it does:
- *   1. Visibility-check the client; fetch holdings.
- *   2. Group holdings by account (mirrors the UI's Accounts card grouping).
- *   3. Invoke `POST /api/fee-analysis` in-process with the chat request's
- *      auth headers + advisor fee rate.
- *   4. Return the full `FeeAnalysisApiResponse` shape to the model.
- *
- * Read-only — does NOT persist anything. The fee analysis is an
- * illustrative estimate that the advisor uses to discuss client costs;
- * the route handler writes its own audit trail.
- *
- * Spec: docs/crm/70-orchestrator-tools.md §6.2.
+ * Uses persisted `fee_analysis_worksheet` when present; otherwise legacy
+ * single-fee synthesis (all accounts → other_advisor / transition_to_me).
  */
 
 import { POST as feeAnalysisHandler } from "@/app/api/fee-analysis/route";
+import {
+  buildComparativeFeeApiAccounts,
+  mergeWorksheetAccounts,
+  myAdvisoryFeeAnnualFromWorksheet,
+  normalizeFeeAnalysisWorksheet,
+} from "@/lib/comparative-fee-analysis";
+import { groupFeeAnalysisFundRowsByAccount } from "@/lib/fee-analysis";
 import { isUuid } from "./query-crm-helpers";
 import { fetchVisibleClientSnapshot, invokeRouteHandler } from "./run-helpers";
 import type { ChatTool, ChatToolContext, ChatToolHandlerResult } from "./types";
@@ -32,7 +29,7 @@ const PARAMETERS = {
       minimum: 0,
       maximum: 0.2,
       description:
-        "The advisor's annual fee as a DECIMAL (e.g. 0.01 = 100bps). Default 0.01 (1.00%, a common round-trip).",
+        "Optional override for my advisory fee as DECIMAL (0.01 = 1%). Used when no persisted worksheet exists.",
     },
   },
   required: ["clientId"],
@@ -41,7 +38,7 @@ const PARAMETERS = {
 export const runFeeAnalysisTool: ChatTool = {
   name: "run_fee_analysis",
   description:
-    "Estimate annual fund expense ratios for a client's portfolio + roll them up with the advisor's fee for an all-in cost view (`/api/fee-analysis`). Read-only — doesn't persist. Returns per-fund expense ratios + per-account totals + a portfolio-level cost summary. ~10-30s. Useful when the advisor wants to discuss 'what is John paying in fees?' or compare against benchmarks.",
+    "Run illustrative comparative fee analysis: current vs proposed management scenarios (`/api/fee-analysis`). Uses saved per-account management assumptions when present; otherwise defaults all fund accounts to other-advisor → transition-to-me at 1%. Read-only — returns fund expense estimates, per-account slices, household rollups, and coverage metrics. ~10-30s.",
   parameters: PARAMETERS,
   handler: handleRunFeeAnalysis,
 };
@@ -62,11 +59,11 @@ async function handleRunFeeAnalysis(
     return { error: "`clientId` is required (UUID)." };
   }
 
-  const advisorFeeAnnual =
+  const feeOverride =
     typeof args.advisorFeeAnnual === "number" && Number.isFinite(args.advisorFeeAnnual)
       ? args.advisorFeeAnnual
-      : 0.01;
-  if (advisorFeeAnnual < 0 || advisorFeeAnnual > 0.2) {
+      : null;
+  if (feeOverride != null && (feeOverride < 0 || feeOverride > 0.2)) {
     return {
       error: "`advisorFeeAnnual` must be between 0 and 0.2 (i.e. 0% to 20%).",
     };
@@ -84,19 +81,43 @@ async function handleRunFeeAnalysis(
       };
     }
 
-    // Group holdings by account into the route's expected payload shape.
-    const accounts = buildAccountsPayload(snapshot.holdings);
-    if (accounts.length === 0) {
+    const groups = groupFeeAnalysisFundRowsByAccount(
+      snapshot.holdings as Parameters<typeof groupFeeAnalysisFundRowsByAccount>[0]
+    );
+    if (groups.length === 0) {
       return {
         error:
-          "No fund rows with values to analyze — every holding either has no value or is missing a ticker.",
+          "No ETF or mutual fund holdings classified — fee analysis needs fund wrappers on confirmed holdings.",
       };
     }
 
-    const totalValue = accounts.reduce(
-      (sum, a) => sum + a.totalAccountValue,
-      0,
-    );
+    const totalValue =
+      snapshot.totalValue > 0
+        ? snapshot.totalValue
+        : groups.reduce((s, g) => s + g.totalAccountValue, 0);
+
+    let body: Record<string, unknown>;
+
+    if (snapshot.feeAnalysisWorksheet) {
+      let ws = normalizeFeeAnalysisWorksheet(snapshot.feeAnalysisWorksheet);
+      if (feeOverride != null) {
+        ws = { ...ws, myAdvisoryFeePctInput: String(feeOverride * 100) };
+      }
+      ws = mergeWorksheetAccounts(ws, groups.map((g) => ({ key: g.key })));
+      body = {
+        schemaVersion: 2,
+        totalValue,
+        myAdvisoryFeeAnnual: myAdvisoryFeeAnnualFromWorksheet(ws),
+        accounts: buildComparativeFeeApiAccounts(groups, ws),
+      };
+    } else {
+      const myFee = feeOverride ?? 0.01;
+      body = {
+        totalValue,
+        advisorFeeAnnual: myFee,
+        accounts: groups,
+      };
+    }
 
     const invoke = await invokeRouteHandler<
       Record<string, unknown>,
@@ -104,7 +125,7 @@ async function handleRunFeeAnalysis(
     >({
       ctx,
       handler: feeAnalysisHandler,
-      body: { accounts, totalValue, advisorFeeAnnual },
+      body,
       syntheticUrl: "internal://run_fee_analysis",
     });
 
@@ -114,67 +135,8 @@ async function handleRunFeeAnalysis(
       };
     }
 
-    return { result: { clientId, advisorFeeAnnual, ...invoke.body } };
+    return { result: { clientId, ...invoke.body } };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
   }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Build the accounts payload the route expects (one entry per accountNumber)
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface AccountPayload {
-  key: string;
-  accountNumber: string;
-  totalAccountValue: number;
-  fundRows: Array<{
-    ticker: string;
-    value: number;
-    assetClass: string;
-    suggested: string;
-    rawName: string;
-    accountNumber: string;
-  }>;
-}
-
-function buildAccountsPayload(
-  holdings: Array<Record<string, unknown>>,
-): AccountPayload[] {
-  const byAccount = new Map<string, AccountPayload>();
-
-  for (const h of holdings) {
-    const value = Number(h?.value);
-    if (!Number.isFinite(value) || value <= 0) continue;
-
-    const accountNumber = String(h?.accountNumber ?? "").trim() || "unassigned";
-    const ticker = String(
-      h?.enrichmentResolvedTicker ?? h?.suggested ?? "",
-    ).trim().toUpperCase();
-    const fundRow = {
-      ticker,
-      value,
-      assetClass: String(h?.assetClass ?? ""),
-      suggested: String(h?.suggested ?? ""),
-      rawName: String(h?.rawName ?? ""),
-      accountNumber,
-    };
-
-    const existing = byAccount.get(accountNumber);
-    if (existing) {
-      existing.totalAccountValue += value;
-      existing.fundRows.push(fundRow);
-    } else {
-      byAccount.set(accountNumber, {
-        key: accountNumber,
-        accountNumber,
-        totalAccountValue: value,
-        fundRows: [fundRow],
-      });
-    }
-  }
-
-  // Drop accounts with no rows (defensive — shouldn't happen given the
-  // above structure but keeps the route's payload clean).
-  return [...byAccount.values()].filter((a) => a.fundRows.length > 0);
 }

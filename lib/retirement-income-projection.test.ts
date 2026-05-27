@@ -157,4 +157,138 @@ describe("buildRetirementIncomeProjection", () => {
     const r = rows[0]!;
     expect(r.totalPortfolioWithdrawal).toBe(r.rmd + r.portfolioWithdrawalBeyondRmd);
   });
+
+  it("never withdraws more than post-growth portfolio balance", () => {
+    const rows = buildRetirementIncomeProjection({
+      ...baseInput,
+      married: false,
+      spouseAgeStart: null,
+      clientAgeStart: 65,
+      clientRetirementAge: 65,
+      earnedClientAnnual: 0,
+      earnedSpouseAnnual: 0,
+      baseRetirementNeedAnnual: 500_000,
+      needInflationAnnual: 0.05,
+      baseSocialSecurityClientAnnual: 40_000,
+      baseSocialSecuritySpouseAnnual: 0,
+      initialTotalPortfolio: 2_000_000,
+      initialQualifiedPortfolio: 1_500_000,
+      portfolioReturnAnnual: 0.04,
+      horizonYears: 25,
+    });
+    for (const r of rows) {
+      const cap = r.beginningPortfolio * (1 + 0.04) + 1e-6;
+      expect(r.totalPortfolioWithdrawal).toBeLessThanOrEqual(cap);
+      expect(r.endingPortfolio).toBeGreaterThanOrEqual(0);
+      expect(r.unmetIncomeNeed).toBeGreaterThanOrEqual(0);
+      if (r.incomeNeed > 0) {
+        const funded =
+          r.earnedIncome +
+          r.socialSecurity +
+          r.pension +
+          r.otherIncome +
+          r.rmd +
+          r.portfolioWithdrawalBeyondRmd;
+        expect(funded + r.unmetIncomeNeed).toBeGreaterThanOrEqual(r.incomeNeed - 1);
+      }
+    }
+  });
+
+  it("shows unmet need after portfolio depletion with zero further gap withdrawals", () => {
+    const rows = buildRetirementIncomeProjection({
+      ...baseInput,
+      married: false,
+      spouseAgeStart: null,
+      clientAgeStart: 70,
+      clientRetirementAge: 65,
+      earnedClientAnnual: 0,
+      earnedSpouseAnnual: 0,
+      baseRetirementNeedAnnual: 200_000,
+      needInflationAnnual: 0.03,
+      baseSocialSecurityClientAnnual: 30_000,
+      baseSocialSecuritySpouseAnnual: 0,
+      clientSocialSecurityStartAge: 67,
+      socialSecurityColaAnnual: 0,
+      basePensionAnnual: 0,
+      baseOtherIncomeAnnual: 0,
+      initialTotalPortfolio: 300_000,
+      initialQualifiedPortfolio: 300_000,
+      portfolioReturnAnnual: 0,
+      horizonYears: 20,
+    });
+    const firstZero = rows.find((r) => r.endingPortfolio <= 0 && r.incomeNeed > 0);
+    expect(firstZero).toBeDefined();
+    const afterDepletion = rows.filter(
+      (r) => r.clientAge >= firstZero!.clientAge && r.incomeNeed > 0 && r.beginningPortfolio <= 0,
+    );
+    expect(afterDepletion.length).toBeGreaterThan(0);
+    for (const r of afterDepletion) {
+      expect(r.portfolioWithdrawalBeyondRmd).toBe(0);
+      expect(r.unmetIncomeNeed).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps unmet near zero when portfolio can fund net-of-tax need", () => {
+    const rows = buildRetirementIncomeProjection({
+      ...baseInput,
+      married: false,
+      spouseAgeStart: null,
+      clientAgeStart: 70,
+      clientRetirementAge: 65,
+      earnedClientAnnual: 0,
+      earnedSpouseAnnual: 0,
+      baseRetirementNeedAnnual: 80_000,
+      needInflationAnnual: 0,
+      baseSocialSecurityClientAnnual: 0,
+      baseSocialSecuritySpouseAnnual: 0,
+      clientSocialSecurityStartAge: 67,
+      initialTotalPortfolio: 2_000_000,
+      initialQualifiedPortfolio: 2_000_000,
+      portfolioReturnAnnual: 0.05,
+      horizonYears: 3,
+      spendTargetNetOfTax: true,
+      effectiveTaxRateAnnual: 0.25,
+    });
+    const funded = rows.filter((r) => r.incomeNeed > 0 && r.endingPortfolio > 0);
+    expect(funded.length).toBeGreaterThan(0);
+    for (const r of funded) {
+      expect(r.unmetIncomeNeed).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("does not report false surplus after depletion in net-of-tax mode", () => {
+    const rows = buildRetirementIncomeProjection({
+      ...baseInput,
+      married: false,
+      spouseAgeStart: null,
+      clientAgeStart: 65,
+      clientRetirementAge: 65,
+      earnedClientAnnual: 0,
+      earnedSpouseAnnual: 0,
+      baseRetirementNeedAnnual: 1_000_000,
+      needInflationAnnual: 0.03,
+      baseSocialSecurityClientAnnual: 50_000,
+      baseSocialSecuritySpouseAnnual: 0,
+      clientSocialSecurityStartAge: 67,
+      socialSecurityColaAnnual: 0.02,
+      basePensionAnnual: 15_000,
+      pensionColaAnnual: 0.01,
+      baseOtherIncomeAnnual: 10_000,
+      otherIncomeGrowthAnnual: 0,
+      initialTotalPortfolio: 5_000_000,
+      initialQualifiedPortfolio: 4_000_000,
+      portfolioReturnAnnual: 0.04,
+      horizonYears: 35,
+      spendTargetNetOfTax: true,
+      effectiveTaxRateAnnual: 0.35,
+    });
+    const depleted = rows.filter((r) => r.endingPortfolio <= 0 && r.incomeNeed > 0);
+    expect(depleted.length).toBeGreaterThan(0);
+    for (const r of depleted) {
+      expect(r.unmetIncomeNeed).toBeGreaterThan(1000);
+      const pretaxSources =
+        r.socialSecurity + r.pension + r.otherIncome + r.rmd + r.portfolioWithdrawalBeyondRmd;
+      expect(pretaxSources).toBeLessThan(r.incomeNeed);
+    }
+  });
 });

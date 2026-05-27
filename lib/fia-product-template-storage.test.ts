@@ -24,6 +24,7 @@ function sampleTemplate(over: Partial<FiaProductTemplate> = {}): FiaProductTempl
     penaltyFreeWithdrawalPct: "10",
     surrenderYears: "10",
     hasIncomeRider: false,
+    incomeBaseBonusPct: "",
     incomeRiderGuaranteePct: "",
     contractEarningsAddToRiderBase: null,
     incomeRiderFeePct: "",

@@ -112,8 +112,8 @@ const GROUPS: StepGroup[] = [
       },
       {
         step: "feeAnalysis",
-        title: "Fee analysis",
-        description: "Holdings-level cost breakdown vs. proposed.",
+        title: "Comparative fee analysis",
+        description: "Illustrative current vs. proposed household cost comparison.",
         icon: Percent,
       },
     ],

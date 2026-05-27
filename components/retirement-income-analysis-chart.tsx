@@ -15,6 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   computeRetirementIncomeChartSummary,
+  totalIncomeSources,
   type RetirementIncomeChartRow,
 } from "@/lib/retirement-income-chart-data";
 
@@ -28,6 +29,7 @@ export const RETIREMENT_INCOME_CHART_COLORS = {
   earnedIncome: "#2563eb",
   rmd: "#b45309",
   incomeGapWithdrawal: "#eab308",
+  unmetIncomeNeed: "#dc2626",
   incomeNeedOverlay: "rgba(220, 38, 38, 0.32)",
 } as const;
 
@@ -54,26 +56,6 @@ function formatMoneyCompact(n: number): string {
   return moneyFmtCompact.format(n);
 }
 
-function totalSources(d: RetirementIncomeChartRow): number {
-  return (
-    d.earnedIncome +
-    d.socialSecurity +
-    d.pension +
-    d.otherIncome +
-    d.rmd +
-    d.incomeGapWithdrawal
-  );
-}
-
-function surplusOrDeficit(d: RetirementIncomeChartRow): { label: string; value: number; tone: "ok" | "warn" } {
-  const need = Math.max(0, d.incomeNeed);
-  const src = totalSources(d);
-  if (need <= 0) return { label: "Retirement need", value: 0, tone: "ok" };
-  const diff = src - need;
-  if (diff >= -1) return { label: "Surplus", value: diff, tone: "ok" };
-  return { label: "Deficit", value: diff, tone: "warn" };
-}
-
 type TooltipPayload = {
   dataKey?: string;
   name?: string;
@@ -86,17 +68,18 @@ function ChartTooltip({
   active,
   payload,
   label,
+  incomeNeedLabel = "Income need",
 }: {
   active?: boolean;
   payload?: TooltipPayload[];
   label?: string | number;
+  incomeNeedLabel?: string;
 }) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload;
   if (!row) return null;
-  const total = totalSources(row);
-  const sod = surplusOrDeficit(row);
-  const lines: { k: string; v: string }[] = [
+  const total = totalIncomeSources(row);
+  const lines: { k: string; v: string; warn?: boolean }[] = [
     { k: "Year", v: String(row.year) },
     { k: "Client age", v: String(row.age) },
     { k: "Earned income", v: formatMoney(row.earnedIncome) },
@@ -106,10 +89,11 @@ function ChartTooltip({
     { k: "RMD", v: formatMoney(row.rmd) },
     { k: "Income gap W/D", v: formatMoney(row.incomeGapWithdrawal) },
     { k: "Total income (sources)", v: formatMoney(total) },
-    { k: "Income need", v: formatMoney(row.incomeNeed) },
+    { k: incomeNeedLabel, v: formatMoney(row.incomeNeed) },
     {
-      k: sod.label,
-      v: formatMoney(sod.value),
+      k: "Unmet income need",
+      v: formatMoney(row.unmetIncomeNeed),
+      warn: row.unmetIncomeNeed > 1,
     },
     { k: "Total W/D pre-tax", v: formatMoney(row.totalWithdrawalsPreTax) },
     { k: "Portfolio (end)", v: formatMoney(row.portfolioEnd) },
@@ -122,7 +106,7 @@ function ChartTooltip({
         {lines.map((x) => (
           <li key={x.k} className="flex justify-between gap-4 tabular-nums">
             <span className="text-slate-500">{x.k}</span>
-            <span className={x.k === sod.label && sod.tone === "warn" ? "font-semibold text-amber-800" : ""}>{x.v}</span>
+            <span className={x.warn ? "font-semibold text-red-800" : ""}>{x.v}</span>
           </li>
         ))}
       </ul>
@@ -137,6 +121,7 @@ const LEGEND_ITEMS: { key: keyof typeof RETIREMENT_INCOME_CHART_COLORS; label: s
   { key: "earnedIncome", label: "Earned income" },
   { key: "rmd", label: "RMD" },
   { key: "incomeGapWithdrawal", label: "Income gap W/D" },
+  { key: "unmetIncomeNeed", label: "Unmet income need" },
   { key: "incomeNeedOverlay", label: "Income need (overlay)" },
 ];
 
@@ -148,6 +133,8 @@ export type RetirementIncomeAnalysisChartProps = {
   /** Annual discount rate for illustrative PV of unmet need (e.g. 0.03). */
   discountRateAnnual?: number;
   heading?: string;
+  /** Tooltip/chart label for income need (e.g. after-tax). */
+  incomeNeedLabel?: string;
 };
 
 export function RetirementIncomeAnalysisChart({
@@ -156,6 +143,7 @@ export function RetirementIncomeAnalysisChart({
   height = 380,
   discountRateAnnual = 0.03,
   heading = "Retirement income sources vs. need",
+  incomeNeedLabel = "Income need",
 }: RetirementIncomeAnalysisChartProps) {
   const summary = useMemo(
     () => computeRetirementIncomeChartSummary(data, { discountRateAnnual }),
@@ -167,8 +155,8 @@ export function RetirementIncomeAnalysisChart({
   const yDomainMax = useMemo(() => {
     let m = 0;
     for (const r of data) {
-      const src = totalSources(r);
-      const top = Math.max(src, r.incomeNeed);
+      const src = totalIncomeSources(r);
+      const top = Math.max(src + r.unmetIncomeNeed, r.incomeNeed);
       if (top > m) m = top;
     }
     if (m <= 0) return 100_000;
@@ -178,9 +166,11 @@ export function RetirementIncomeAnalysisChart({
   const legendItems = useMemo(() => {
     const hasPension = data.some((r) => r.pension > 1e-6);
     const hasOtherIncome = data.some((r) => r.otherIncome > 1e-6);
+    const hasUnmet = data.some((r) => r.unmetIncomeNeed > 1e-6);
     return LEGEND_ITEMS.filter((item) => {
       if (item.key === "pension") return hasPension;
       if (item.key === "otherIncome") return hasOtherIncome;
+      if (item.key === "unmetIncomeNeed") return hasUnmet;
       return true;
     });
   }, [data]);
@@ -208,8 +198,9 @@ export function RetirementIncomeAnalysisChart({
       <div className="border-b border-slate-100 px-4 py-4 md:px-6">
         <h3 className="font-serif text-lg font-semibold text-slate-900 md:text-xl">{heading}</h3>
         <p className="mt-1 text-xs leading-relaxed text-slate-500">
-          Stacked bars show annual income sources. Red overlay is retirement income need; surplus shows as colored bars
-          above the overlay, shortfall as visible red above sources.
+          Stacked bars show actual annual income funded from work, benefits, RMDs, and portfolio draws (capped by
+          available balance). Semi-transparent overlay is retirement income need; solid red stack is unmet need when the
+          plan cannot be fully funded.
         </p>
         <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 border-t border-slate-100 pt-3">
           {legendItems.map((item) => (
@@ -272,7 +263,7 @@ export function RetirementIncomeAnalysisChart({
               }}
             />
             <Tooltip
-              content={<ChartTooltip />}
+              content={<ChartTooltip incomeNeedLabel={incomeNeedLabel} />}
               cursor={{ fill: "rgba(15, 23, 42, 0.04)" }}
               animationDuration={200}
             />
@@ -332,6 +323,14 @@ export function RetirementIncomeAnalysisChart({
               stackId="income"
               name="Income gap W/D"
               fill={RETIREMENT_INCOME_CHART_COLORS.incomeGapWithdrawal}
+              isAnimationActive
+              animationDuration={500}
+            />
+            <Bar
+              dataKey="unmetIncomeNeed"
+              stackId="income"
+              name="Unmet income need"
+              fill={RETIREMENT_INCOME_CHART_COLORS.unmetIncomeNeed}
               radius={[6, 6, 0, 0]}
               isAnimationActive
               animationDuration={500}
@@ -351,20 +350,35 @@ export function RetirementIncomeAnalysisChart({
                 }}
               />
             ) : null}
+            {summary.firstPortfolioDepletionAge != null ? (
+              <ReferenceLine
+                x={summary.firstPortfolioDepletionAge}
+                stroke="#dc2626"
+                strokeDasharray="6 3"
+                strokeWidth={1.5}
+                label={{
+                  value: "Wealth depleted",
+                  position: "insideTopRight",
+                  fill: "#b91c1c",
+                  fontSize: 10,
+                  fontWeight: 600,
+                }}
+              />
+            ) : null}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 border-t border-slate-100 bg-slate-50/80 px-4 py-4 text-xs sm:grid-cols-2 lg:grid-cols-5 md:px-6">
+      <div className="grid grid-cols-1 gap-3 border-t border-slate-100 bg-slate-50/80 px-4 py-4 text-xs sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 md:px-6">
         <SummaryStat
           label="Years fully funded"
           value={String(summary.yearsFullyFunded)}
-          hint="Years with retirement need met by income sources"
+          hint="Retired years with no material unmet income need"
         />
         <SummaryStat
           label="Total unmet need"
           value={formatMoney(summary.totalUnmetNeed)}
-          hint="Sum of annual shortfalls (undiscounted)"
+          hint="Sum of annual income shortfalls (undiscounted)"
         />
         <SummaryStat
           label="Largest gap"
@@ -376,9 +390,19 @@ export function RetirementIncomeAnalysisChart({
           hint={summary.highestGapYear != null ? `Calendar year ${summary.highestGapYear}` : undefined}
         />
         <SummaryStat
+          label="First income shortfall (age)"
+          value={summary.firstIncomeShortfallAge != null ? String(summary.firstIncomeShortfallAge) : "—"}
+          hint="First year with positive unmet income need"
+        />
+        <SummaryStat
           label="Portfolio longevity (age)"
           value={summary.portfolioLongevityAge != null ? String(summary.portfolioLongevityAge) : "—"}
-          hint="Last projected year with ending portfolio above zero"
+          hint="Last year with ending portfolio above zero"
+        />
+        <SummaryStat
+          label="Wealth depleted (age)"
+          value={summary.firstPortfolioDepletionAge != null ? String(summary.firstPortfolioDepletionAge) : "—"}
+          hint="First year ending portfolio is zero"
         />
         <SummaryStat
           label="PV of unmet need"
@@ -414,6 +438,7 @@ export const MOCK_RETIREMENT_INCOME_CHART_DATA: RetirementIncomeChartRow[] = [
     incomeGapWithdrawal: 0,
     totalWithdrawalsPreTax: 0,
     portfolioEnd: 2_100_000,
+    unmetIncomeNeed: 0,
     hasRmd: false,
   },
   {
@@ -428,6 +453,7 @@ export const MOCK_RETIREMENT_INCOME_CHART_DATA: RetirementIncomeChartRow[] = [
     incomeGapWithdrawal: 0,
     totalWithdrawalsPreTax: 0,
     portfolioEnd: 2_150_000,
+    unmetIncomeNeed: 0,
     hasRmd: false,
   },
   {
@@ -442,6 +468,7 @@ export const MOCK_RETIREMENT_INCOME_CHART_DATA: RetirementIncomeChartRow[] = [
     incomeGapWithdrawal: 106_250,
     totalWithdrawalsPreTax: 106_250,
     portfolioEnd: 2_173_351,
+    unmetIncomeNeed: 0,
     hasRmd: false,
   },
   {
@@ -456,6 +483,7 @@ export const MOCK_RETIREMENT_INCOME_CHART_DATA: RetirementIncomeChartRow[] = [
     incomeGapWithdrawal: 58_000,
     totalWithdrawalsPreTax: 58_000,
     portfolioEnd: 2_080_000,
+    unmetIncomeNeed: 0,
     hasRmd: false,
   },
   {
@@ -470,6 +498,7 @@ export const MOCK_RETIREMENT_INCOME_CHART_DATA: RetirementIncomeChartRow[] = [
     incomeGapWithdrawal: 52_000,
     totalWithdrawalsPreTax: 52_000,
     portfolioEnd: 1_995_000,
+    unmetIncomeNeed: 0,
     hasRmd: false,
   },
   {
@@ -484,6 +513,7 @@ export const MOCK_RETIREMENT_INCOME_CHART_DATA: RetirementIncomeChartRow[] = [
     incomeGapWithdrawal: 28_000,
     totalWithdrawalsPreTax: 70_000,
     portfolioEnd: 1_420_000,
+    unmetIncomeNeed: 0,
     hasRmd: true,
   },
   {
@@ -498,6 +528,7 @@ export const MOCK_RETIREMENT_INCOME_CHART_DATA: RetirementIncomeChartRow[] = [
     incomeGapWithdrawal: 22_000,
     totalWithdrawalsPreTax: 66_000,
     portfolioEnd: 1_355_000,
+    unmetIncomeNeed: 0,
     hasRmd: true,
   },
 ];

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { isGmailConnected } from "@/lib/gmail-connection";
+import { isOutlookConnected } from "@/lib/outlook-connection";
+import { getNextAuthAuthProvider } from "@/lib/outlook-connection";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -105,6 +107,86 @@ function sanitizeModelOverrides(v: unknown): Record<string, string> | null {
   return Object.keys(out).length ? out : null;
 }
 
+function trimOrNull(value: unknown): string | null {
+  const s = String(value ?? "").trim();
+  return s || null;
+}
+
+/** Build upsert payload: start from existing row, patch only keys present in body. */
+function buildMergedProfilePayload(
+  existing: AdvisorProfileRecord | null,
+  body: Record<string, unknown>,
+  identity: { email: string; userId: string | null }
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    owner_email: identity.email,
+    owner_user_id: identity.userId,
+    email_signature: existing?.email_signature ?? null,
+    logo_url: existing?.logo_url ?? null,
+    advisor_name: existing?.advisor_name ?? null,
+    advisor_title: existing?.advisor_title ?? null,
+    advisor_license: existing?.advisor_license ?? null,
+    calendar_link: existing?.calendar_link ?? null,
+    office_address: existing?.office_address ?? null,
+    office_phone: existing?.office_phone ?? null,
+    cell_phone: existing?.cell_phone ?? null,
+    website: existing?.website ?? null,
+    disclosures_text: existing?.disclosures_text ?? null,
+    disclosures_image_url: existing?.disclosures_image_url ?? null,
+    llm_provider: existing?.llm_provider ?? null,
+    llm_model_overrides: existing?.llm_model_overrides ?? null,
+    default_research_tier: existing?.default_research_tier ?? null,
+  };
+
+  if (Object.hasOwn(body, "emailSignature")) {
+    payload.email_signature = String(body.emailSignature || "").trim();
+  }
+  if (Object.hasOwn(body, "logoUrl")) {
+    payload.logo_url = nullableTrim(body.logoUrl);
+  }
+  if (Object.hasOwn(body, "advisorName")) {
+    payload.advisor_name = trimOrNull(body.advisorName);
+  }
+  if (Object.hasOwn(body, "advisorTitle")) {
+    payload.advisor_title = trimOrNull(body.advisorTitle);
+  }
+  if (Object.hasOwn(body, "advisorLicense")) {
+    payload.advisor_license = trimOrNull(body.advisorLicense);
+  }
+  if (Object.hasOwn(body, "calendarLink")) {
+    payload.calendar_link = trimOrNull(body.calendarLink);
+  }
+  if (Object.hasOwn(body, "officeAddress")) {
+    payload.office_address = trimOrNull(body.officeAddress);
+  }
+  if (Object.hasOwn(body, "officePhone")) {
+    payload.office_phone = trimOrNull(body.officePhone);
+  }
+  if (Object.hasOwn(body, "cellPhone")) {
+    payload.cell_phone = trimOrNull(body.cellPhone);
+  }
+  if (Object.hasOwn(body, "website")) {
+    payload.website = trimOrNull(body.website);
+  }
+  if (Object.hasOwn(body, "disclosuresText")) {
+    payload.disclosures_text = trimOrNull(body.disclosuresText);
+  }
+  if (Object.hasOwn(body, "disclosuresImageUrl")) {
+    payload.disclosures_image_url = nullableTrim(body.disclosuresImageUrl);
+  }
+  if (Object.hasOwn(body, "llmProvider")) {
+    payload.llm_provider = sanitizeProvider(body.llmProvider);
+  }
+  if (Object.hasOwn(body, "llmModelOverrides")) {
+    payload.llm_model_overrides = sanitizeModelOverrides(body.llmModelOverrides);
+  }
+  if (Object.hasOwn(body, "defaultResearchTier")) {
+    payload.default_research_tier = sanitizeTier(body.defaultResearchTier);
+  }
+
+  return payload;
+}
+
 export const GET = async (req: Request) => {
   try {
     if (missingSupabaseEnv()) {
@@ -116,7 +198,19 @@ export const GET = async (req: Request) => {
       return NextResponse.json({ error: "Sign in before loading your advisor profile." }, { status: 401 });
     }
 
-    const emailConnected = await isGmailConnected(req);
+    const gmailConnected = await isGmailConnected(req);
+    const outlookConnected = await isOutlookConnected(req);
+    const emailConnected = gmailConnected || outlookConnected;
+    const authProvider = await getNextAuthAuthProvider(req);
+    const emailProvider = outlookConnected
+      ? "outlook"
+      : gmailConnected
+        ? "gmail"
+        : authProvider === "azure-ad"
+          ? "outlook"
+          : authProvider === "google"
+            ? "gmail"
+            : null;
 
     const { data, error } = await supabaseAdmin
       .from("advisorpilot_advisor_profiles")
@@ -146,6 +240,7 @@ export const GET = async (req: Request) => {
         return NextResponse.json({
           profile: retry.data ? mapProfile(retry.data as AdvisorProfileRecord) : null,
           emailConnected,
+          emailProvider,
           migrationRequired: "supabase/advisorpilot_advisor_profiles_llm_columns.sql",
         });
       }
@@ -155,6 +250,7 @@ export const GET = async (req: Request) => {
     return NextResponse.json({
       profile: data ? mapProfile(data as AdvisorProfileRecord) : null,
       emailConnected,
+      emailProvider,
     });
   } catch (err: unknown) {
     console.error("ADVISOR PROFILE GET ERROR:", err);
@@ -173,26 +269,23 @@ export const POST = async (req: Request) => {
       return NextResponse.json({ error: "Sign in before saving your advisor profile." }, { status: 401 });
     }
 
-    const body = await req.json();
-    const payload = {
-      owner_email: identity.email,
-      owner_user_id: identity.userId,
-      email_signature: String(body?.emailSignature || "").trim(),
-      logo_url: nullableTrim(body?.logoUrl),
-      advisor_name: String(body?.advisorName || "").trim() || null,
-      advisor_title: String(body?.advisorTitle || "").trim() || null,
-      advisor_license: String(body?.advisorLicense || "").trim() || null,
-      calendar_link: String(body?.calendarLink || "").trim() || null,
-      office_address: String(body?.officeAddress || "").trim() || null,
-      office_phone: String(body?.officePhone || "").trim() || null,
-      cell_phone: String(body?.cellPhone || "").trim() || null,
-      website: String(body?.website || "").trim() || null,
-      disclosures_text: String(body?.disclosuresText || "").trim() || null,
-      disclosures_image_url: nullableTrim(body?.disclosuresImageUrl),
-      llm_provider: sanitizeProvider(body?.llmProvider),
-      llm_model_overrides: sanitizeModelOverrides(body?.llmModelOverrides),
-      default_research_tier: sanitizeTier(body?.defaultResearchTier),
-    };
+    const body = (await req.json()) as Record<string, unknown>;
+
+    const { data: existing, error: loadError } = await supabaseAdmin
+      .from("advisorpilot_advisor_profiles")
+      .select("*")
+      .eq("owner_email", identity.email)
+      .maybeSingle();
+
+    if (loadError) {
+      return NextResponse.json({ error: loadError.message }, { status: 400 });
+    }
+
+    const payload = buildMergedProfilePayload(
+      existing ? (existing as AdvisorProfileRecord) : null,
+      body,
+      identity
+    );
 
     const { data, error } = await supabaseAdmin
       .from("advisorpilot_advisor_profiles")

@@ -68,6 +68,10 @@ export const GET = async (
     }
 
     const { id } = await context.params;
+    const view =
+      new URL(req.url).searchParams.get("view") === "summary"
+        ? "summary"
+        : "full";
     if (!id || !isUuid(id)) {
       return NextResponse.json(
         { error: "Invalid client id." },
@@ -98,10 +102,15 @@ export const GET = async (
       return NextResponse.json({ error: "Client not found." }, { status: 404 });
     }
 
+    const clientSelect =
+      view === "summary"
+        ? "id, owner_email, owner_user_id, client, holdings, demo_mode, total_value, status, last_contacted_at, source, created_at, updated_at, stage, owner_initials, household_label, tags, location, email, phone, inception_year, next_meeting_at, review_due_at, ytd_return, org_id, visibility"
+        : "*";
+
     const [rowResult, taskCount, noteCount] = await Promise.all([
       supabase
         .from("advisorpilot_clients")
-        .select("*")
+        .select(clientSelect)
         .eq("id", id)
         .maybeSingle(),
       supabase
@@ -138,10 +147,21 @@ export const GET = async (
       return NextResponse.json({ error: "Client not found." }, { status: 404 });
     }
 
-    const detail = toClientDetail(rowResult.data as ClientRow, {
-      openTaskCount: taskCount.count ?? 0,
-      recentNoteCount: noteCount.count ?? 0,
-    });
+    const row = rowResult.data as unknown as ClientRow;
+    const detail = toClientDetail(
+      view === "summary"
+        ? {
+            ...row,
+            analysis: null,
+            roth_worksheet: null,
+            meeting_notes: null,
+          }
+        : row,
+      {
+        openTaskCount: taskCount.count ?? 0,
+        recentNoteCount: noteCount.count ?? 0,
+      }
+    );
 
     console.info(
       `[crm:api] route=/api/clients/${id} status=200 fetchMs=${fetchMs}`

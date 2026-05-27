@@ -8,6 +8,7 @@ import { formatFiaTemplateDisplayName } from "@/lib/fia-product-template-storage
 import {
   emptyRothWorksheet,
   federalBracketIdFromWorksheetPct,
+  normalizeRothWorksheet,
   type RothFixedIndexContractFields,
   type RothWorksheet,
 } from "@/lib/roth-worksheet";
@@ -43,10 +44,10 @@ export function extractRothFicProductTemplate(ws: RothWorksheet): RothFicProduct
 }
 
 export function applyRothFicProductTemplate(ws: RothWorksheet, t: RothFicProductTemplate): RothWorksheet {
-  return {
+  return normalizeRothWorksheet({
     ...ws,
-    fic: { ...t },
-  };
+    fic: { ...ws.fic, ...t },
+  });
 }
 
 /** Keep carrier + product; clear other FIC specs so the advisor can re-enter (matches FIA remap flow). */
@@ -55,14 +56,14 @@ export function applyRothFicProductTemplateCarrierProductOnly(
   t: RothFicProductTemplate
 ): RothWorksheet {
   const blank = emptyProductFields();
-  return {
+  return normalizeRothWorksheet({
     ...ws,
     fic: {
       ...blank,
       carrierName: String(t.carrierName ?? "").trim(),
       productName: String(t.productName ?? "").trim(),
     },
-  };
+  });
 }
 
 function estimatedReturnParses(t: RothFicProductTemplate): boolean {
@@ -147,6 +148,7 @@ function parseStoredList(raw: string | null): RothFicProductTemplateSaved[] {
           base.contractEstimatedRateOfReturnPct
         ),
         maxTaxRatePct: normTemplateStr(tpl.maxTaxRatePct, base.maxTaxRatePct),
+        stateTaxPct: normTemplateStr(tpl.stateTaxPct, base.stateTaxPct),
         protectInitialInvestment: tpl.protectInitialInvestment === true,
         penaltyFreeWithdrawalPct: normTemplateStr(tpl.penaltyFreeWithdrawalPct, base.penaltyFreeWithdrawalPct),
         surrenderYears: normTemplateStr(tpl.surrenderYears, base.surrenderYears),

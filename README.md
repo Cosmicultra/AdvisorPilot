@@ -7,8 +7,8 @@ AdvisorPilot is a Next.js (App Router) web app for financial advisors to:
 - Generate polished **PDFs** (Client Snapshot + Advisor Deep Dive).
 - Save/load a simple **client database** in Supabase.
 - Optionally **email the Client Snapshot via Gmail** using Google OAuth.
-- Collect intake via a **public magic-link upload** (clients use their phone; no auth) or a **live voice intake** wizard.
-- Drive the whole app hands-free with a **Gemini Live voice agent** (navigation, search, read aloud — read-only only).
+- Collect intake via a **public magic-link upload** (clients use their phone; no auth).
+- Use **Nova** (chat + optional Gemini Live voice in the global chat widget) for CRM questions, navigation, and hands-free help.
 
 ## Tech stack
 
@@ -20,9 +20,7 @@ AdvisorPilot is a Next.js (App Router) web app for financial advisors to:
 - **Auth**:
   - **Google OAuth (Gmail send)** via `next-auth`
   - **Email/password** via a Supabase-backed API route (`/api/auth/email`)
-- **Voice**:
-  - **Live Intake** — pause-based wizard helper (Whisper STT + JSON turn + OpenAI TTS).
-  - **Voice Agent** — global, app-wide Gemini Live agent (`components/voice/voice-agent.tsx`, ⌘/Ctrl+Shift+V). Read-only / navigational tools only.
+- **Nova (chat + voice)** — global chat orchestrator (`components/chat/chat-widget.tsx`) with optional Gemini Live voice mode (`components/voice/voice-agent.tsx`). Text and voice share one conversation; voice can delegate heavy work to Nova via the `chat()` tool.
 
 ## How the app works (end-to-end)
 
@@ -51,10 +49,10 @@ The advisor product lives at **`app/app/page.tsx`** — a server-component entry
 - **`GET /api/client-upload-context/[token]`**: **public** helper for `/client-upload/[token]`; validates the token and returns any stored intake snapshot + expiry (no upload side effects).
 - **`POST /api/client-upload/ingest`**: **public** upload endpoint used by `/client-upload/[token]`; validates the token, accepts **`intakeJson`** (full normalized profile), runs statement extraction, and inserts a **Draft** row on that advisor’s client list only.
 
-### Voice
+### Nova chat + voice
 
-- **`POST /api/intake-voice` / `intake-tts` / `intake-stt`**: power the **Live Intake** overlay (pause-based: Whisper STT → JSON turn → OpenAI TTS playback).
-- **`POST /api/voice/token`**: mints `{ apiKey, model, voice, systemPrompt, tools }` for the global Voice Agent so the browser can open a Gemini Live WebSocket. Tools are read-only / navigational only (see `lib/voice/token-config.ts`).
+- **`POST /api/chat/stream`**: Nova text orchestrator (SSE).
+- **`POST /api/voice/token`**: mints Gemini Live session config for voice mode inside the chat widget.
 - **`GET/POST /api/voice/settings`** / **`POST /api/voice/audit`**: per-advisor voice prefs and append-only tool-call audit log.
 
 ### LLM control plane
@@ -90,16 +88,11 @@ Create a `.env.local` in the project root:
 OPENAI_API_KEY=...
 ```
 
-Used for statement extraction, portfolio analysis, **Live Intake** understanding, and **Live Intake** speech output.
+Used for statement extraction, portfolio analysis, and Nova chat passes (via `lib/llm/`).
 
 Optional overrides:
 
 ```bash
-# OPENAI_INTAKE_MODEL=gpt-4o-mini   # JSON turns for /api/intake-voice
-# OPENAI_TTS_MODEL=gpt-4o-mini-tts   # natural voice for /api/intake-tts (default)
-# OPENAI_TTS_VOICE=sage              # alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse
-# OPENAI_STT_MODEL=whisper-1         # Whisper model used by /api/intake-stt (mic transcription)
-
 # Per-pass models (defaults: gpt-4o). JSON passes are good candidates for gpt-4o-mini after QA.
 # OPENAI_ANALYSIS_RESEARCH_MODEL=gpt-4o           # macro web-search pass for /api/generate-analysis
 # OPENAI_ANALYSIS_JSON_MODEL=gpt-4o               # structured review JSON for /api/generate-analysis
@@ -115,13 +108,11 @@ Optional overrides:
 # ADVISORPILOT_EVAL_JSON_CANDIDATE_MODEL=gpt-4o-mini
 ```
 
-**Live Intake:** Opens a full-screen session with the logo and a **mic level visualizer**. The browser captures speech; OpenAI turns each pause-separated utterance into intake updates; replies play back via **OpenAI TTS** so they sound human—not the browser’s robotic voice. True **streaming** two-way voice (like ChatGPT Advanced Voice) would use OpenAI’s Realtime API separately; this flow is pause-based dialogue plus premium TTS.
-
-**Voice Agent:** A separate, app-wide mic button (⌘/Ctrl+Shift+V) that opens a streaming Gemini Live session. Read-only / navigational only — it can navigate screens, search your client database, open clients, read analysis sections, summarize holdings, etc., but never edits or sends anything. Requires `GEMINI_API_KEY` (see below).
+**Nova voice:** Open the chat launcher (bottom-right on `/app/*`), toggle voice mode for a Gemini Live session. Requires `GEMINI_API_KEY` (see below).
 
 Restart `npm run dev` after changing `.env.local`.
 
-Add `public/logo.png` for the Live Intake header; without it, the wordmark **AdvisorPilot** is shown.
+Add `public/logo.png` for PDFs and branding; without it, the wordmark **AdvisorPilot** is shown.
 
 ### CRM Drippers (scheduled AI templates)
 
@@ -131,10 +122,11 @@ Per-client drip templates run on a schedule via `POST /api/drippers/cron`. In pr
 DRIPPER_CRON_SECRET=...   # sent as x-cron-secret header; if unset in dev, cron is open
 ```
 
-Each successful drip also emails the **client’s CRM email** via the advisor’s **Gmail** (same OAuth as Client Snapshot). That requires:
+Each successful drip also emails the **client’s CRM email** via the advisor’s **Gmail or Outlook** (same OAuth as Client Snapshot). That requires:
 
-- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `NEXTAUTH_SECRET` (Google sign-in with `gmail.send`)
-- Advisor signed in with Google at least once after deploy so a refresh token is stored in `advisorpilot_advisor_gmail_tokens`
+- Google: `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `NEXTAUTH_SECRET` (sign-in with `gmail.send`)
+- Microsoft: `AZURE_AD_CLIENT_ID` / `AZURE_AD_CLIENT_SECRET` / `AZURE_AD_TENANT_ID` (sign-in with `Mail.Send`)
+- Advisor signed in with Google or Microsoft at least once after deploy so a refresh token is stored
 - Client `email` populated on the CRM record (Overview / Contacts)
 
 Apply `supabase/advisorpilot_client_drippers.sql`, `supabase/advisorpilot_advisor_gmail_tokens.sql` (or sections 6–7 in `supabase/_apply_all_new_migrations.sql`) before using the Drippers tab.
@@ -196,6 +188,29 @@ NEXTAUTH_SECRET=...
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 ```
+
+### Microsoft OAuth / NextAuth (for Outlook sending)
+
+Register an app in the [Microsoft Entra admin center](https://entra.microsoft.com/). Add redirect URI `{NEXTAUTH_URL}/api/auth/callback/azure-ad`, grant delegated **Mail.Send**, and create a client secret.
+
+```bash
+AZURE_AD_CLIENT_ID=...
+AZURE_AD_CLIENT_SECRET=...
+AZURE_AD_TENANT_ID=common
+```
+
+Use `common` for personal + work Microsoft accounts, or your org tenant ID for work-only sign-in (admin consent may be required for Mail.Send).
+
+Refresh tokens are stored in `advisorpilot_advisor_outlook_tokens` (apply `supabase/advisorpilot_advisor_outlook_tokens.sql` or section 10 in `supabase/_apply_all_new_migrations.sql`).
+
+### Email/password password reset (Supabase Auth)
+
+Forgot-password emails use Supabase `resetPasswordForEmail`. In the Supabase dashboard:
+
+1. **Authentication → URL configuration:** add `http://localhost:3000/reset-password` (dev) and `https://<your-domain>/reset-password` (prod) to redirect URLs.
+2. Configure Auth email delivery (SMTP or Supabase built-in) so reset emails send.
+
+Set **`NEXT_PUBLIC_APP_URL`** in production so reset links use the correct host.
 
 Run the dev server:
 

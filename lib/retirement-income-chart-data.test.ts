@@ -22,6 +22,7 @@ const sampleProjection: RetirementIncomeProjectionRow[] = [
     totalPortfolioWithdrawal: 40_000,
     beginningPortfolio: 1_000_000,
     endingPortfolio: 980_000,
+    unmetIncomeNeed: 0,
   },
   {
     yearOffset: 1,
@@ -38,6 +39,7 @@ const sampleProjection: RetirementIncomeProjectionRow[] = [
     totalPortfolioWithdrawal: 50_000,
     beginningPortfolio: 980_000,
     endingPortfolio: 940_000,
+    unmetIncomeNeed: 0,
   },
 ];
 
@@ -71,6 +73,7 @@ describe("computeRetirementIncomeChartSummary", () => {
         incomeGapWithdrawal: 0,
         totalWithdrawalsPreTax: 0,
         portfolioEnd: 1e6,
+        unmetIncomeNeed: 0,
         hasRmd: false,
       },
       {
@@ -85,6 +88,7 @@ describe("computeRetirementIncomeChartSummary", () => {
         incomeGapWithdrawal: 40_000,
         totalWithdrawalsPreTax: 40_000,
         portfolioEnd: 900_000,
+        unmetIncomeNeed: 10_000,
         hasRmd: false,
       },
     ];

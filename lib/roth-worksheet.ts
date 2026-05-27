@@ -8,6 +8,8 @@ export type RothFixedIndexContractFields = {
   trailBonusYears: string;
   contractEstimatedRateOfReturnPct: string;
   maxTaxRatePct: string;
+  /** Illustrative flat state income tax rate; blank = 0%. */
+  stateTaxPct: string;
   protectInitialInvestment: boolean;
   penaltyFreeWithdrawalPct: string;
   surrenderYears: string;
@@ -19,6 +21,8 @@ export type RothWorksheet = {
   qualifiedAssetValue: string;
   specificConversionAmount: string;
   useFixedIndexContract: boolean | null;
+  /** `null` = not yet answered — required before running Roth analysis. */
+  retirementIncomeFromConversionAccount: boolean | null;
   fic: RothFixedIndexContractFields;
 };
 
@@ -28,6 +32,7 @@ export function emptyRothWorksheet(): RothWorksheet {
     qualifiedAssetValue: "",
     specificConversionAmount: "",
     useFixedIndexContract: null,
+    retirementIncomeFromConversionAccount: null,
     fic: {
       carrierName: "",
       productName: "",
@@ -36,6 +41,7 @@ export function emptyRothWorksheet(): RothWorksheet {
       trailBonusYears: "",
       contractEstimatedRateOfReturnPct: "",
       maxTaxRatePct: "",
+      stateTaxPct: "",
       protectInitialInvestment: false,
       penaltyFreeWithdrawalPct: "",
       surrenderYears: "",
@@ -49,33 +55,54 @@ export function normalizeRothWorksheet(raw: unknown): RothWorksheet {
   const tri = (v: unknown): boolean | null =>
     v === true ? true : v === false ? false : null;
   const ficRaw = r.fic && typeof r.fic === "object" ? (r.fic as Record<string, unknown>) : {};
+  const rothStr = (v: unknown, fallback: string): string =>
+    typeof v === "string" ? v : v == null ? fallback : String(v);
 
   return {
     useEntireQualifiedBalance: tri(r.useEntireQualifiedBalance),
-    qualifiedAssetValue:
-      typeof r.qualifiedAssetValue === "string" ? r.qualifiedAssetValue : base.qualifiedAssetValue,
-    specificConversionAmount:
-      typeof r.specificConversionAmount === "string"
-        ? r.specificConversionAmount
-        : base.specificConversionAmount,
+    qualifiedAssetValue: rothStr(r.qualifiedAssetValue, base.qualifiedAssetValue),
+    specificConversionAmount: rothStr(r.specificConversionAmount, base.specificConversionAmount),
     useFixedIndexContract: tri(r.useFixedIndexContract),
+    retirementIncomeFromConversionAccount: tri(r.retirementIncomeFromConversionAccount),
     fic: {
-      carrierName: String(ficRaw.carrierName ?? base.fic.carrierName),
-      productName: String(ficRaw.productName ?? base.fic.productName),
-      premiumBonusPct: String(ficRaw.premiumBonusPct ?? base.fic.premiumBonusPct),
-      trailingBonusPct: String(ficRaw.trailingBonusPct ?? base.fic.trailingBonusPct),
-      trailBonusYears: String(ficRaw.trailBonusYears ?? base.fic.trailBonusYears),
-      contractEstimatedRateOfReturnPct: String(
-        ficRaw.contractEstimatedRateOfReturnPct ?? base.fic.contractEstimatedRateOfReturnPct
+      carrierName: rothStr(ficRaw.carrierName, base.fic.carrierName),
+      productName: rothStr(ficRaw.productName, base.fic.productName),
+      premiumBonusPct: rothStr(ficRaw.premiumBonusPct, base.fic.premiumBonusPct),
+      trailingBonusPct: rothStr(ficRaw.trailingBonusPct, base.fic.trailingBonusPct),
+      trailBonusYears: rothStr(ficRaw.trailBonusYears, base.fic.trailBonusYears),
+      contractEstimatedRateOfReturnPct: rothStr(
+        ficRaw.contractEstimatedRateOfReturnPct,
+        base.fic.contractEstimatedRateOfReturnPct
       ),
-      maxTaxRatePct: String(ficRaw.maxTaxRatePct ?? base.fic.maxTaxRatePct),
-      protectInitialInvestment: Boolean(ficRaw.protectInitialInvestment),
-      penaltyFreeWithdrawalPct: String(
-        ficRaw.penaltyFreeWithdrawalPct ?? base.fic.penaltyFreeWithdrawalPct
-      ),
-      surrenderYears: String(ficRaw.surrenderYears ?? base.fic.surrenderYears),
+      maxTaxRatePct: rothStr(ficRaw.maxTaxRatePct, base.fic.maxTaxRatePct),
+      stateTaxPct: rothStr(ficRaw.stateTaxPct, base.fic.stateTaxPct),
+      protectInitialInvestment: ficRaw.protectInitialInvestment === true,
+      penaltyFreeWithdrawalPct: rothStr(ficRaw.penaltyFreeWithdrawalPct, base.fic.penaltyFreeWithdrawalPct),
+      surrenderYears: rothStr(ficRaw.surrenderYears, base.fic.surrenderYears),
     },
   };
+}
+
+/** Merge top-level Roth worksheet fields and re-normalize (keeps fic string fields defined). */
+export function patchRothWorksheet(
+  prev: RothWorksheet,
+  patch: Partial<RothWorksheet> | ((prev: RothWorksheet) => Partial<RothWorksheet>)
+): RothWorksheet {
+  const base = normalizeRothWorksheet(prev);
+  const delta = typeof patch === "function" ? patch(base) : patch;
+  return normalizeRothWorksheet({ ...base, ...delta });
+}
+
+/** Merge FIC fields and re-normalize (keeps all fic string fields defined). */
+export function patchRothWorksheetFic(
+  prev: RothWorksheet,
+  patch: Partial<RothFixedIndexContractFields>
+): RothWorksheet {
+  const base = normalizeRothWorksheet(prev);
+  return normalizeRothWorksheet({
+    ...base,
+    fic: { ...base.fic, ...patch },
+  });
 }
 
 const FEDERAL_BRACKET_IDS = new Set(["10", "12", "22", "24", "32", "35", "37"]);

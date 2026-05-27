@@ -7,6 +7,10 @@ import {
   GOOGLE_GMAIL_REAUTHORIZE_PARAMS,
   googleGmailReconnectCallbackUrl,
 } from "@/lib/google-gmail-signin";
+import {
+  MICROSOFT_OUTLOOK_REAUTHORIZE_PARAMS,
+  microsoftOutlookReconnectCallbackUrl,
+} from "@/lib/microsoft-outlook-signin";
 import { buildAnnuityReminderPreview } from "@/lib/crm/annuity-reminder-preview";
 import type { ClientDripperEnrollment, DripperRun } from "@/lib/crm/types";
 import type { UiHolding } from "@/lib/saved-review-normalize";
@@ -90,6 +94,7 @@ export function DripperDetailDrawer({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gmailHint, setGmailHint] = useState<string | null>(null);
+  const [outlookHint, setOutlookHint] = useState<string | null>(null);
   const [runMessage, setRunMessage] = useState<{
     tone: "success" | "info" | "error";
     text: string;
@@ -119,6 +124,7 @@ export function DripperDetailDrawer({
     setFrequencyDays(enrollment?.frequencyDays ?? template.defaultFrequencyDays);
     setError(null);
     setGmailHint(null);
+    setOutlookHint(null);
     setRunMessage(null);
   }, [open, enrollment, template]);
 
@@ -189,21 +195,24 @@ export function DripperDetailDrawer({
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (json?.needsGoogleReconnect) {
-          setGmailHint(
-            json?.error ??
-              "Reconnect Google with Gmail send access, then try again."
-          );
+          setGmailHint(json?.error ?? "Reconnect Google with Gmail send access, then try again.");
+        }
+        if (json?.needsOutlookReconnect) {
+          setOutlookHint(json?.error ?? "Reconnect Microsoft with Mail.Send access, then try again.");
         }
         throw new Error(json?.error ?? `Run failed (${res.status}).`);
       }
       if (json.needsGoogleReconnect) {
-        setGmailHint(
-          json.emailError ??
-            "Drip completed but Gmail could not send. Reconnect Google below."
-        );
+        setGmailHint(json.emailError ?? "Drip completed but Gmail could not send. Reconnect Google below.");
         setRunMessage({
           tone: "error",
           text: json.emailError ?? "Reconnect Google with Gmail send access.",
+        });
+      } else if (json.needsOutlookReconnect) {
+        setOutlookHint(json.emailError ?? "Drip completed but Outlook could not send. Reconnect Microsoft below.");
+        setRunMessage({
+          tone: "error",
+          text: json.emailError ?? "Reconnect Microsoft with Mail.Send access.",
         });
       } else if (json.emailStatus === "failed") {
         setGmailHint(json.emailError ?? "Client email failed to send.");
@@ -318,6 +327,25 @@ export function DripperDetailDrawer({
               }
             >
               Reconnect Google for Gmail
+            </button>
+          </div>
+        ) : null}
+
+        {outlookHint ? (
+          <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-900">
+            <p>{outlookHint}</p>
+            <button
+              type="button"
+              className="mt-2 text-[12px] font-medium underline"
+              onClick={() =>
+                void signIn(
+                  "azure-ad",
+                  { callbackUrl: microsoftOutlookReconnectCallbackUrl() },
+                  MICROSOFT_OUTLOOK_REAUTHORIZE_PARAMS
+                )
+              }
+            >
+              Reconnect Microsoft for Outlook
             </button>
           </div>
         ) : null}

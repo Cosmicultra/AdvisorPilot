@@ -32,11 +32,24 @@ export type TasksCardProps = {
   onAddTask(): void;
 };
 
-export function TasksCard({ clientId, refreshKey, onAddTask }: TasksCardProps) {
+export function TasksCard({
+  clientId,
+  refreshKey,
+  onAddTask,
+  prefetchedTasks,
+  bundleLoading = false,
+}: TasksCardProps & {
+  prefetchedTasks?: Task[];
+  bundleLoading?: boolean;
+}) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
+    if (prefetchedTasks !== undefined) {
+      setState({ status: "ready", tasks: prefetchedTasks });
+      return;
+    }
     let cancelled = false;
     setState({ status: "loading" });
     advisorFetch(
@@ -71,7 +84,15 @@ export function TasksCard({ clientId, refreshKey, onAddTask }: TasksCardProps) {
     return () => {
       cancelled = true;
     };
-  }, [clientId, refreshKey]);
+  }, [clientId, refreshKey, prefetchedTasks]);
+
+  if (bundleLoading && prefetchedTasks === undefined) {
+    return (
+      <OverviewCard title="Open tasks">
+        <p className="text-[12px] text-slate-500">Loading…</p>
+      </OverviewCard>
+    );
+  }
 
   const handleToggle = async (task: Task) => {
     if (pendingIds.has(task.id)) return;

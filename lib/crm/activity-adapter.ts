@@ -50,7 +50,7 @@ const AUDIT_ACTION_MAP: Record<string, { type: ActivityType; title: string }> = 
   "client.deleted":        { type: "system",   title: "Client deleted" },
   "statement.extracted":   { type: "document", title: "Statement extracted" },
   "analysis.completed":    { type: "analysis", title: "Analysis completed" },
-  "fee_analysis.completed": { type: "analysis", title: "Fee analysis completed" },
+  "fee_analysis.completed": { type: "analysis", title: "Comparative fee analysis completed" },
   "report.generated":      { type: "document", title: "Report generated" },
   "email.client_snapshot_sent": { type: "email", title: "Client snapshot emailed" },
   "email.follow_up_sent":  { type: "email",    title: "Follow-up emailed" },

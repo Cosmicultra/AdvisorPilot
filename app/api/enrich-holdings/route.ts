@@ -3,6 +3,7 @@ import { enrichOneHolding, type EnrichmentInputHolding } from "@/lib/holding-enr
 import { createSupabaseAdminForEnrichmentCache } from "@/lib/security-enrichment-cache";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { resolveAdvisorLlmSelection } from "@/lib/llm";
+import { mapWithConcurrency, readConcurrencyEnv } from "@/lib/async-pool";
 
 export const runtime = "nodejs";
 
@@ -76,46 +77,51 @@ export async function POST(req: Request) {
     const identity = await resolveAdvisorIdentity(req);
     const selection = await resolveAdvisorLlmSelection(identity?.email);
 
-    for (let step = 0; step < indicesToProcess.length; step++) {
-      const i = indicesToProcess[step];
-      const rowUnknown = rawHoldings[i];
-      const row =
-        rowUnknown && typeof rowUnknown === "object" && !Array.isArray(rowUnknown)
-          ? (rowUnknown as Record<string, unknown>)
-          : {};
-      const base = { ...row };
+    const concurrency = readConcurrencyEnv("ADVISORPILOT_ENRICH_CONCURRENCY", 4);
 
-      const { patch, cacheHit } = await enrichOneHolding(
-        {
-          ...toInput(base),
-          annuityContract: base.annuityContract,
-          documentKind:
-            base.documentKind === "annuity" || base.documentKind === "brokerage"
-              ? base.documentKind
-              : undefined,
-        },
-        {
-        openfigiApiKey,
-        supabaseCache,
-        supabaseMaster: supabaseCache,
-        selection,
-        request: req,
-      });
-      const suggested = String(patch.suggested || "");
-      const merged = {
-        ...base,
-        ...patch,
-        options: mergeOptions(base.options, suggested),
-      };
+    const enrichResults = await mapWithConcurrency(
+      indicesToProcess,
+      concurrency,
+      async (i) => {
+        const rowUnknown = rawHoldings[i];
+        const row =
+          rowUnknown && typeof rowUnknown === "object" && !Array.isArray(rowUnknown)
+            ? (rowUnknown as Record<string, unknown>)
+            : {};
+        const base = { ...row };
 
+        const { patch, cacheHit } = await enrichOneHolding(
+          {
+            ...toInput(base),
+            annuityContract: base.annuityContract,
+            documentKind:
+              base.documentKind === "annuity" || base.documentKind === "brokerage"
+                ? base.documentKind
+                : undefined,
+          },
+          {
+            openfigiApiKey,
+            supabaseCache,
+            supabaseMaster: supabaseCache,
+            selection,
+            request: req,
+          }
+        );
+        const suggested = String(patch.suggested || "");
+        const merged = {
+          ...base,
+          ...patch,
+          options: mergeOptions(base.options, suggested),
+        };
+        return { index: i, merged, cacheHit };
+      }
+    );
+
+    for (const { index: i, merged, cacheHit } of enrichResults) {
       if (selective) {
         patches.push({ index: i, holding: merged, cacheHit });
       } else {
         enrichedFull.push(merged);
-      }
-
-      if (step < indicesToProcess.length - 1) {
-        await new Promise((r) => setTimeout(r, 350));
       }
     }
 

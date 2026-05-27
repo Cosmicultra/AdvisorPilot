@@ -4,11 +4,18 @@ import { redirect } from "next/navigation";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { AdvisorLoginForm } from "@/components/advisor-login-form";
 
-export default async function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ reset?: string }>;
+}) {
   const session = await getServerSession(authOptions);
   if (session?.user) {
     redirect("/app");
   }
+
+  const params = await searchParams;
+  const resetSuccess = params.reset === "success";
 
   return (
     <div className="min-h-screen bg-[#f5f6f8] text-[var(--ap-navy)]">
@@ -27,7 +34,7 @@ export default async function LoginPage() {
           </div>
         </div>
       </header>
-      <AdvisorLoginForm />
+      <AdvisorLoginForm resetSuccess={resetSuccess} />
     </div>
   );
 }

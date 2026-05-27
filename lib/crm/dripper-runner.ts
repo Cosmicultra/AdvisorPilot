@@ -5,7 +5,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
-import { sendGmailMessage } from "@/lib/gmail/send";
+import { advisorEmailReconnectFlags, resolveEmailProviderForAdvisor, sendAdvisorEmail } from "@/lib/advisor-email/send";
 import { complete, resolveAdvisorLlmSelection } from "@/lib/llm";
 import { writeActivityLog } from "@/lib/crm/activity-writer";
 import { composeDripperClientEmail } from "@/lib/crm/dripper-client-email";
@@ -46,6 +46,7 @@ export interface RunDripperResult {
   emailStatus?: DripperEmailStatus;
   emailError?: string;
   needsGoogleReconnect?: boolean;
+  needsOutlookReconnect?: boolean;
 }
 
 async function trySendDripperClientEmail(params: {
@@ -63,6 +64,7 @@ async function trySendDripperClientEmail(params: {
   emailError: string | null;
   clientEmailTo: string | null;
   needsGoogleReconnect?: boolean;
+  needsOutlookReconnect?: boolean;
 }> {
   if (!params.clientEmail?.trim()) {
     return {
@@ -85,20 +87,31 @@ async function trySendDripperClientEmail(params: {
       selection: params.selection,
     });
 
-    const sendResult = await sendGmailMessage({
+    const provider = await resolveEmailProviderForAdvisor(params.identity.email);
+    if (!provider) {
+      return {
+        emailStatus: "failed",
+        emailError: "No email provider connected for this advisor.",
+        clientEmailTo: to,
+      };
+    }
+
+    const sendResult = await sendAdvisorEmail({
       advisorEmail: params.identity.email,
       to,
       subject: composed.subject,
       plainBody: composed.plainBody,
       htmlBody: composed.htmlBody,
+      provider,
     });
 
     if (!sendResult.ok) {
+      const reconnect = advisorEmailReconnectFlags(sendResult);
       return {
         emailStatus: "failed",
         emailError: sendResult.error,
         clientEmailTo: to,
-        needsGoogleReconnect: sendResult.needsGoogleReconnect,
+        ...reconnect,
       };
     }
 
@@ -219,6 +232,7 @@ export async function runDripperForEnrollment(
   let emailError: string | null = null;
   let clientEmailTo: string | null = null;
   let needsGoogleReconnect = false;
+  let needsOutlookReconnect = false;
 
   if (status === "success" && outputText) {
     const emailAttempt = await trySendDripperClientEmail({
@@ -236,6 +250,7 @@ export async function runDripperForEnrollment(
     emailError = emailAttempt.emailError;
     clientEmailTo = emailAttempt.clientEmailTo;
     needsGoogleReconnect = emailAttempt.needsGoogleReconnect ?? false;
+    needsOutlookReconnect = emailAttempt.needsOutlookReconnect ?? false;
 
     if (emailAttempt.emailStatus === "sent" && clientEmailTo) {
       await writeAuditEvent({
@@ -348,6 +363,7 @@ export async function runDripperForEnrollment(
     emailStatus: emailStatus ?? undefined,
     emailError: emailError ?? undefined,
     needsGoogleReconnect: needsGoogleReconnect || undefined,
+    needsOutlookReconnect: needsOutlookReconnect || undefined,
   };
 }
 

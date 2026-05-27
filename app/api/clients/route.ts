@@ -97,9 +97,26 @@ export const GET = async (req: Request) => {
 
     const supabase = getCrmSupabaseAdmin();
     const startedAt = Date.now();
-    const { data, error } = await supabase.rpc("list_visible_clients", {
+    let data: ClientRow[] | null = null;
+    let error: { message: string } | null = null;
+
+    const rosterRpc = await supabase.rpc("list_visible_clients_roster", {
       viewer_email: identity.email,
     });
+    if (
+      rosterRpc.error &&
+      (rosterRpc.error.code === "PGRST202" ||
+        /list_visible_clients_roster/i.test(rosterRpc.error.message))
+    ) {
+      const fallback = await supabase.rpc("list_visible_clients", {
+        viewer_email: identity.email,
+      });
+      data = (fallback.data ?? null) as ClientRow[] | null;
+      error = fallback.error;
+    } else {
+      data = (rosterRpc.data ?? null) as ClientRow[] | null;
+      error = rosterRpc.error;
+    }
     const fetchMs = Date.now() - startedAt;
 
     if (error) {

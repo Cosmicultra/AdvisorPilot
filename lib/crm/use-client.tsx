@@ -48,6 +48,7 @@ import { advisorFetch } from "@/lib/advisor-fetch";
 import { normalizeIntakeClient, type IntakeClient } from "@/lib/intake-config";
 import {
   emptyRothWorksheet,
+  normalizeRothWorksheet,
   type RothWorksheet,
 } from "@/lib/roth-worksheet";
 import type {
@@ -171,7 +172,7 @@ export function AdvisorClientProvider({
     setClient(d.client);
     setHoldings(d.holdings ?? []);
     setAnalysis(d.analysis ?? null);
-    setRothWorksheet(d.rothWorksheet ?? emptyRothWorksheet());
+    setRothWorksheet(normalizeRothWorksheet(d.rothWorksheet ?? emptyRothWorksheet()));
     setMeetingNotes(d.meetingNotes ?? "");
   }, []);
 

@@ -24,6 +24,7 @@ import {
 import { tryExtractPdfText, isLikelyPdf } from "@/lib/extract-pdf-text-layer";
 import { enforceUploadSize } from "@/lib/llm/attachments";
 import { LlmAttachmentError, resolveAdvisorLlmSelection } from "@/lib/llm";
+import { mapWithConcurrency, readConcurrencyEnv } from "@/lib/async-pool";
 
 export const runtime = "nodejs";
 
@@ -41,12 +42,15 @@ async function enrichHoldingsWithSecuritiesMaster(
     console.warn("[analyze-statement] securities master enabled but Supabase admin client unavailable.");
   }
 
-  const out: Record<string, unknown>[] = [];
-  for (const row of holders) {
+  const concurrency = readConcurrencyEnv(
+    "ADVISORPILOT_SECURITIES_MASTER_CONCURRENCY",
+    4
+  );
+
+  return mapWithConcurrency(holders, concurrency, async (row) => {
     const rec = row as Record<string, unknown>;
     if (isAnnuityContractHolding(rec)) {
-      out.push(rec);
-      continue;
+      return rec;
     }
     const assetClass = String(rec.assetClass ?? "");
     const suggested = String(rec.suggested ?? "");
@@ -61,33 +65,27 @@ async function enrichHoldingsWithSecuritiesMaster(
           rawName,
         });
         if (hit) {
-          out.push(applyMasterResolutionToHolding(rec, hit));
-          continue;
+          return applyMasterResolutionToHolding(rec, hit);
         }
       }
-      out.push(buildCashParkingSyntheticHolding(rec));
-      continue;
+      return buildCashParkingSyntheticHolding(rec);
     }
 
     if (isCashLikeHolding(assetClass, suggested, rawName)) {
-      out.push(rec);
-      continue;
+      return rec;
     }
 
     if (!sb) {
-      out.push(rec);
-      continue;
+      return rec;
     }
 
     const sym = extractLikelySymbol(suggested, rawName);
     const hit = await resolveFromSecuritiesMaster(sb, { inferredSymbol: sym, suggested, rawName });
     if (!hit) {
-      out.push(rec);
-      continue;
+      return rec;
     }
-    out.push(applyMasterResolutionToHolding(rec, hit));
-  }
-  return out;
+    return applyMasterResolutionToHolding(rec, hit);
+  });
 }
 
 export async function POST(request: Request) {

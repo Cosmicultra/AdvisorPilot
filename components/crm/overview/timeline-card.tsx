@@ -32,10 +32,22 @@ type FetchState =
   | { status: "ready"; entries: ActivityEntry[] }
   | { status: "error"; message: string };
 
-export function TimelineCard({ clientId }: { clientId: string }) {
+export function TimelineCard({
+  clientId,
+  prefetchedActivity,
+  bundleLoading = false,
+}: {
+  clientId: string;
+  prefetchedActivity?: ActivityEntry[];
+  bundleLoading?: boolean;
+}) {
   const [state, setState] = useState<FetchState>({ status: "loading" });
 
   useEffect(() => {
+    if (prefetchedActivity !== undefined) {
+      setState({ status: "ready", entries: prefetchedActivity });
+      return;
+    }
     let cancelled = false;
     setState({ status: "loading" });
     advisorFetch(
@@ -67,7 +79,15 @@ export function TimelineCard({ clientId }: { clientId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [clientId]);
+  }, [clientId, prefetchedActivity]);
+
+  if (bundleLoading && prefetchedActivity === undefined) {
+    return (
+      <OverviewCard title="Recent activity">
+        <p className="text-[12px] text-slate-500">Loading…</p>
+      </OverviewCard>
+    );
+  }
 
   return (
     <OverviewCard title="Recent activity">

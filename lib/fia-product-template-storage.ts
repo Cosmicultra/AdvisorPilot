@@ -16,6 +16,7 @@ export type FiaProductTemplate = {
   penaltyFreeWithdrawalPct: string;
   surrenderYears: string;
   hasIncomeRider: boolean | null;
+  incomeBaseBonusPct: string;
   incomeRiderGuaranteePct: string;
   contractEarningsAddToRiderBase: boolean | null;
   incomeRiderFeePct: string;
@@ -41,6 +42,7 @@ const EMPTY_PRODUCT_TEMPLATE: FiaProductTemplate = {
   penaltyFreeWithdrawalPct: "",
   surrenderYears: "",
   hasIncomeRider: null,
+  incomeBaseBonusPct: "",
   incomeRiderGuaranteePct: "",
   contractEarningsAddToRiderBase: null,
   incomeRiderFeePct: "",
@@ -75,6 +77,7 @@ export function extractFiaProductTemplate(ws: FiaWorksheet): FiaProductTemplate 
     penaltyFreeWithdrawalPct: fiaInputValue(ws.penaltyFreeWithdrawalPct),
     surrenderYears: fiaInputValue(ws.surrenderYears),
     hasIncomeRider: ws.hasIncomeRider ?? null,
+    incomeBaseBonusPct: fiaInputValue(ws.incomeBaseBonusPct),
     incomeRiderGuaranteePct: fiaInputValue(ws.incomeRiderGuaranteePct),
     contractEarningsAddToRiderBase: ws.contractEarningsAddToRiderBase ?? null,
     incomeRiderFeePct: fiaInputValue(ws.incomeRiderFeePct),
@@ -94,6 +97,7 @@ export function applyFiaProductTemplate(ws: FiaWorksheet, t: FiaProductTemplate)
     penaltyFreeWithdrawalPct: t.penaltyFreeWithdrawalPct,
     surrenderYears: t.surrenderYears,
     hasIncomeRider: t.hasIncomeRider,
+    incomeBaseBonusPct: t.incomeBaseBonusPct,
     incomeRiderGuaranteePct: t.incomeRiderGuaranteePct,
     contractEarningsAddToRiderBase: t.contractEarningsAddToRiderBase,
     incomeRiderFeePct: t.incomeRiderFeePct,
@@ -117,6 +121,7 @@ export function applyFiaProductTemplateCarrierProductOnly(ws: FiaWorksheet, t: F
     penaltyFreeWithdrawalPct: blank.penaltyFreeWithdrawalPct,
     surrenderYears: blank.surrenderYears,
     hasIncomeRider: blank.hasIncomeRider,
+    incomeBaseBonusPct: blank.incomeBaseBonusPct,
     incomeRiderGuaranteePct: blank.incomeRiderGuaranteePct,
     contractEarningsAddToRiderBase: blank.contractEarningsAddToRiderBase,
     incomeRiderFeePct: blank.incomeRiderFeePct,
@@ -208,6 +213,7 @@ function parseStoredList(raw: string | null): FiaProductTemplateSaved[] {
           surrenderYears: normTemplateStr(tpl.surrenderYears, base.surrenderYears),
           hasIncomeRider:
             tpl.hasIncomeRider === true ? true : tpl.hasIncomeRider === false ? false : null,
+          incomeBaseBonusPct: normTemplateStr(tpl.incomeBaseBonusPct, base.incomeBaseBonusPct),
           incomeRiderGuaranteePct: normTemplateStr(tpl.incomeRiderGuaranteePct, base.incomeRiderGuaranteePct),
           contractEarningsAddToRiderBase:
             tpl.contractEarningsAddToRiderBase === true

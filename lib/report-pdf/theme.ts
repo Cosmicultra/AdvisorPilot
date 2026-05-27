@@ -34,7 +34,7 @@ export const colors = {
   donutCash: rgb(200 / 255, 168 / 255, 58 / 255),
   donutOther: rgb(154 / 255, 148 / 255, 136 / 255),
   donutTrack: rgb(236 / 255, 232 / 255, 226 / 255),
-  tableHeadText: rgb(138 / 255, 171 / 255, 219 / 255),
+  tableHeadText: rgb(1, 1, 1),
   tableZebra: rgb(247 / 255, 244 / 255, 239 / 255),
   tableFoot: rgb(240 / 255, 236 / 255, 228 / 255),
   calloutBorder: rgb(226 / 255, 221 / 255, 214 / 255),

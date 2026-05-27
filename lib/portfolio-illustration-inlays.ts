@@ -8,8 +8,21 @@ import type { PDFPage, PDFFont } from "pdf-lib";
 import { rgb } from "pdf-lib";
 import type { RothConversionModelResult } from "@/lib/roth-conversion-analysis";
 import { ROTH_ASSUMPTION_VERSION } from "@/lib/roth-conversion-analysis";
-import { buildFiaScenarioSummaries } from "@/lib/fia-illustration";
-import { fiaInputValue, normalizeFiaWorksheet } from "@/lib/fia-worksheet";
+import { buildFiaScenarioVisualData } from "@/lib/fia-comparison-visuals";
+import {
+  buildFiaScenarioSummaries,
+  formatFiaYearWindowLabel,
+  pickMostRecentFiaScenario,
+} from "@/lib/fia-illustration";
+import { fiaInputValue, normalizeFiaWorksheet, parsePct } from "@/lib/fia-worksheet";
+import { buildRothComparisonVisualData } from "@/lib/roth-comparison-visuals";
+import { appendFiaComparisonGraphicsPdf } from "@/lib/report-pdf/fia-comparison-graphics-pdf";
+import {
+  drawTitledTableAtomic,
+  startDedicatedPage,
+  type ComparisonGraphicsLayout,
+} from "@/lib/report-pdf/comparison-graphics-primitives";
+import { appendRothComparisonGraphicsPdf } from "@/lib/report-pdf/roth-comparison-graphics-pdf";
 import { colors as reportColors } from "@/lib/report-pdf/theme";
 
 const rothTheme = {
@@ -29,8 +42,17 @@ const rothTheme = {
   rothBarSoft: reportColors.synopsisBg,
 };
 
-const PAIRED_BAR_INTRO_TEXT =
-  "Paired bars use a common scale within each metric (longer bar equals larger modeled value). This view relies on simplifying assumptions: it is not predictive of actual taxes, Medicare surcharges, or investment returns.";
+const FIA_GRAPHICS_DISCLOSURE =
+  "The FIA comparison graphics show an illustrative side-by-side view of contract value versus a fully exposed S&P 500 path using the same premium, illustrative RMD withdrawals, and calendar years from the most recent decade window only. The S&P path is hypothetical and is not an investable product or a carrier illustration.";
+
+const FIA_GRAPHICS_DISCLOSURE_2 =
+  "Stacked-bar and protection visuals summarize credited interest, illustrative RMDs, and 0% floor / cap behavior in down and up years. They are illustrative summaries only and are not predictive of future crediting, carrier pricing, or market results.";
+
+const ROTH_GRAPHICS_DISCLOSURE =
+  "The Roth comparison graphics summarize modeled lifetime wealth, allocation among income you keep, legacy to heirs, and taxes plus IRMAA, plus a bracket-fill strategy view. Legacy to heirs equals ending balance; estate and gift taxes are not modeled.";
+
+const ROTH_GRAPHICS_DISCLOSURE_2 =
+  "Bracket zone and effective tax plus IRMAA rate visuals rely on simplifying assumptions. They are not tax, legal, investment, or Medicare advice and should be confirmed with qualified professionals before any transaction.";
 
 const ROTH_REPORT_SCOPE_DISCLOSURE =
   "This report compares an illustrative current-allocation path with a modeled Roth conversion path. Assumptions, inputs, and limitations for that illustration are included in Disclosures below.";
@@ -97,170 +119,43 @@ function wrapPlainText(lineMeasurer: (s: string) => number, text: string, size: 
   return out;
 }
 
-/** Scale column widths so the table fits the portfolio content area (FIA summary can exceed page width otherwise). */
-function scaleColWidthsToTarget(colWidths: number[], targetSum: number): number[] {
-  const sum = colWidths.reduce((a, b) => a + b, 0);
-  if (sum <= 0 || targetSum <= 0) return colWidths.slice();
-  const factor = targetSum / sum;
-  return colWidths.map((w) => w * factor);
-}
-
-function drawScenarioBarBlockInlay(
-  L: PortfolioIllustrationLayout,
-  metric: string,
-  stayVal: number,
-  rothVal: number
-): void {
-  let page = L.getPage();
-  let y = L.getY();
-  const regular = L.regular;
-  const bold = L.bold;
-  const leftPad = L.margin;
-  const labelColW = 118;
-  const barMaxW = Math.min(230, L.contentW - labelColW - 24);
-  const barH = 12;
-  const rowGap = 6;
-  const blockGap = 22;
-  const scaleMax = Math.max(stayVal, rothVal, 1);
-
-  const ensureY = (minY: number) => {
-    if (y < minY) {
-      L.addContinuationPage();
-      y = L.getY();
-      page = L.getPage();
-    }
+function asGraphicsLayout(L: PortfolioIllustrationLayout): ComparisonGraphicsLayout {
+  return {
+    ...L,
+    pageBg: L.pageBg ?? rothTheme.pageBg,
+    accent: L.stayBar,
+    monoMedium: L.monoMedium,
   };
-
-  ensureY(L.footerSafeY + 160);
-  page.drawText(cleanText(metric), {
-    x: leftPad,
-    y,
-    size: 8.5,
-    font: bold,
-    color: rothTheme.ink,
-  });
-  y -= 16;
-
-  const drawPair = (subtitle: string, val: number, fill: ReturnType<typeof rgb>, track: ReturnType<typeof rgb>) => {
-    ensureY(L.footerSafeY + 80);
-    page = L.getPage();
-    page.drawText(cleanText(subtitle), {
-      x: leftPad + 4,
-      y,
-      size: 6.8,
-      font: regular,
-      color: rothTheme.muted,
-    });
-    y -= rowGap + 2;
-    const trackX = leftPad + labelColW;
-    const wBar = Math.max(2, (val / scaleMax) * barMaxW);
-    const barBottomY = y - barH + 2;
-    page.drawRectangle({
-      x: trackX,
-      y: barBottomY,
-      width: barMaxW,
-      height: barH,
-      color: track,
-    });
-    page.drawRectangle({ x: trackX, y: barBottomY, width: wBar, height: barH, color: fill });
-    const valTxt = cleanText(money(val));
-    page.drawText(valTxt, {
-      x: trackX + barMaxW + 10,
-      y: barBottomY + 3,
-      size: 8,
-      font: bold,
-      color: rothTheme.ink,
-    });
-    y -= barH + rowGap + 10;
-  };
-
-  drawPair("Current allocation path", stayVal, rothTheme.scoreRed, rothTheme.stayBarSoft);
-  drawPair("Roth conversion path", rothVal, rothTheme.rothBar, rothTheme.rothBarSoft);
-  y -= blockGap - 8;
-  L.setY(y);
 }
 
 function drawRothTableInlay(
   L: PortfolioIllustrationLayout,
+  title: string,
   headers: string[],
   rows: string[][],
   colWidths: number[],
 ): void {
-  drawPortfolioDataTable(L, headers, rows, colWidths, { fs: 6.8, rowH: 20, headerH: 22 });
+  drawTitledTableAtomic(asGraphicsLayout(L), title, rothTheme.navy, headers, rows, colWidths, { boldTotalRow: true });
 }
 
 /** Roth comparison figures + stay/roth tables only (no separate Roth disclosures page). */
 export function appendRothIllustrationFiguresAndTables(
   L: PortfolioIllustrationLayout,
-  model: RothConversionModelResult
+  model: RothConversionModelResult,
+  clientName?: string,
+  rothExhibitNumber?: number,
 ): void {
-  const regular = L.regular;
-  const bold = L.bold;
-  const lineH = 11;
-  const widthOf = (s: string, size: number) => regular.widthOfTextAtSize(s, size);
-  const left = L.margin;
-  const wrapW = L.contentW;
-
-  const drawPara = (text: string, size = 8, color = rothTheme.ink) => {
-    const lines = wrapPlainText((t) => widthOf(t, size), text, size, wrapW);
-    for (const line of lines) {
-      if (L.getY() < L.footerSafeY + 40) L.addContinuationPage();
-      L.getPage().drawText(line, { x: left, y: L.getY(), size, font: regular, color });
-      L.setY(L.getY() - lineH);
-    }
-    L.setY(L.getY() - 4);
-  };
-
-  L.setY(L.getY() - 8);
-  if (L.getY() < L.footerSafeY + 160) L.addContinuationPage();
-
-  for (const ln of wrapPlainText((t) => regular.widthOfTextAtSize(t, 7.25), PAIRED_BAR_INTRO_TEXT, 7.25, wrapW)) {
-    if (L.getY() < L.footerSafeY + 40) L.addContinuationPage();
-    L.getPage().drawText(ln, { x: left, y: L.getY(), size: 7.25, font: regular, color: rothTheme.muted });
-    L.setY(L.getY() - 10);
-  }
   L.setY(L.getY() - 8);
 
-  const stayFedTaxLifetime = model.stayTraditional.reduce((sum, row) => sum + row.illustrativeFederalTax, 0);
+  const visualData = buildRothComparisonVisualData(model);
+  appendRothComparisonGraphicsPdf(asGraphicsLayout(L), visualData, clientName, rothExhibitNumber);
+
+  startDedicatedPage(asGraphicsLayout(L));
+
   const stayEndBal =
     model.stayTraditional.length > 0 ? model.stayTraditional[model.stayTraditional.length - 1]!.endBalance : 0;
   const stayIncomeColumnSum = model.stayTraditional.reduce((sum, row) => sum + row.reportIncomeAnnual, 0);
   const rothIncomeColumnSum = model.rothConversion.reduce((sum, row) => sum + row.reportIncomeAnnual, 0);
-
-  drawScenarioBarBlockInlay(
-    L,
-    "Federal income tax modeled (lifetime sum of illustration estimates)",
-    stayFedTaxLifetime,
-    model.rothConversionTotals.totalConversionTaxPaid
-  );
-  drawScenarioBarBlockInlay(
-    L,
-    "Medicare IRMAA surcharges (illustrative, lifetime)",
-    model.stayTraditionalTotals.totalIrmaaPaid,
-    model.rothConversionTotals.totalIrmaaPaid
-  );
-  drawScenarioBarBlockInlay(
-    L,
-    "Required minimum distributions withdrawn (lifetime, illustration)",
-    model.stayTraditionalTotals.totalRmdWithdrawals,
-    model.rothConversionTotals.totalRmdTraditional
-  );
-  drawScenarioBarBlockInlay(
-    L,
-    "Ending illustrative balance / Roth bucket",
-    stayEndBal,
-    model.rothConversionTotals.endingTotalRothBalance
-  );
-
-  drawPara(
-    "Ending balances are not interchangeable: traditional IRA balance differs from aggregated Roth IRA under the modeled paths.",
-    6.75,
-    rothTheme.muted
-  );
-
-  L.addContinuationPage();
-  L.setY(L.getY() - 6);
-  drawPara("Current allocation path — 10% annual growth with RMDs from age 73", 8, rothTheme.navy);
 
   const stayHeaders = ["Yr", "Age", "IRA balance", "Income", "Illust. tax", "End bal", "RMD", "IRMAA"];
   const stayW = [26, 30, 56, 52, 58, 58, 52, 50];
@@ -284,11 +179,6 @@ export function appendRothIllustrationFiguresAndTables(
     money(model.stayTraditionalTotals.totalRmdWithdrawals),
     money(model.stayTraditionalTotals.totalIrmaaPaid),
   ];
-  drawRothTableInlay(L, stayHeaders, [...stayBody, stayFooter], stayW);
-
-  L.addContinuationPage();
-  drawPara("Roth conversion path", 8, rothTheme.navy);
-  L.setY(L.getY() - 6);
 
   const rothHeaders = ["Yr", "Age", "Taxable IRA", "Income", "Gross conv", "Tax", "Net conv", "Total Roth", "RMD", "IRMAA"];
   const rothW = [20, 24, 48, 44, 44, 40, 44, 50, 40, 48];
@@ -316,11 +206,30 @@ export function appendRothIllustrationFiguresAndTables(
     money(model.rothConversionTotals.totalRmdTraditional),
     money(model.rothConversionTotals.totalIrmaaPaid),
   ];
-  drawRothTableInlay(L, rothHeaders, [...rothBody, rothFooter], rothW);
+
+  drawRothTableInlay(
+    L,
+    "Current allocation path — 10% annual growth with RMDs from age 73",
+    stayHeaders,
+    [...stayBody, stayFooter],
+    stayW,
+  );
+
+  drawRothTableInlay(L, "Roth conversion path", rothHeaders, [...rothBody, rothFooter], rothW);
 }
 
 export function getRothDisclosureChunksForPortfolio(model: RothConversionModelResult, need: number): ReportDisclosureChunk[] {
   const chunks: ReportDisclosureChunk[] = [
+    {
+      title: "Roth comparison graphics (illustrative)",
+      paragraphs: [
+        "Illustrative stay vs. conversion paths; assumptions, inputs, and limitations for that illustration are included in this Disclosures section.",
+        "Illustrative comparison only — not tax, Medicare, or investment advice. Legacy to heirs uses ending balance; estate and gift taxes are not modeled.",
+        "Lifetime wealth graphics compare ending after-tax wealth under the modeled stay-traditional path versus the Roth conversion path at the end of the illustrated horizon; whether the Roth path leaves more or less wealth depends on your inputs.",
+        ROTH_GRAPHICS_DISCLOSURE,
+        ROTH_GRAPHICS_DISCLOSURE_2,
+      ],
+    },
     {
       title: "Roth conversion illustration (scope)",
       paragraphs: [ROTH_REPORT_SCOPE_DISCLOSURE],
@@ -348,8 +257,23 @@ export function getRothDisclosureChunksForPortfolio(model: RothConversionModelRe
   return chunks;
 }
 
-export function getFiaDisclosureChunksForPortfolio(): ReportDisclosureChunk[] {
+export function getFiaDisclosureChunksForPortfolio(opts?: { productLine?: string }): ReportDisclosureChunk[] {
+  const comparisonParas = [
+    "Advisor-entered terms; illustrative only, not a carrier illustration.",
+    "Advisor-entered terms; index history matches firm S&P 500 calendar-year calibration. Down years credit 0%; up years credit the lesser of index return and cap. Illustrative only — not a carrier illustration.",
+    "The comparison graphics use firm S&P 500 calendar-year calibration; the FIA path applies your entered cap, floor, bonus, and rider rules. The hypothetical S&P 500 path is fully exposed to each year's index return.",
+    "The ending-value graphic uses the same calendar years, same starting premium, and the same illustrative RMD withdrawals for both paths.",
+    FIA_GRAPHICS_DISCLOSURE,
+    FIA_GRAPHICS_DISCLOSURE_2,
+  ];
+  if (opts?.productLine) {
+    comparisonParas.splice(2, 0, `Product illustrated: ${opts.productLine}.`);
+  }
   return [
+    {
+      title: "FIA comparison graphics (illustrative)",
+      paragraphs: comparisonParas,
+    },
     {
       title: "Hypothetical FIA calculator (illustrative)",
       paragraphs: [
@@ -360,112 +284,17 @@ export function getFiaDisclosureChunksForPortfolio(): ReportDisclosureChunk[] {
   ];
 }
 
-function drawTableHeaderBand(
-  L: PortfolioIllustrationLayout,
-  page: PDFPage,
-  yTop: number,
-  headers: string[],
-  scaledWidths: number[],
-  tableW: number,
-  headerH: number,
-  fs: number,
-) {
-  const x0 = L.margin;
-  const headBg = L.navyLight;
-  const headText = L.tableHeadText ?? rothTheme.tableHeadText;
-  const bandBottom = yTop - headerH;
-  page.drawRectangle({ x: x0, y: bandBottom, width: tableW, height: headerH, color: headBg });
-  let cx = x0;
-  const headerBaseline = yTop - headerH + 7;
-  for (let i = 0; i < headers.length; i++) {
-    page.drawText(cleanText(headers[i]).toUpperCase().slice(0, 40), {
-      x: cx + 8,
-      y: headerBaseline,
-      size: fs - 0.5,
-      font: L.bold,
-      color: headText,
-    });
-    cx += scaledWidths[i]!;
-  }
-}
-
-function drawPortfolioDataTable(
-  L: PortfolioIllustrationLayout,
-  headers: string[],
-  rows: string[][],
-  colWidths: number[],
-  opts?: { fs?: number; rowH?: number; headerH?: number },
-): void {
-  const fs = opts?.fs ?? 7;
-  const rowH = opts?.rowH ?? 22;
-  const headerH = opts?.headerH ?? 22;
-  const x0 = L.margin;
-  const zebra = L.surface;
-  const pageBg = L.pageBg ?? rothTheme.pageBg;
-
-  const targetInner = Math.max(200, L.contentW);
-  const scaledWidths = scaleColWidthsToTarget(colWidths, targetInner);
-  const tableW = scaledWidths.reduce((a, b) => a + b, 0);
-
-  let page = L.getPage();
-  let y = L.getY();
-
-  const startTable = () => {
-    if (y < L.footerSafeY + headerH + rowH + 24) {
-      L.addContinuationPage();
-      page = L.getPage();
-      y = L.getY();
-    }
-    drawTableHeaderBand(L, page, y, headers, scaledWidths, tableW, headerH, fs);
-    y -= headerH;
-  };
-
-  startTable();
-
-  let rIdx = 0;
-  for (const row of rows) {
-    if (y < L.footerSafeY + rowH + 12) {
-      L.addContinuationPage();
-      page = L.getPage();
-      y = L.getY();
-      drawTableHeaderBand(L, page, y, headers, scaledWidths, tableW, headerH, fs);
-      y -= headerH;
-    }
-    const rowFill = rIdx % 2 === 0 ? zebra : pageBg;
-    const rowBottom = y - rowH;
-    page.drawRectangle({ x: x0, y: rowBottom, width: tableW, height: rowH, color: rowFill });
-    let cx = x0;
-    const cellBaseline = rowBottom + rowH / 2 - 2;
-    for (let c = 0; c < row.length; c++) {
-      const cell = cleanText(row[c]).slice(0, 48);
-      const useMono = Boolean(L.mono && c > 0);
-      page.drawText(cell, {
-        x: cx + 8,
-        y: cellBaseline,
-        size: fs,
-        font: useMono ? L.mono! : L.regular,
-        color: L.ink,
-      });
-      cx += scaledWidths[c]!;
-    }
-    y = rowBottom;
-    rIdx++;
-  }
-
-  L.setY(y - 14);
-}
-
 function drawFiaTableInlay(
   L: PortfolioIllustrationLayout,
+  title: string,
   headers: string[],
   rows: string[][],
   colWidths: number[],
-  fs = 6.8,
 ): void {
-  drawPortfolioDataTable(L, headers, rows, colWidths, { fs, rowH: 20, headerH: 22 });
+  drawTitledTableAtomic(asGraphicsLayout(L), title, L.navyLight, headers, rows, colWidths);
 }
 
-/** FIA summary + year-by-year tables (no separate FIA disclosures page). */
+/** FIA comparison graphics (most recent window) + summary and year-by-year tables for all windows. */
 export function appendFiaIllustrationFiguresAndTables(
   L: PortfolioIllustrationLayout,
   input: {
@@ -482,38 +311,24 @@ export function appendFiaIllustrationFiguresAndTables(
   const summaries = buildFiaScenarioSummaries(ws, premium, input.fiaClientAgeForIllustration);
   if (summaries.length === 0) return false;
 
+  const scenario = pickMostRecentFiaScenario(summaries);
+  if (!scenario) return false;
+
   const showRmd = summaries.some((s) => s.totalRmdDuringWindow > 0.5);
   const showRider = ws.hasIncomeRider === true;
+  const capPct = parsePct(fiaInputValue(ws.contractCapRatePct)) ?? 0;
+  const windowLabel = formatFiaYearWindowLabel(scenario.years[0], scenario.years[9]);
+  const visualData = buildFiaScenarioVisualData(scenario.rows, {
+    capPct,
+    windowLabel,
+    tabLabel: scenario.tabLabel,
+    showRider,
+  });
+  if (!visualData) return false;
 
-  const regular = L.regular;
-  const lineH = 11;
-  const left = L.margin;
-  const wrapW = L.contentW;
-  const widthOf = (s: string, size: number) => regular.widthOfTextAtSize(s, size);
+  appendFiaComparisonGraphicsPdf(asGraphicsLayout(L), visualData, showRider);
 
-  const drawPara = (text: string, size = 8, color = L.ink) => {
-    const lines = wrapPlainText((t) => widthOf(t, size), text, size, wrapW);
-    for (const line of lines) {
-      if (L.getY() < L.footerSafeY + 36) L.addContinuationPage();
-      L.getPage().drawText(line, { x: left, y: L.getY(), size, font: regular, color });
-      L.setY(L.getY() - lineH);
-    }
-    L.setY(L.getY() - 4);
-  };
-
-  drawPara(
-    "Advisor-entered terms; index history matches firm S&P 500 calendar-year calibration. Down years credit 0%; up years credit the lesser of index return and cap. Illustrative only — not a carrier illustration.",
-    7.5,
-    L.muted
-  );
-
-  const carrier = fiaInputValue(ws.carrierName).trim();
-  const product = fiaInputValue(ws.productName).trim();
-  if (carrier || product) {
-    drawPara(`Product: ${carrier}${carrier && product ? " — " : ""}${product}`, 8, L.ink);
-  }
-
-  L.setY(L.getY() - 10);
+  startDedicatedPage(asGraphicsLayout(L));
 
   const sumHeaders = ["Window", "Hypo. annual credited", "Ending value"];
   const sumW = [200, 120, 120];
@@ -535,13 +350,9 @@ export function appendFiaIllustrationFiguresAndTables(
     if (showRider) row.push(money(s.endingRiderBenefitBase));
     return row;
   });
-  drawFiaTableInlay(L, sumHeaders, sumRows, sumW);
+  drawFiaTableInlay(L, "Hypothetical annualized credited return by window", sumHeaders, sumRows, sumW);
 
   for (const s of summaries) {
-    if (L.getY() < L.footerSafeY + 100) L.addContinuationPage();
-    drawPara(`Year-by-year path — ${s.tabLabel} (${s.years[0]}–${s.years[9]})`, 8, L.navyLight);
-    L.setY(L.getY() - 6);
-
     const yHeaders = ["Year", "S&P %", "Credited %", "Start", "Interest", "End"];
     const yW = [44, 44, 52, 72, 72, 72];
     if (showRmd) {
@@ -565,7 +376,13 @@ export function appendFiaIllustrationFiguresAndTables(
       if (showRider) row.push(money(r.riderBenefitBase));
       return row;
     });
-    drawFiaTableInlay(L, yHeaders, yRows, yW, 6.4);
+    drawFiaTableInlay(
+      L,
+      `Year-by-year path — ${s.tabLabel} (${formatFiaYearWindowLabel(s.years[0], s.years[9])})`,
+      yHeaders,
+      yRows,
+      yW,
+    );
   }
 
   return true;

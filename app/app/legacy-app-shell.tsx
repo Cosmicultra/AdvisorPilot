@@ -85,8 +85,16 @@ import {
   FEDERAL_TAX_BRACKET_IDS,
   RISK_PROFILES,
 } from "@/lib/intake-config";
+import {
+  useAdvisorProfileContextOptional,
+  type AdvisorProfileApiBody,
+} from "@/lib/advisor-profile-context";
 import { advisorFetch, AP_SUPABASE_AT, AP_SUPABASE_RT } from "@/lib/advisor-fetch";
 import { GOOGLE_GMAIL_REAUTHORIZE_PARAMS, googleGmailReconnectCallbackUrl } from "@/lib/google-gmail-signin";
+import {
+  MICROSOFT_OUTLOOK_REAUTHORIZE_PARAMS,
+  microsoftOutlookReconnectCallbackUrl,
+} from "@/lib/microsoft-outlook-signin";
 import {
   normalizeAiAnalysis,
   normalizeHoldingsForUi,
@@ -98,15 +106,23 @@ import {
 import {
   emptyRothWorksheet,
   normalizeRothWorksheet,
+  patchRothWorksheet,
+  patchRothWorksheetFic,
   parseMoneyInput as parseRothMoneyInput,
   rothIllustrationQualifiedBalance,
   type RothWorksheet,
 } from "@/lib/roth-worksheet";
-import { buildRothConversionModelForAdvisorUi } from "@/lib/roth-conversion-ui-model";
+import {
+  buildRothConversionModelForAdvisorUi,
+  computeOptimizedRothPremiumForAdvisorUi,
+} from "@/lib/roth-conversion-ui-model";
+import { RMD_ILLUSTRATION_START_AGE } from "@/lib/roth-conversion-analysis";
+import { parseClientAgeForIllustration } from "@/lib/roth-inputs";
 import {
   emptyFiaWorksheet,
   fiaInputValue,
   normalizeFiaWorksheet,
+  parsePct,
   type FiaWorksheet,
 } from "@/lib/fia-worksheet";
 import {
@@ -161,13 +177,14 @@ import {
   type AccountRefreshResolution,
 } from "@/lib/crm/merge-account-holdings";
 import { AccountRefreshMappingPanel } from "@/components/account-refresh-mapping-panel";
-import { FiaScenarioReturnChart } from "@/components/fia-scenario-return-chart";
+import { FiaScenarioComparisonVisuals } from "@/components/fia/fia-scenario-comparison-visuals";
 import { ASSET_CLASSES, classifyAllocationBucket, isCanonicalAssetClass } from "@/lib/asset-classes";
 import {
-  groupFeeAnalysisFundRowsByAccount,
-  parseAdvisorFeePercentPoints,
-  type FeeAnalysisApiResponse,
-} from "@/lib/fee-analysis";
+  emptyFeeAnalysisWorksheet,
+  normalizeFeeAnalysisWorksheet,
+  type FeeAnalysisWorksheet,
+} from "@/lib/comparative-fee-analysis";
+import { ComparativeFeeAnalysis } from "@/components/workflow/comparative-fee-analysis";
 import { ALLOCATION_SLEEVE_COLORS } from "@/lib/allocation-display";
 import { bucketValuesToPercents, allocationForRiskModel } from "@/lib/allocation-math";
 import {
@@ -180,8 +197,10 @@ import {
   scenarioProposedPortfolioSingleYearReturnDecimal,
 } from "@/lib/ten-year-scenario-models";
 import { buildRetirementIncomeProjection } from "@/lib/retirement-income-projection";
+import { cn } from "@/lib/utils";
 import { mapRetirementIncomeProjectionToChartRows } from "@/lib/retirement-income-chart-data";
 import { RetirementIncomeAnalysisChart } from "@/components/retirement-income-analysis-chart";
+import { RothComparisonVisuals } from "@/components/roth/roth-comparison-visuals";
 import {
   illustrativeSpouseMonthlyMaxOwnOrSpousal,
   illustrativeSsaRetirementBenefitMonthly,
@@ -632,7 +651,7 @@ function wizardRailLabel(item: string) {
   if (item === "intake") return "Client Profile";
   if (item === "fia") return "FIA calculator";
   if (item === "retIncome") return "Ret. Inc Calculator";
-  if (item === "feeAnalysis") return "Fee analysis";
+  if (item === "feeAnalysis") return "Comparative fee analysis";
   return item.charAt(0).toUpperCase() + item.slice(1);
 }
 
@@ -1041,8 +1060,48 @@ function IntakeShell({
   );
 }
 
+function applyAdvisorProfileFromApi(
+  data: AdvisorProfileApiBody,
+  setters: {
+    setEmailSignature: (v: string) => void;
+    setSignatureName: (v: string) => void;
+    setSignatureTitle: (v: string) => void;
+    setSignatureLicense: (v: string) => void;
+    setSignatureCalendarLink: (v: string) => void;
+    setSignatureAddress: (v: string) => void;
+    setSignatureOfficePhone: (v: string) => void;
+    setSignatureCellPhone: (v: string) => void;
+    setSignatureWebsite: (v: string) => void;
+    setSignatureLogoUrl: (v: string) => void;
+    setSignatureDisclosuresText: (v: string) => void;
+    setSignatureDisclosuresImageUrl: (v: string) => void;
+  }
+) {
+  const profile = data?.profile || {};
+  const savedSignature = profile.emailSignature || "";
+  const savedCalendarLink = String(profile.calendarLink || "").trim();
+  const inferredLinkFromSignature =
+    !savedCalendarLink && typeof savedSignature === "string"
+      ? (savedSignature.match(/https?:\/\/[^\s]+/i)?.[0] || "").trim()
+      : "";
+
+  setters.setEmailSignature(savedSignature);
+  setters.setSignatureName(profile.advisorName || "");
+  setters.setSignatureTitle(profile.advisorTitle || "");
+  setters.setSignatureLicense(profile.advisorLicense || "");
+  setters.setSignatureCalendarLink(savedCalendarLink || inferredLinkFromSignature);
+  setters.setSignatureAddress(profile.officeAddress || "");
+  setters.setSignatureOfficePhone(profile.officePhone || "");
+  setters.setSignatureCellPhone(profile.cellPhone || "");
+  setters.setSignatureWebsite(profile.website || "");
+  setters.setSignatureLogoUrl(profile.logoUrl || "");
+  setters.setSignatureDisclosuresText(profile.disclosuresText || "");
+  setters.setSignatureDisclosuresImageUrl(profile.disclosuresImageUrl || "");
+}
+
 export default function AdvisorPilotPage() {
   const confirm = useConfirm();
+  const advisorProfileCtx = useAdvisorProfileContextOptional();
   const [session, setSession] = useState<Session | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
 
@@ -1150,11 +1209,20 @@ export default function AdvisorPilotPage() {
   );
   /** Shown after Gmail send fails (expired token / revoked access); offers reconnect steps on wrap-up. */
   const [gmailReconnectHint, setGmailReconnectHint] = useState<string | null>(null);
+  const [outlookReconnectHint, setOutlookReconnectHint] = useState<string | null>(null);
   const [rothWorksheet, setRothWorksheet] = useState<RothWorksheet>(() => emptyRothWorksheet());
+  const rothWorksheetSafe = useMemo(() => normalizeRothWorksheet(rothWorksheet), [rothWorksheet]);
+  const commitRothWorksheet = useCallback((updater: React.SetStateAction<RothWorksheet>) => {
+    setRothWorksheet((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      return normalizeRothWorksheet(next);
+    });
+  }, []);
   /** After tax pre-check + "Roth Analysis", show year-by-year illustration (updates live as inputs change). */
   const [rothLiveAnalysisOpen, setRothLiveAnalysisOpen] = useState(false);
   const [rothAnalysisPrecheckMessages, setRothAnalysisPrecheckMessages] = useState<string[]>([]);
   const [rothAnalysisBusy, setRothAnalysisBusy] = useState(false);
+  const [rothOptimizePremiumHint, setRothOptimizePremiumHint] = useState<string | null>(null);
   const [fiaWorksheet, setFiaWorksheet] = useState<FiaWorksheet>(() => emptyFiaWorksheet());
   const [fiaTemplateSaveOpen, setFiaTemplateSaveOpen] = useState(false);
   const [fiaTemplateNotice, setFiaTemplateNotice] = useState<{ variant: "success" | "error"; message: string } | null>(
@@ -1210,11 +1278,9 @@ export default function AdvisorPilotPage() {
   const [retIncReturnMode, setRetIncReturnMode] = useState<"snapshot" | "proposed" | "custom">("snapshot");
   const [retIncCustomReturnPct, setRetIncCustomReturnPct] = useState("");
 
-  /** All-in fee drag (ETF/MF + advisor wrap) — separate AI pass; not persisted on client JSON. */
-  const [feeAdvisorPctInput, setFeeAdvisorPctInput] = useState("1");
-  const [feeAnalysisBusy, setFeeAnalysisBusy] = useState(false);
-  const [feeAnalysisError, setFeeAnalysisError] = useState<string | null>(null);
-  const [feeAnalysisResult, setFeeAnalysisResult] = useState<FeeAnalysisApiResponse | null>(null);
+  const [feeAnalysisWorksheet, setFeeAnalysisWorksheet] = useState<FeeAnalysisWorksheet>(() =>
+    emptyFeeAnalysisWorksheet()
+  );
 
   /** Supabase `client` JSON: intake + nested FIA worksheet + advisor UI to restore (FIA lives separately in React state). */
   const buildClientJsonForDatabase = useCallback((): Client => {
@@ -1242,6 +1308,15 @@ export default function AdvisorPilotPage() {
   const triggerGoogleGmailReconnect = useCallback(() => {
     setGmailReconnectHint(null);
     void signIn("google", { callbackUrl: googleGmailReconnectCallbackUrl() }, GOOGLE_GMAIL_REAUTHORIZE_PARAMS);
+  }, []);
+
+  const triggerMicrosoftOutlookReconnect = useCallback(() => {
+    setOutlookReconnectHint(null);
+    void signIn(
+      "azure-ad",
+      { callbackUrl: microsoftOutlookReconnectCallbackUrl() },
+      MICROSOFT_OUTLOOK_REAUTHORIZE_PARAMS
+    );
   }, []);
 
   const advisorVoiceName = useMemo(() => {
@@ -1321,57 +1396,22 @@ export default function AdvisorPilotPage() {
     if (!rothLiveAnalysisOpen) return null;
     return buildRothConversionModelForAdvisorUi(client, rothWorksheet, rothPdfQualifiedTotal);
   }, [rothLiveAnalysisOpen, client, rothWorksheet, rothPdfQualifiedTotal]);
+  const rothClientAge = useMemo(() => parseClientAgeForIllustration(client), [client]);
+  const rothOptimizePremiumDisabledReason = useMemo(() => {
+    if (traditionalQualifiedTotal <= 0) return "No traditional qualified balance.";
+    if (rothClientAge >= RMD_ILLUSTRATION_START_AGE) {
+      return `Client must be younger than RMD age ${RMD_ILLUSTRATION_START_AGE} (modeled age ${rothClientAge}).`;
+    }
+    const need = Math.max(0, Number(String(client.retirementSpendableIncomeAnnual || "").replace(/[$,]/g, "")) || 0);
+    if (need <= 0) return "Enter annual retirement spendable income first.";
+    if (rothWorksheetSafe.retirementIncomeFromConversionAccount === null) {
+      return 'Answer "Income received from conversion account?" first.';
+    }
+    if (rothClientAge < 60) return "Roth illustration runs for clients age 60 and older.";
+    return null;
+  }, [traditionalQualifiedTotal, rothClientAge, client.retirementSpendableIncomeAnnual, rothWorksheetSafe.retirementIncomeFromConversionAccount]);
   const registrationTotals = useMemo(() => buildRegistrationSummaryForAnalysis(holdings), [holdings]);
   const accountRollups = useMemo(() => rollupAccounts(holdings), [holdings]);
-  const feeAnalysisGroups = useMemo(() => groupFeeAnalysisFundRowsByAccount(holdings), [holdings]);
-
-  const runFeeAnalysis = useCallback(async () => {
-    setFeeAnalysisError(null);
-    if (feeAnalysisGroups.length === 0) {
-      setFeeAnalysisError("No ETF or mutual fund positions are classified on the confirmed holdings.");
-      return;
-    }
-    if (totalValue <= 0) {
-      setFeeAnalysisError("Total portfolio value must be greater than zero.");
-      return;
-    }
-    const advisorAnnual = parseAdvisorFeePercentPoints(feeAdvisorPctInput);
-    setFeeAnalysisBusy(true);
-    setFeeAnalysisResult(null);
-    try {
-      const synopsis = String(analysis?.synopsis ?? "").trim().slice(0, 900);
-      const res = await advisorFetch("/api/fee-analysis", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          demoMode,
-          totalValue,
-          advisorFeeAnnual: advisorAnnual,
-          accounts: feeAnalysisGroups,
-          portfolioSynopsisSnippet: synopsis || undefined,
-        }),
-        onEmailSessionExpired: handleEmailSessionExpired,
-      });
-      const data = (await res.json().catch(() => ({}))) as { error?: string } & Partial<FeeAnalysisApiResponse>;
-      if (!res.ok) {
-        throw new Error(typeof data.error === "string" ? data.error : "Fee analysis request failed.");
-      }
-      setFeeAnalysisResult(data as FeeAnalysisApiResponse);
-    } catch (e) {
-      setFeeAnalysisResult(null);
-      setFeeAnalysisError(e instanceof Error ? e.message : "Fee analysis failed.");
-    } finally {
-      setFeeAnalysisBusy(false);
-    }
-  }, [
-    feeAnalysisGroups,
-    totalValue,
-    feeAdvisorPctInput,
-    analysis?.synopsis,
-    demoMode,
-    handleEmailSessionExpired,
-  ]);
-
   const reviewCount = holdings.filter((h) => holdingAdvisorReviewBlocking(h)).length;
   const duplicateCount = holdings.filter((h) => h.duplicateOfIndex !== undefined).length;
   const duplicateOk = demoMode || duplicateCount === 0 || duplicatesAcknowledged;
@@ -2544,6 +2584,7 @@ export default function AdvisorPilotPage() {
           totalValue,
           status: analysis ? "Analyzed" : activeReviewId ? undefined : "Analyzed",
           rothWorksheet,
+          feeAnalysisWorksheet,
         }),
         onEmailSessionExpired: handleEmailSessionExpired,
       });
@@ -2588,6 +2629,7 @@ export default function AdvisorPilotPage() {
     setStatementFileInputRevision(0);
     setActiveReviewId(null);
     setRothWorksheet(emptyRothWorksheet());
+    setFeeAnalysisWorksheet(emptyFeeAnalysisWorksheet());
     setRothLiveAnalysisOpen(false);
     setRothAnalysisPrecheckMessages([]);
     setFiaWorksheet(emptyFiaWorksheet());
@@ -2682,6 +2724,7 @@ export default function AdvisorPilotPage() {
     setDemoMode(reviewDemo);
     setAnalysis(normalizeAiAnalysis(review.analysis));
     setRothWorksheet(normalizeRothWorksheet(review.rothWorksheet));
+    setFeeAnalysisWorksheet(normalizeFeeAnalysisWorksheet(review.feeAnalysisWorksheet));
     setRothAnalysisPrecheckMessages([]);
     setFollowUpEmail("");
     setEmailCopied(false);
@@ -2907,7 +2950,7 @@ export default function AdvisorPilotPage() {
       let emailErrMsg = "";
       let emailPlainBody = "";
       try {
-        const emailRes = await fetch("/api/email-client-snapshot", {
+        const emailRes = await advisorFetch("/api/email-client-snapshot", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
@@ -3054,6 +3097,7 @@ export default function AdvisorPilotPage() {
     setExtractError("");
     setStep("upload");
     setRothWorksheet(normalizeRothWorksheet(review.rothWorksheet));
+    setFeeAnalysisWorksheet(normalizeFeeAnalysisWorksheet(review.feeAnalysisWorksheet));
     setRothAnalysisPrecheckMessages([]);
   }
 
@@ -3159,60 +3203,68 @@ export default function AdvisorPilotPage() {
     return emailSignature.trim() || composeEmailSignature().trim() || "[Email signature]";
   }
 
+  const profileSetters = useMemo(
+    () => ({
+      setEmailSignature,
+      setSignatureName,
+      setSignatureTitle,
+      setSignatureLicense,
+      setSignatureCalendarLink,
+      setSignatureAddress,
+      setSignatureOfficePhone,
+      setSignatureCellPhone,
+      setSignatureWebsite,
+      setSignatureLogoUrl,
+      setSignatureDisclosuresText,
+      setSignatureDisclosuresImageUrl,
+    }),
+    []
+  );
+
   const loadAdvisorProfile = useCallback(async (ownerEmailOverride?: string) => {
     const ownerEmail =
       ownerEmailOverride ||
       String(session?.user?.email || emailAuthUser?.email || "").trim().toLowerCase();
     if (!ownerEmail) {
-      // Defensive: still mark profile as "loaded" so the onboarding effect
-      // doesn't hang forever waiting for a fetch that won't happen.
       setProfileLoaded(true);
       return;
     }
 
     try {
-      const res = await advisorFetch("/api/advisor-profile", {
-        headers: {},
-        onEmailSessionExpired: handleEmailSessionExpired,
-      });
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        // Profile load failed — leave local state empty so the onboarding
-        // effect treats this as a first-run user. The in-page Card is never
-        // auto-shown anymore; only the wizard is.
+      if (
+        advisorProfileCtx?.status === "ready" &&
+        advisorProfileCtx.body?.profile?.ownerEmail?.trim().toLowerCase() === ownerEmail
+      ) {
+        applyAdvisorProfileFromApi(advisorProfileCtx.body, profileSetters);
         return;
       }
 
-      const profile = data?.profile || {};
-      const savedSignature = profile.emailSignature || "";
-      const savedCalendarLink = String(profile.calendarLink || "").trim();
-      const inferredLinkFromSignature =
-        !savedCalendarLink && typeof savedSignature === "string"
-          ? (savedSignature.match(/https?:\/\/[^\s]+/i)?.[0] || "").trim()
-          : "";
+      const data =
+        (await advisorProfileCtx?.refetch()) ??
+        (await (async () => {
+          const res = await advisorFetch("/api/advisor-profile", {
+            headers: {},
+            onEmailSessionExpired: handleEmailSessionExpired,
+          });
+          if (!res.ok) return null;
+          return (await res.json().catch(() => null)) as AdvisorProfileApiBody | null;
+        })());
 
-      setEmailSignature(savedSignature);
-
-      setSignatureName(profile.advisorName || "");
-      setSignatureTitle(profile.advisorTitle || "");
-      setSignatureLicense(profile.advisorLicense || "");
-      setSignatureCalendarLink(savedCalendarLink || inferredLinkFromSignature);
-      setSignatureAddress(profile.officeAddress || "");
-      setSignatureOfficePhone(profile.officePhone || "");
-      setSignatureCellPhone(profile.cellPhone || "");
-      setSignatureWebsite(profile.website || "");
-      setSignatureLogoUrl(profile.logoUrl || "");
-      setSignatureDisclosuresText(profile.disclosuresText || "");
-      setSignatureDisclosuresImageUrl(profile.disclosuresImageUrl || "");
+      if (data?.profile) {
+        applyAdvisorProfileFromApi(data, profileSetters);
+      }
     } catch {
-      // Non-blocking. The app can still run without a saved advisor profile.
+      // Non-blocking.
     } finally {
-      // Always signal "we tried" so the onboarding-decision effect can fire
-      // exactly once — even when the API errors out for env / network reasons.
       setProfileLoaded(true);
     }
-  }, [emailAuthUser?.email, handleEmailSessionExpired, session?.user?.email]);
+  }, [
+    advisorProfileCtx,
+    emailAuthUser?.email,
+    handleEmailSessionExpired,
+    profileSetters,
+    session?.user?.email,
+  ]);
 
   // Decide once per mount whether to auto-pop the first-run wizard. Runs
   // AFTER auth + profile load complete (success or failure). Re-opening the
@@ -3395,6 +3447,7 @@ export default function AdvisorPilotPage() {
       setShowSignatureSetup(false);
       setSaveMessage("Advisor email signature saved.");
       setTimeout(() => setSaveMessage(""), 2500);
+      void advisorProfileCtx?.refetch();
     } catch {
       setSaveMessage("Could not save advisor profile.");
     }
@@ -3449,7 +3502,7 @@ function handleEmailPasswordLogout() {
 async function sendClientSnapshotEmail() {
   try {
     if (!session) {
-      alert("Please sign in with Google first.");
+      alert("Please sign in with Google or Microsoft first.");
       return;
     }
 
@@ -3489,7 +3542,7 @@ async function sendClientSnapshotEmail() {
       getCleanEmailSignature(),
     ].join("\n");
 
-    const res = await fetch("/api/email-client-snapshot", {
+    const res = await advisorFetch("/api/email-client-snapshot", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -3541,13 +3594,13 @@ async function sendClientSnapshotEmail() {
     });
 
     const text = await res.text();
-    let data: { error?: string; needsGoogleReconnect?: boolean } = {};
+    let data: { error?: string; needsGoogleReconnect?: boolean; needsOutlookReconnect?: boolean } = {};
 
     try {
       const parsed: unknown = text ? JSON.parse(text) : {};
       data =
         typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-          ? (parsed as { error?: string; needsGoogleReconnect?: boolean })
+          ? (parsed as { error?: string; needsGoogleReconnect?: boolean; needsOutlookReconnect?: boolean })
           : {};
     } catch {
       data = {};
@@ -3556,7 +3609,12 @@ async function sendClientSnapshotEmail() {
     if (!res.ok) {
       if (data.needsGoogleReconnect) {
         setGmailReconnectHint(
-          "Your Google connection for sending mail needs to be refreshed. Use the steps below, then try Send via Gmail again."
+          "Your Google connection for sending mail needs to be refreshed. Use the steps below, then try Send again."
+        );
+      }
+      if (data.needsOutlookReconnect) {
+        setOutlookReconnectHint(
+          "Your Microsoft connection for sending mail needs to be refreshed. Use the steps below, then try Send again."
         );
       }
       alert(data.error || text || "Failed to send email.");
@@ -3564,6 +3622,7 @@ async function sendClientSnapshotEmail() {
     }
 
     setGmailReconnectHint(null);
+    setOutlookReconnectHint(null);
     await markCurrentClientContacted();
     alert("Client Snapshot sent successfully.");
   } catch (err) {
@@ -3574,7 +3633,7 @@ async function sendClientSnapshotEmail() {
 
 async function runRothReportDownload(): Promise<{ ok: boolean; error?: string }> {
   try {
-    const res = await fetch("/api/generate-roth-report", {
+    const res = await advisorFetch("/api/generate-roth-report", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3630,7 +3689,7 @@ async function runRothAnalysisWithTaxPrecheck() {
   }
   setRothAnalysisBusy(true);
   try {
-    const pre = await fetch("/api/roth-analysis", { method: "POST" });
+    const pre = await advisorFetch("/api/roth-analysis", { method: "POST" });
     const j = (await pre.json().catch(() => ({}))) as {
       ok?: boolean;
       proceed?: boolean;
@@ -5431,6 +5490,19 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 {fiaWorksheet.hasIncomeRider === true ? (
                   <div className="grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 md:grid-cols-2">
                     <div>
+                      <label className="text-sm font-semibold text-slate-700">Income base bonus % (front-end only)</label>
+                      <Input
+                        className="mt-2 h-12 rounded-none bg-white"
+                        inputMode="decimal"
+                        value={fiaInputValue(fiaWorksheet.incomeBaseBonusPct)}
+                        onChange={(e) => setFiaWorksheet((w) => ({ ...w, incomeBaseBonusPct: e.target.value }))}
+                        placeholder="20"
+                      />
+                      <p className="mt-1 text-xs text-slate-500">
+                        Applied once at issue to the income/rider benefit base on premium, separate from contract premium bonus. Leave blank if none.
+                      </p>
+                    </div>
+                    <div>
                       <label className="text-sm font-semibold text-slate-700">Guaranteed roll-up on rider benefit base % (annual)</label>
                       <Input
                         className="mt-2 h-12 rounded-none bg-white"
@@ -5603,14 +5675,17 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                               </tbody>
                             </table>
                           </div>
-                          <FiaScenarioReturnChart
+                          <FiaScenarioComparisonVisuals
                             rows={s.rows}
                             scenarioId={s.scenarioId}
+                            tabLabel={s.tabLabel}
                             windowLabel={
                               s.years.length === 10
                                 ? `${s.years[0]}\u2013${s.years[9]}`
                                 : s.label
                             }
+                            capPct={parsePct(fiaWorksheet.contractCapRatePct)}
+                            showRider={fiaShowRiderInTables}
                           />
                         </TabsContent>
                       ))}
@@ -5863,14 +5938,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"
-                    variant={rothWorksheet.useEntireQualifiedBalance === true ? "default" : "outline"}
+                    variant={rothWorksheetSafe.useEntireQualifiedBalance === true ? "default" : "outline"}
                     className="h-11 rounded-none"
                     onClick={withRothAutoRun(() =>
-                      setRothWorksheet((w) => {
-                        const next = { ...w, useEntireQualifiedBalance: true as const };
-                        if (traditionalQualifiedTotal > 0 && parseRothMoneyInput(w.qualifiedAssetValue) <= 0) {
-                          next.qualifiedAssetValue =
-                            Math.round(traditionalQualifiedTotal).toLocaleString("en-US");
+                      commitRothWorksheet((w) => {
+                        const next = patchRothWorksheet(w, { useEntireQualifiedBalance: true });
+                        if (traditionalQualifiedTotal > 0 && parseRothMoneyInput(next.qualifiedAssetValue) <= 0) {
+                          return patchRothWorksheet(next, {
+                            qualifiedAssetValue: Math.round(traditionalQualifiedTotal).toLocaleString("en-US"),
+                          });
                         }
                         return next;
                       })
@@ -5880,14 +5956,16 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   </Button>
                   <Button
                     type="button"
-                    variant={rothWorksheet.useEntireQualifiedBalance === false ? "default" : "outline"}
+                    variant={rothWorksheetSafe.useEntireQualifiedBalance === false ? "default" : "outline"}
                     className="h-11 rounded-none"
-                    onClick={withRothAutoRun(() => setRothWorksheet((w) => ({ ...w, useEntireQualifiedBalance: false })))}
+                    onClick={withRothAutoRun(() =>
+                      commitRothWorksheet((w) => patchRothWorksheet(w, { useEntireQualifiedBalance: false }))
+                    )}
                   >
                     No
                   </Button>
                 </div>
-                {rothWorksheet.useEntireQualifiedBalance === true ? (
+                {rothWorksheetSafe.useEntireQualifiedBalance === true ? (
                   <div>
                     <label className="text-sm font-semibold text-slate-700">Qualified asset value</label>
                     <div className="mt-2 flex h-12 items-center overflow-hidden rounded-none border border-blue-100 bg-white focus-within:ring-2 focus-within:ring-sky-500">
@@ -5896,22 +5974,62 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         className="h-full flex-1 border-0 bg-transparent pl-1 pr-4 shadow-none focus-visible:ring-0"
                         type="text"
                         inputMode="decimal"
-                        value={rothWorksheet.qualifiedAssetValue}
-                        onChange={(e) => setRothWorksheet((w) => ({ ...w, qualifiedAssetValue: e.target.value }))}
+                        value={rothWorksheetSafe.qualifiedAssetValue}
+                        onChange={(e) =>
+                          commitRothWorksheet((w) => patchRothWorksheet(w, { qualifiedAssetValue: e.target.value }))
+                        }
                         placeholder="500000"
                       />
                     </div>
                   </div>
                 ) : null}
-                {rothWorksheet.useEntireQualifiedBalance === false ? (
+                {rothWorksheetSafe.useEntireQualifiedBalance === false ? (
                   <div>
-                    <label className="text-sm font-semibold text-slate-700">Specific dollar amount</label>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label className="text-sm font-semibold text-slate-700">Specific dollar amount</label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-9 shrink-0 rounded-none border-blue-200 text-sky-800 hover:bg-sky-50"
+                        disabled={Boolean(rothOptimizePremiumDisabledReason)}
+                        title={rothOptimizePremiumDisabledReason ?? undefined}
+                        onClick={withRothAutoRun(() => {
+                          setRothOptimizePremiumHint(null);
+                          const result = computeOptimizedRothPremiumForAdvisorUi(
+                            client,
+                            rothWorksheet,
+                            traditionalQualifiedTotal
+                          );
+                          if (!result.ok) {
+                            alert(result.error);
+                            return;
+                          }
+                          commitRothWorksheet((w) =>
+                            patchRothWorksheet(w, {
+                              specificConversionAmount: result.amount.toLocaleString("en-US"),
+                            })
+                          );
+                          setRothOptimizePremiumHint(
+                            `Optimized to convert within your ${result.marginalRateNominalPct}% bracket before RMD age ${result.rmdStartAge} (Protect initial investment ${result.protectInitialInvestment ? "on" : "off"}).`
+                          );
+                        })}
+                      >
+                        Optimize premium
+                      </Button>
+                    </div>
                     <CurrencyAmountInput
                       className="mt-2 h-12 border-blue-100 focus-within:ring-sky-500"
-                      value={rothWorksheet.specificConversionAmount}
-                      onChange={(v) => setRothWorksheet((w) => ({ ...w, specificConversionAmount: v }))}
+                      value={rothWorksheetSafe.specificConversionAmount}
+                      onChange={(v) => {
+                        setRothOptimizePremiumHint(null);
+                        commitRothWorksheet((w) => patchRothWorksheet(w, { specificConversionAmount: v }));
+                      }}
                       placeholder="250,000"
                     />
+                    {rothOptimizePremiumHint ? (
+                      <p className="mt-2 text-xs text-slate-600">{rothOptimizePremiumHint}</p>
+                    ) : null}
                   </div>
                 ) : null}
                 <p className="text-xs text-slate-500">
@@ -5923,29 +6041,35 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     ? ". Choose Yes/No above and enter an amount so the PDF can run."
                     : ". Taxable and Roth IRA balances stay out of the conversion cap."}
                 </p>
-                <div className="flex items-center justify-between gap-4 rounded-none border border-blue-100 bg-slate-50 px-4 py-3">
-                  <span className="text-sm font-semibold text-slate-700">Protect initial investment</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={rothWorksheet.fic.protectInitialInvestment}
-                    onClick={withRothAutoRun(() =>
-                      setRothWorksheet((w) => ({
-                        ...w,
-                        fic: { ...w.fic, protectInitialInvestment: !w.fic.protectInitialInvestment },
-                      }))
-                    )}
-                    className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                      rothWorksheet.fic.protectInitialInvestment ? "bg-sky-500" : "bg-slate-200"
-                    }`}
-                  >
-                    <span className="sr-only">Protect initial investment</span>
-                    <span
-                      className={`absolute top-1 h-6 w-6 rounded-none bg-white shadow transition-[left] ${
-                        rothWorksheet.fic.protectInitialInvestment ? "left-7" : "left-1"
+                <div className="rounded-none border border-blue-100 bg-slate-50 px-4 py-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-sm font-semibold text-slate-700">Protect initial investment</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={rothWorksheetSafe.fic.protectInitialInvestment}
+                      onClick={withRothAutoRun(() =>
+                        commitRothWorksheet((w) =>
+                          patchRothWorksheetFic(w, { protectInitialInvestment: !w.fic.protectInitialInvestment })
+                        )
+                      )}
+                      className={`relative h-8 w-14 shrink-0 rounded-none transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                        rothWorksheetSafe.fic.protectInitialInvestment ? "bg-sky-500" : "bg-slate-200"
                       }`}
-                    />
-                  </button>
+                    >
+                      <span className="sr-only">Protect initial investment</span>
+                      <span
+                        className={`absolute top-1 h-6 w-6 rounded-none bg-white shadow transition-[left] ${
+                          rothWorksheetSafe.fic.protectInitialInvestment ? "left-7" : "left-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-slate-600">
+                    Conversions fill the stated tax bracket as fast as possible until the IRA is depleted. When on, after
+                    Roth reaches the premium you entered, later conversions are capped so Roth does not fall below that
+                    amount; when off, only the bracket ceiling and remaining IRA balance limit annual conversions.
+                  </p>
                 </div>
               </div>
 
@@ -6010,6 +6134,38 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   onChange={(v) => setClient({ ...client, retirementSpendableIncomeAnnual: v })}
                   placeholder="85,000"
                 />
+                <div className="space-y-2 border-t border-slate-100 pt-4">
+                  <p className="text-sm text-slate-700">Income received from conversion account?</p>
+                  <p className="text-xs text-slate-500">
+                    Yes — model retirement spendable income (after Social Security) as withdrawals from the qualified IRA/conversion bucket. No — treat that income as non-IRA; qualified account distributions are RMD-only.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant={rothWorksheetSafe.retirementIncomeFromConversionAccount === true ? "default" : "outline"}
+                      className="h-11 rounded-none"
+                      onClick={withRothAutoRun(() =>
+                        commitRothWorksheet((w) =>
+                          patchRothWorksheet(w, { retirementIncomeFromConversionAccount: true })
+                        )
+                      )}
+                    >
+                      Yes
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={rothWorksheetSafe.retirementIncomeFromConversionAccount === false ? "default" : "outline"}
+                      className="h-11 rounded-none"
+                      onClick={withRothAutoRun(() =>
+                        commitRothWorksheet((w) =>
+                          patchRothWorksheet(w, { retirementIncomeFromConversionAccount: false })
+                        )
+                      )}
+                    >
+                      No
+                    </Button>
+                  </div>
+                </div>
               </div>
 
               <div className="space-y-3 rounded-none border border-slate-200 bg-white p-5 md:p-6">
@@ -6019,11 +6175,23 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   className="h-12 max-w-md rounded-none border border-blue-100 bg-white focus-visible:ring-sky-500"
                   type="text"
                   inputMode="decimal"
-                  value={rothWorksheet.fic.maxTaxRatePct}
+                  value={rothWorksheetSafe.fic.maxTaxRatePct}
                   onChange={(e) =>
-                    setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, maxTaxRatePct: e.target.value } }))
+                    commitRothWorksheet((w) => patchRothWorksheetFic(w, { maxTaxRatePct: e.target.value }))
                   }
                   placeholder="e.g. 22"
+                />
+                <p className="text-sm font-semibold text-slate-800 pt-2">State tax (if any)</p>
+                <p className="text-xs text-slate-500">Illustrative flat state income tax rate on federal taxable ordinary income; leave blank for 0%.</p>
+                <Input
+                  className="h-12 max-w-md rounded-none border border-blue-100 bg-white focus-visible:ring-sky-500"
+                  type="text"
+                  inputMode="decimal"
+                  value={rothWorksheetSafe.fic.stateTaxPct}
+                  onChange={(e) =>
+                    commitRothWorksheet((w) => patchRothWorksheetFic(w, { stateTaxPct: e.target.value }))
+                  }
+                  placeholder="e.g. 1"
                 />
               </div>
 
@@ -6035,7 +6203,9 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     type="button"
                     variant={rothWorksheet.useFixedIndexContract === true ? "default" : "outline"}
                     className="h-11 rounded-none"
-                    onClick={withRothAutoRun(() => setRothWorksheet((w) => ({ ...w, useFixedIndexContract: true })))}
+                    onClick={withRothAutoRun(() =>
+                      commitRothWorksheet((w) => patchRothWorksheet(w, { useFixedIndexContract: true }))
+                    )}
                   >
                     Yes
                   </Button>
@@ -6043,7 +6213,9 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     type="button"
                     variant={rothWorksheet.useFixedIndexContract === false ? "default" : "outline"}
                     className="h-11 rounded-none"
-                    onClick={withRothAutoRun(() => setRothWorksheet((w) => ({ ...w, useFixedIndexContract: false })))}
+                    onClick={withRothAutoRun(() =>
+                      commitRothWorksheet((w) => patchRothWorksheet(w, { useFixedIndexContract: false }))
+                    )}
                   >
                     No
                   </Button>
@@ -6187,7 +6359,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                               }
                               setRothFicTemplateListGen((g) => g + 1);
                               setRothFicTemplateRemapTargetId(null);
-                              setRothWorksheet((w) => applyRothFicProductTemplate(w, tpl));
+                              commitRothWorksheet((w) => applyRothFicProductTemplate(w, tpl));
                               setRothFicTemplateNotice({
                                 variant: "success",
                                 message: `Updated Roth FIC template "${display}" with the specifications you entered.`,
@@ -6218,16 +6390,20 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       <label className="text-sm font-semibold text-slate-700">Carrier name</label>
                       <Input
                         className="mt-2 h-12 rounded-none bg-white"
-                        value={rothWorksheet.fic.carrierName}
-                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, carrierName: e.target.value } }))}
+                        value={rothWorksheetSafe.fic.carrierName}
+                        onChange={(e) =>
+                          commitRothWorksheet((w) => patchRothWorksheetFic(w, { carrierName: e.target.value }))
+                        }
                       />
                     </div>
                     <div className="md:col-span-2">
                       <label className="text-sm font-semibold text-slate-700">Product name</label>
                       <Input
                         className="mt-2 h-12 rounded-none bg-white"
-                        value={rothWorksheet.fic.productName}
-                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, productName: e.target.value } }))}
+                        value={rothWorksheetSafe.fic.productName}
+                        onChange={(e) =>
+                          commitRothWorksheet((w) => patchRothWorksheetFic(w, { productName: e.target.value }))
+                        }
                       />
                     </div>
                     <div>
@@ -6236,8 +6412,10 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="decimal"
-                        value={rothWorksheet.fic.premiumBonusPct}
-                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, premiumBonusPct: e.target.value } }))}
+                        value={rothWorksheetSafe.fic.premiumBonusPct}
+                        onChange={(e) =>
+                          commitRothWorksheet((w) => patchRothWorksheetFic(w, { premiumBonusPct: e.target.value }))
+                        }
                       />
                     </div>
                     <div>
@@ -6246,8 +6424,10 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="decimal"
-                        value={rothWorksheet.fic.trailingBonusPct}
-                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, trailingBonusPct: e.target.value } }))}
+                        value={rothWorksheetSafe.fic.trailingBonusPct}
+                        onChange={(e) =>
+                          commitRothWorksheet((w) => patchRothWorksheetFic(w, { trailingBonusPct: e.target.value }))
+                        }
                       />
                     </div>
                     <div>
@@ -6256,8 +6436,10 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="numeric"
-                        value={rothWorksheet.fic.trailBonusYears}
-                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, trailBonusYears: e.target.value } }))}
+                        value={rothWorksheetSafe.fic.trailBonusYears}
+                        onChange={(e) =>
+                          commitRothWorksheet((w) => patchRothWorksheetFic(w, { trailBonusYears: e.target.value }))
+                        }
                         placeholder="e.g. 10"
                       />
                     </div>
@@ -6267,12 +6449,11 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="decimal"
-                        value={rothWorksheet.fic.contractEstimatedRateOfReturnPct}
+                        value={rothWorksheetSafe.fic.contractEstimatedRateOfReturnPct}
                         onChange={(e) =>
-                          setRothWorksheet((w) => ({
-                            ...w,
-                            fic: { ...w.fic, contractEstimatedRateOfReturnPct: e.target.value },
-                          }))
+                          commitRothWorksheet((w) =>
+                            patchRothWorksheetFic(w, { contractEstimatedRateOfReturnPct: e.target.value })
+                          )
                         }
                       />
                     </div>
@@ -6282,8 +6463,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="decimal"
-                        value={rothWorksheet.fic.penaltyFreeWithdrawalPct}
-                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, penaltyFreeWithdrawalPct: e.target.value } }))}
+                        value={rothWorksheetSafe.fic.penaltyFreeWithdrawalPct}
+                        onChange={(e) =>
+                          commitRothWorksheet((w) =>
+                            patchRothWorksheetFic(w, { penaltyFreeWithdrawalPct: e.target.value })
+                          )
+                        }
                       />
                     </div>
                     <div>
@@ -6292,8 +6477,10 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         className="mt-2 h-12 rounded-none bg-white"
                         type="text"
                         inputMode="decimal"
-                        value={rothWorksheet.fic.surrenderYears}
-                        onChange={(e) => setRothWorksheet((w) => ({ ...w, fic: { ...w.fic, surrenderYears: e.target.value } }))}
+                        value={rothWorksheetSafe.fic.surrenderYears}
+                        onChange={(e) =>
+                          commitRothWorksheet((w) => patchRothWorksheetFic(w, { surrenderYears: e.target.value }))
+                        }
                       />
                     </div>
                   </div>
@@ -6350,7 +6537,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                           setRothFicTemplateLoadSpecConfirmOpen(false);
                           setRothFicPendingLoadTemplate(null);
                           setRothFicTemplateRemapTargetId(null);
-                          setRothWorksheet((w) => applyRothFicProductTemplate(w, row.template));
+                          commitRothWorksheet((w) => applyRothFicProductTemplate(w, row.template));
                           setRothFicTemplateNotice({
                             variant: "success",
                             message: `Loaded Roth FIC template "${row.displayName}".`,
@@ -6366,7 +6553,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                           const row = rothFicPendingLoadTemplate;
                           setRothFicTemplateLoadSpecConfirmOpen(false);
                           setRothFicPendingLoadTemplate(null);
-                          setRothWorksheet((w) => applyRothFicProductTemplateCarrierProductOnly(w, row.template));
+                          commitRothWorksheet((w) => applyRothFicProductTemplateCarrierProductOnly(w, row.template));
                           setRothFicTemplateRemapTargetId(row.id);
                           setRothFicTemplateNotice({
                             variant: "success",
@@ -6459,7 +6646,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <div>
                       <p className="font-serif text-xl font-bold text-slate-950">Illustrative Roth analysis</p>
                       <p className="mt-1 max-w-4xl text-xs leading-relaxed text-slate-700">
-                        Year-by-year view uses the same model as the Roth Option PDF. Change inputs above — values update live for client conversations. Illustrative only, not tax or investment advice.
+                        Comparison charts summarize stay vs. Roth paths; year-by-year tables below use the same model as the Roth Option PDF. Change inputs above — values update live. Illustrative only, not tax or investment advice.
                       </p>
                     </div>
                     <Button
@@ -6487,54 +6674,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       const stayLast = stayRows.length ? stayRows[stayRows.length - 1]! : null;
                       const rt = model.rothConversionTotals;
                       const st = model.stayTraditionalTotals;
-                      const stayTotalIllustrativeFed = stayRows.reduce((sum, r) => sum + r.illustrativeFederalTax, 0);
-                      const stayTotalTaxesPaid = stayTotalIllustrativeFed + st.totalIrmaaPaid;
-                      const rothTotalTaxesPaid = rt.totalConversionTaxPaid + rt.totalIrmaaPaid;
                       const stayIncomeColumnSum = stayRows.reduce((sum, r) => sum + r.reportIncomeAnnual, 0);
                       const rothIncomeColumnSum = model.rothConversion.reduce((sum, r) => sum + r.reportIncomeAnnual, 0);
                       return (
                         <>
-                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
-                            <div className="rounded-none border border-slate-200 bg-white p-4">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stay path · ending balance</p>
-                              <p className="mt-2 text-lg font-bold tabular-nums text-slate-900">{currency(stayLast?.endBalance ?? 0)}</p>
-                              <p className="mt-1 text-xs text-slate-500">Age {stayLast?.age ?? "—"}</p>
-                            </div>
-                            <div className="rounded-none border border-slate-200 bg-white p-4">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stay path · total RMD + IRMAA</p>
-                              <p className="mt-2 text-lg font-bold tabular-nums text-slate-900">{currency(st.totalRmdWithdrawals)}</p>
-                              <p className="mt-1 text-xs text-slate-500">IRMAA paid · {currency(st.totalIrmaaPaid)}</p>
-                            </div>
-                            <div className="rounded-none border border-teal-200 bg-teal-50/70 p-4">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-teal-900">Roth path · ending Roth balance</p>
-                              <p className="mt-2 text-lg font-bold tabular-nums text-teal-950">{currency(rt.endingTotalRothBalance)}</p>
-                              <p className="mt-1 text-xs text-teal-900/85">Qualified illustration start · {currency(model.rothPathStartingQualifiedBalance)}</p>
-                            </div>
-                            <div className="rounded-none border border-teal-200 bg-teal-50/70 p-4">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-teal-900">Roth path · conversions</p>
-                              <p className="mt-2 text-lg font-bold tabular-nums text-teal-950">{currency(rt.totalGrossConversion)} gross</p>
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                            <div className="rounded-none border border-slate-200 bg-white p-4">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                Stay path · total illustrative taxes paid
-                              </p>
-                              <p className="mt-2 text-lg font-bold tabular-nums text-slate-900">{currency(stayTotalTaxesPaid)}</p>
-                              <p className="mt-1 text-xs text-slate-500">
-                                Federal (illustrative) {currency(stayTotalIllustrativeFed)} + IRMAA {currency(st.totalIrmaaPaid)}
-                              </p>
-                            </div>
-                            <div className="rounded-none border border-teal-200 bg-teal-50/70 p-4">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-teal-900">
-                                Total Est. Taxes and IRMAA paid
-                              </p>
-                              <p className="mt-2 text-lg font-bold tabular-nums text-teal-950">{currency(rothTotalTaxesPaid)}</p>
-                              <p className="mt-1 text-xs text-teal-900/85">
-                                Tax on conversions {currency(rt.totalConversionTaxPaid)} + IRMAA {currency(rt.totalIrmaaPaid)}
-                              </p>
-                            </div>
-                          </div>
+                          <RothComparisonVisuals
+                            model={model}
+                            clientName={clientDisplayName(client) || undefined}
+                          />
                           <p className="text-xs leading-relaxed text-slate-600">{model.rothGrowthAssumptionLabel}</p>
                           <Tabs defaultValue="stay" className="w-full">
                             <TabsList variant="line" className="h-auto w-full flex-wrap justify-start gap-1">
@@ -6570,7 +6717,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                                         <td className="px-3 py-2 font-medium">{r.age}</td>
                                         <td className="px-3 py-2 tabular-nums">{currency(r.yearStartBalance)}</td>
                                         <td className="px-3 py-2 tabular-nums">{currency(r.reportIncomeAnnual)}</td>
-                                        <td className="px-3 py-2 tabular-nums">{currency(r.illustrativeFederalTax)}</td>
+                                        <td className="px-3 py-2 tabular-nums">{currency(r.illustrativeFederalTax + r.illustrativeStateTax)}</td>
                                         <td className="px-3 py-2 tabular-nums font-semibold">{currency(r.endBalance)}</td>
                                         <td className="px-3 py-2 tabular-nums">{currency(r.rmd)}</td>
                                         <td className="px-3 py-2 tabular-nums">{currency(r.irmaaSurchargeAnnual)}</td>
@@ -6708,7 +6855,9 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   below — not an SSA record match. Benefits apply on the timeline from each person&apos;s SS start age (defaults
                   below). When &quot;Spend target&quot; is after-tax, an illustrative flat tax rate scales earned income, SS,
                   pension, other income, RMDs, and additional withdrawals as ordinary income for residual draw math only — not
-                  tax advice.
+                  tax advice. Portfolio withdrawals are capped each year by the balance available after growth;{' '}
+                  <strong className="font-semibold">Unmet income</strong> is the stress-test shortfall when sources plus capped
+                  draws cannot meet the (inflation-adjusted) need on the same after-tax or gross basis.
                 </p>
               </div>
 
@@ -7334,12 +7483,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
               ) : (
                 <>
                   <div className="overflow-x-auto rounded-none border border-slate-200 bg-white shadow-sm">
-                  <table className="min-w-[1040px] w-full border-collapse text-sm">
+                  <table className="min-w-[1160px] w-full border-collapse text-sm">
                     <thead>
                       <tr className="border-b border-slate-200 bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
                         <th className="px-3 py-3">Year</th>
                         <th className="px-3 py-3">Age (C / S)</th>
-                        <th className="px-3 py-3 text-right">Income need</th>
+                        <th className="px-3 py-3 text-right">
+                          Income need{retIncSpendNetOfTax ? " (after-tax)" : ""}
+                        </th>
+                        <th className="px-3 py-3 text-right">Unmet income</th>
                         <th className="px-3 py-3 text-right">Earned</th>
                         <th className="px-3 py-3 text-right">Soc Sec</th>
                         <th className="px-3 py-3 text-right">Pension</th>
@@ -7352,13 +7504,27 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     </thead>
                     <tbody>
                       {retIncomeProjectionRows.map((r) => (
-                        <tr key={r.yearOffset} className="border-b border-slate-100 odd:bg-white even:bg-slate-50/60">
+                        <tr
+                          key={r.yearOffset}
+                          className={cn(
+                            "border-b border-slate-100 odd:bg-white even:bg-slate-50/60",
+                            r.unmetIncomeNeed > 1 && "bg-red-50/70 odd:bg-red-50/70",
+                          )}
+                        >
                           <td className="px-3 py-2 tabular-nums text-slate-800">{r.calendarYear}</td>
                           <td className="px-3 py-2 text-slate-700">
                             {r.clientAge}
                             {r.spouseAge != null ? ` / ${r.spouseAge}` : ""}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums">{currency(r.incomeNeed)}</td>
+                          <td
+                            className={cn(
+                              "px-3 py-2 text-right tabular-nums font-medium",
+                              r.unmetIncomeNeed > 1 ? "text-red-800" : "text-slate-500",
+                            )}
+                          >
+                            {r.unmetIncomeNeed > 1 ? currency(r.unmetIncomeNeed) : "—"}
+                          </td>
                           <td className="px-3 py-2 text-right tabular-nums">{currency(r.earnedIncome)}</td>
                           <td className="px-3 py-2 text-right tabular-nums">{currency(r.socialSecurity)}</td>
                           <td className="px-3 py-2 text-right tabular-nums">{currency(r.pension)}</td>
@@ -7381,6 +7547,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                   <RetirementIncomeAnalysisChart
                     className="mt-6"
                     data={mapRetirementIncomeProjectionToChartRows(retIncomeProjectionRows)}
+                    incomeNeedLabel={retIncSpendNetOfTax ? "Income need (after-tax)" : "Income need"}
                   />
                 </>
               )}
@@ -7395,231 +7562,19 @@ async function downloadPDFReport(mode: "client" | "advisor") {
         )}
 
         {step === "feeAnalysis" && (
-          <Card className="rounded-none ap-glass border-0">
-            <CardContent className="space-y-8 p-6 md:p-8">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none border-violet-200 bg-violet-50">
-                    <Percent className="h-6 w-6 text-violet-900" />
-                  </div>
-                  <div>
-                    <h2 className="font-serif text-3xl font-bold">Fee analysis</h2>
-                    <p className="text-sm text-slate-500">
-                      Confirmed holdings already show ETF / mutual fund asset classes and tickers. This step sends a compact,
-                      deduped ticker list to a dedicated model pass (optional synopsis from Portfolio Review) and divides
-                      estimated fund fees plus your advisor wrap fee by the full portfolio value—including non-fund
-                      balances in the denominator.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-none border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-950">
-                <p className="font-semibold">Illustrative only</p>
-                <p className="mt-1 text-xs leading-relaxed text-amber-900">
-                  Expense ratios are model estimates, not prospectus data. Confirm every ratio and fee on official documents
-                  before client-facing numbers.
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 md:max-w-md">
-                <div>
-                  <label className="text-sm font-semibold text-slate-700">
-                    Current advisor fee (% of total portfolio per year)
-                  </label>
-                  <Input
-                    className="mt-2 h-12 rounded-none bg-white"
-                    inputMode="decimal"
-                    value={feeAdvisorPctInput}
-                    onChange={(e) => setFeeAdvisorPctInput(e.target.value)}
-                    placeholder="1"
-                  />
-                  <p className="mt-1 text-xs text-slate-500">Enter 1 or 1% for a 1% annual wrap on total portfolio value.</p>
-                </div>
-              </div>
-
-              {feeAnalysisError ? (
-                <div className="rounded-none border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">{feeAnalysisError}</div>
-              ) : null}
-
-              <div className="text-sm text-slate-600">
-                Total portfolio (all holdings): <span className="font-semibold text-slate-900">{currency(totalValue)}</span>
-              </div>
-
-              {feeAnalysisGroups.length === 0 ? (
-                <div className="rounded-none border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                  No holdings are classified as ETF or mutual fund. Refine asset classes on Confirm Holdings to include fund
-                  wrappers here.
-                </div>
-              ) : (
-                <div className="space-y-8">
-                  {!feeAnalysisResult
-                    ? feeAnalysisGroups.map((grp) => {
-                        const rollup = accountRollups.find((r) => r.key === grp.key);
-                        const regHint =
-                          rollup?.dominantRegistration === "mixed"
-                            ? "Mixed registrations"
-                            : rollup
-                              ? registrationLabel(rollup.dominantRegistration)
-                              : "—";
-                        const acctLabel = grp.accountNumber ? `Account ${grp.accountNumber}` : "Unlabeled account";
-                        return (
-                          <div key={grp.key} className="space-y-2">
-                            <div className="flex flex-wrap items-baseline justify-between gap-2">
-                              <h3 className="font-serif text-lg font-semibold text-slate-900">{acctLabel}</h3>
-                              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                                {regHint} · Account total {currency(grp.totalAccountValue)}
-                              </span>
-                            </div>
-                            <div className="overflow-x-auto rounded-none border border-slate-200 bg-white shadow-sm">
-                              <table className="min-w-[720px] w-full border-collapse text-sm">
-                                <thead>
-                                  <tr className="border-b border-slate-200 bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
-                                    <th className="px-3 py-3">Ticker</th>
-                                    <th className="px-3 py-3">Name</th>
-                                    <th className="px-3 py-3">Asset class</th>
-                                    <th className="px-3 py-3 text-right">Value</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {grp.fundRows.map((row, idx) => (
-                                    <tr key={`${grp.key}-${idx}`} className="border-b border-slate-100 odd:bg-white even:bg-slate-50/60">
-                                      <td className="px-3 py-2 font-mono text-xs text-slate-900">{row.ticker || "—"}</td>
-                                      <td className="px-3 py-2 text-slate-800">{row.suggested || row.rawName}</td>
-                                      <td className="px-3 py-2 text-slate-600">{row.assetClass}</td>
-                                      <td className="px-3 py-2 text-right tabular-nums text-slate-900">{currency(row.value)}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        );
-                      })
-                    : feeAnalysisResult.accounts.map((acct) => {
-                        const rollup = accountRollups.find((r) => r.key === acct.key);
-                        const regHint =
-                          rollup?.dominantRegistration === "mixed"
-                            ? "Mixed registrations"
-                            : rollup
-                              ? registrationLabel(rollup.dominantRegistration)
-                              : "—";
-                        const acctLabel = acct.accountNumber ? `Account ${acct.accountNumber}` : "Unlabeled account";
-                        return (
-                          <div key={acct.key} className="space-y-2">
-                            <div className="flex flex-wrap items-baseline justify-between gap-2">
-                              <h3 className="font-serif text-lg font-semibold text-slate-900">{acctLabel}</h3>
-                              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                                {regHint} · Account total {currency(acct.totalAccountValue)}
-                              </span>
-                            </div>
-                            <p className="text-xs text-slate-600">
-                              Fund fees in account (est.): {currency(acct.fundFeesInAccount)} · Fund expense load vs account:{" "}
-                              {(acct.fundExpensePctOfAccount * 100).toFixed(3)}% · All-in vs account (fund + advisor share):{" "}
-                              {(acct.allInDragOnAccount * 100).toFixed(3)}%
-                            </p>
-                            <div className="overflow-x-auto rounded-none border border-slate-200 bg-white shadow-sm">
-                              <table className="min-w-[960px] w-full border-collapse text-sm">
-                                <thead>
-                                  <tr className="border-b border-slate-200 bg-slate-100 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">
-                                    <th className="px-3 py-3">Ticker</th>
-                                    <th className="px-3 py-3">Name</th>
-                                    <th className="px-3 py-3">Asset class</th>
-                                    <th className="px-3 py-3 text-right">Value</th>
-                                    <th className="px-3 py-3 text-right">Est. expense %</th>
-                                    <th className="px-3 py-3 text-right">Est. $ / yr</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {acct.lines.map((row, idx) => (
-                                    <tr key={`${acct.key}-r-${idx}`} className="border-b border-slate-100 odd:bg-white even:bg-slate-50/60">
-                                      <td className="px-3 py-2 font-mono text-xs text-slate-900">{row.ticker || "—"}</td>
-                                      <td className="px-3 py-2 text-slate-800">{row.suggested || row.rawName}</td>
-                                      <td className="px-3 py-2 text-slate-600">{row.assetClass}</td>
-                                      <td className="px-3 py-2 text-right tabular-nums text-slate-900">{currency(row.value)}</td>
-                                      <td className="px-3 py-2 text-right tabular-nums text-slate-800">
-                                        {row.expenseRatioAnnual != null ? `${(row.expenseRatioAnnual * 100).toFixed(3)}%` : "—"}
-                                      </td>
-                                      <td className="px-3 py-2 text-right tabular-nums text-slate-900">
-                                        {currency(row.estimatedAnnualFeeDollars)}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                            {acct.lines.some((l) => l.lookupNote) ? (
-                              <ul className="list-disc space-y-1 pl-5 text-xs text-slate-600">
-                                {acct.lines.map((row, idx) =>
-                                  row.lookupNote ? (
-                                    <li key={`note-${acct.key}-${idx}`}>
-                                      <span className="font-mono">{row.ticker || row.rawName || "—"}</span>: {row.lookupNote}
-                                    </li>
-                                  ) : null
-                                )}
-                              </ul>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                </div>
-              )}
-
-              {feeAnalysisResult ? (
-                <div className="space-y-4 rounded-none border border-violet-200 bg-violet-50/60 p-5 md:p-6">
-                  <h3 className="font-serif text-xl font-semibold text-violet-950">Portfolio totals</h3>
-                  <dl className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
-                    <div className="flex justify-between gap-4 border-b border-violet-200/80 pb-2">
-                      <dt className="text-slate-600">Estimated fund fees (annual)</dt>
-                      <dd className="font-semibold tabular-nums text-slate-900">
-                        {currency(feeAnalysisResult.totalEstimatedFundFeesDollars)}
-                      </dd>
-                    </div>
-                    <div className="flex justify-between gap-4 border-b border-violet-200/80 pb-2">
-                      <dt className="text-slate-600">Advisor fee (annual)</dt>
-                      <dd className="font-semibold tabular-nums text-slate-900">
-                        {currency(feeAnalysisResult.advisorFeeDollarsPortfolio)}
-                      </dd>
-                    </div>
-                    <div className="flex justify-between gap-4 border-b border-violet-200/80 pb-2">
-                      <dt className="text-slate-600">Fund expense load vs full portfolio</dt>
-                      <dd className="font-semibold tabular-nums text-slate-900">
-                        {(feeAnalysisResult.weightedFundExpensePctOfPortfolio * 100).toFixed(3)}%
-                      </dd>
-                    </div>
-                    <div className="flex justify-between gap-4 border-b border-violet-200/80 pb-2">
-                      <dt className="text-slate-600">All-in illustrative drag vs portfolio</dt>
-                      <dd className="font-semibold tabular-nums text-violet-950">
-                        {(feeAnalysisResult.allInIllustrativeDragPctAnnual * 100).toFixed(3)}%
-                      </dd>
-                    </div>
-                  </dl>
-                  <p className="text-xs leading-relaxed text-violet-950/90">{feeAnalysisResult.disclaimer}</p>
-                  <p className="text-xs text-slate-600">
-                    Unique tickers sent to the model: {feeAnalysisResult.uniqueTickerCount}. Holdings missing a ticker:{" "}
-                    {feeAnalysisResult.rowsMissingTicker}.
-                  </p>
-                </div>
-              ) : null}
-
-              <WorkflowStepFooter
-                onBack={goPrevWizardStep}
-                onSave={() => void saveCurrentReview()}
-                onNext={goNextWizardStep}
-                rightExtra={
-                  <Button
-                    variant="outline"
-                    className="h-12 rounded-none border-violet-300 bg-violet-50/90 touch-manipulation hover:bg-violet-100/90"
-                    disabled={feeAnalysisBusy || feeAnalysisGroups.length === 0 || totalValue <= 0}
-                    onClick={() => void runFeeAnalysis()}
-                  >
-                    <BrainCircuit className="mr-2 h-4 w-4" />
-                    {feeAnalysisBusy ? "Running…" : "Run"}
-                  </Button>
-                }
-              />
-            </CardContent>
-          </Card>
+          <ComparativeFeeAnalysis
+            holdings={holdings}
+            totalValue={totalValue}
+            demoMode={demoMode}
+            portfolioSynopsisSnippet={String(analysis?.synopsis ?? "").trim().slice(0, 900)}
+            worksheet={feeAnalysisWorksheet}
+            onWorksheetChange={setFeeAnalysisWorksheet}
+            onEmailSessionExpired={handleEmailSessionExpired}
+            onBack={goPrevWizardStep}
+            onSave={() => void saveCurrentReview()}
+            onNext={goNextWizardStep}
+            WorkflowStepFooter={WorkflowStepFooter}
+          />
         )}
 
         {step === "report" && (
@@ -7721,8 +7676,8 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </div>
 
                 <div className="rounded-none border border-blue-100 bg-blue-50 p-4">
-                  <p className="text-sm font-semibold text-slate-800">Send Client Snapshot (Gmail)</p>
-                  <p className="mt-1 text-xs text-slate-600">The address below is the <strong>client&apos;s inbox</strong> (To:). You send from your connected Google account, not from this field.</p>
+                  <p className="text-sm font-semibold text-slate-800">Send Client Snapshot</p>
+                  <p className="mt-1 text-xs text-slate-600">The address below is the <strong>client&apos;s inbox</strong> (To:). You send from your connected Google or Microsoft account, not from this field.</p>
 
                   {session && gmailReconnectHint ? (
                     <div className="mt-3 rounded-none border border-amber-200 bg-amber-50/95 p-3 text-sm text-amber-950">
@@ -7731,7 +7686,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                       <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs text-amber-900">
                         <li>Click <strong>Reconnect Google for Gmail</strong> below (your browser opens Google&apos;s sign-in/consent).</li>
                         <li>Choose your work Google account if prompted, and allow AdvisorPilot to send email on your behalf.</li>
-                        <li>When you return to this page, press <strong>Send via Gmail</strong> again.</li>
+                        <li>When you return to this page, press <strong>Send snapshot</strong> again.</li>
                       </ol>
                       <div className="mt-3 flex flex-wrap gap-2">
                         <Button
@@ -7748,6 +7703,32 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                           variant="ghost"
                           className="h-10 rounded-none text-amber-900 hover:bg-amber-100/60"
                           onClick={() => setGmailReconnectHint(null)}
+                        >
+                          Dismiss
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {session && outlookReconnectHint ? (
+                    <div className="mt-3 rounded-none border border-amber-200 bg-amber-50/95 p-3 text-sm text-amber-950">
+                      <p className="font-semibold text-amber-950">Reconnect Microsoft for Outlook</p>
+                      <p className="mt-1 text-xs text-amber-900">{outlookReconnectHint}</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-10 rounded-none border-amber-400 bg-white text-amber-950 touch-manipulation hover:bg-amber-100/80"
+                          onClick={triggerMicrosoftOutlookReconnect}
+                        >
+                          <RefreshCw className="mr-2 h-4 w-4 shrink-0" />
+                          Reconnect Microsoft for Outlook
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="h-10 rounded-none text-amber-900 hover:bg-amber-100/60"
+                          onClick={() => setOutlookReconnectHint(null)}
                         >
                           Dismiss
                         </Button>
@@ -7773,7 +7754,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         onClick={sendClientSnapshotEmail}
                       >
                         <Mail className="mr-2 h-4 w-4" />
-                        Send via Gmail
+                        Send snapshot
                       </Button>
                     ) : (
                       <Button

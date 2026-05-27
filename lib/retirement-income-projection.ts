@@ -16,6 +16,8 @@ export type RetirementIncomeProjectionRow = {
   totalPortfolioWithdrawal: number;
   beginningPortfolio: number;
   endingPortfolio: number;
+  /** Shortfall vs incomeNeed (after-tax when spendTargetNetOfTax). Same basis as incomeNeed. */
+  unmetIncomeNeed: number;
 };
 
 export type RetirementIncomeProjectionInput = {
@@ -117,6 +119,23 @@ function socialSecurityAnnualAtAge(
   return clampNonNeg(baseAtFirstPayment * (1 + c) ** yearsInPay);
 }
 
+/** Illustrative spendable income funded in the same basis as incomeNeed. */
+function spendableIncomeFunded(
+  opts: {
+    earned: number;
+    ss: number;
+    pension: number;
+    other: number;
+    rmdActual: number;
+    gapActual: number;
+    useNetTax: boolean;
+    omt: number;
+  },
+): number {
+  const pretax = opts.earned + opts.ss + opts.pension + opts.other + opts.rmdActual + opts.gapActual;
+  return opts.useNetTax ? pretax * opts.omt : pretax;
+}
+
 /**
  * Illustrative year-by-year retirement income bridge: need vs. sources and portfolio balance.
  * Not tax advice; RMD uses Uniform Lifetime divisors on the qualified balance only (client age).
@@ -172,17 +191,17 @@ export function buildRetirementIncomeProjection(input: RetirementIncomeProjectio
     }
 
     const divisor = uniformLifetimeRmdDivisor(ageC);
-    const rmd = divisor != null && qualB > 0 ? Math.min(qualB, qualB / divisor) : 0;
+    const rmdRequested = divisor != null && qualB > 0 ? Math.min(qualB, qualB / divisor) : 0;
 
-    let portfolioWithdrawalBeyondRmd = 0;
+    let gapRequested = 0;
     if (t > 1e-12 && omt > 1e-9) {
       let rem = incomeNeed;
       rem -= earned * omt + ss * omt + pension * omt + other * omt;
-      const remAfterRmd = rem - rmd * omt;
-      portfolioWithdrawalBeyondRmd = remAfterRmd > 0 ? remAfterRmd / omt : 0;
+      const remAfterRmd = rem - rmdRequested * omt;
+      gapRequested = remAfterRmd > 0 ? remAfterRmd / omt : 0;
     } else {
       const afterFixed = incomeNeed - earned - ss - pension - other;
-      portfolioWithdrawalBeyondRmd = clampNonNeg(afterFixed - rmd);
+      gapRequested = clampNonNeg(afterFixed - rmdRequested);
     }
 
     const qualShare = totalB > 0 ? qualB / totalB : 0;
@@ -192,14 +211,29 @@ export function buildRetirementIncomeProjection(input: RetirementIncomeProjectio
     const totalAfterGrowth = totalB * (1 + r);
     const qualAfterGrowth = qualB * (1 + r);
 
-    const totalRemoval = rmd + portfolioWithdrawalBeyondRmd;
-    const qualRemoval = rmd + portfolioWithdrawalBeyondRmd * qualShare;
+    const rmdActual = Math.min(rmdRequested, qualAfterGrowth, totalAfterGrowth);
+    const remainingAfterRmd = Math.max(0, totalAfterGrowth - rmdActual);
+    const gapActual = Math.min(gapRequested, remainingAfterRmd);
 
-    let totalEnd = totalAfterGrowth - totalRemoval;
-    let qualEnd = qualAfterGrowth - qualRemoval;
-    if (totalEnd < 0) totalEnd = 0;
-    if (qualEnd < 0) qualEnd = 0;
+    const totalRemoval = rmdActual + gapActual;
+    const qualRemoval = Math.min(qualAfterGrowth, rmdActual + gapActual * qualShare);
+
+    const totalEnd = Math.max(0, totalAfterGrowth - totalRemoval);
+    let qualEnd = Math.max(0, qualAfterGrowth - qualRemoval);
     if (qualEnd > totalEnd) qualEnd = totalEnd;
+
+    const funded = spendableIncomeFunded({
+      earned,
+      ss,
+      pension,
+      other,
+      rmdActual,
+      gapActual,
+      useNetTax,
+      omt,
+    });
+    const unmetIncomeNeed =
+      retiredNow && incomeNeed > 0 ? Math.max(0, incomeNeed - funded) : 0;
 
     rows.push({
       yearOffset: y,
@@ -211,11 +245,12 @@ export function buildRetirementIncomeProjection(input: RetirementIncomeProjectio
       socialSecurity: ss,
       pension,
       otherIncome: other,
-      rmd,
-      portfolioWithdrawalBeyondRmd,
-      totalPortfolioWithdrawal: rmd + portfolioWithdrawalBeyondRmd,
+      rmd: rmdActual,
+      portfolioWithdrawalBeyondRmd: gapActual,
+      totalPortfolioWithdrawal: rmdActual + gapActual,
       beginningPortfolio,
       endingPortfolio: totalEnd,
+      unmetIncomeNeed,
     });
 
     totalB = totalEnd;

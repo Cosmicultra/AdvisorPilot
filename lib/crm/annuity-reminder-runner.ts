@@ -9,7 +9,7 @@ import {
   accountKeyForHolding,
   normalizeAnnuityContractFromStorage,
 } from "@/lib/annuity-contract-types";
-import { sendGmailMessage } from "@/lib/gmail/send";
+import { advisorEmailReconnectFlags, resolveEmailProviderForAdvisor, sendAdvisorEmail } from "@/lib/advisor-email/send";
 import { buildSignedEmailBodies } from "@/lib/gmail/signature";
 import { plainParagraphsToHtml } from "@/lib/gmail/mime";
 import {
@@ -44,6 +44,7 @@ export interface AnnuityReminderRunResult {
   contractsProcessed?: number;
   contractsSent?: number;
   needsGoogleReconnect?: boolean;
+  needsOutlookReconnect?: boolean;
 }
 
 export interface ProcessAnnuityRemindersStats {
@@ -202,6 +203,7 @@ export async function runAnnuityRemindersForEnrollment(
   let lastEmailStatus: AnnuityReminderEmailStatus | undefined;
   let lastEmailError: string | undefined;
   let needsGoogleReconnect = false;
+  let needsOutlookReconnect = false;
 
   const includeReallocation = reminderKind === "reallocation";
   const includeMaturity = reminderKind === "maturity";
@@ -259,21 +261,30 @@ export async function runAnnuityRemindersForEnrollment(
             emailContent.plainBody,
             messageHtmlCore
           );
-          const sendResult = await sendGmailMessage({
-            advisorEmail: identity.email,
-            to: clientEmailTo,
-            subject: emailContent.subject,
-            plainBody: signed.plainBody,
-            htmlBody: signed.htmlBody,
-          });
-          if (sendResult.ok) {
-            emailStatus = "sent";
-            emailError = null;
-            contractsSent += 1;
-          } else {
+          const provider = await resolveEmailProviderForAdvisor(identity.email);
+          if (!provider) {
             emailStatus = "failed";
-            emailError = sendResult.error;
-            needsGoogleReconnect = sendResult.needsGoogleReconnect ?? false;
+            emailError = "No email provider connected for this advisor.";
+          } else {
+            const sendResult = await sendAdvisorEmail({
+              advisorEmail: identity.email,
+              to: clientEmailTo,
+              subject: emailContent.subject,
+              plainBody: signed.plainBody,
+              htmlBody: signed.htmlBody,
+              provider,
+            });
+            if (sendResult.ok) {
+              emailStatus = "sent";
+              emailError = null;
+              contractsSent += 1;
+            } else {
+              emailStatus = "failed";
+              emailError = sendResult.error;
+              const reconnect = advisorEmailReconnectFlags(sendResult);
+              needsGoogleReconnect = reconnect.needsGoogleReconnect ?? false;
+              needsOutlookReconnect = reconnect.needsOutlookReconnect ?? false;
+            }
           }
         }
 
@@ -438,6 +449,7 @@ export async function runAnnuityRemindersForEnrollment(
     contractsProcessed,
     contractsSent,
     needsGoogleReconnect: needsGoogleReconnect || undefined,
+    needsOutlookReconnect: needsOutlookReconnect || undefined,
   };
 }
 

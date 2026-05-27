@@ -102,7 +102,7 @@ Phase 5 deletes the `?step=` and `?clientId=` search-param aliases; before then 
 - `POST /api/generate-analysis` — unchanged. Both legacy view and CRM Analysis tab call the same route.
 - `POST /api/generate-report` / `generate-roth-report` — unchanged.
 - `POST /api/email-client-snapshot` — unchanged.
-- `POST /api/intake-voice|tts|stt` — unchanged.
+- Live Intake routes (`/api/intake-voice|tts|stt`) — **removed**; Nova chat + Gemini Live voice in the global chat widget replaced pause-based intake voice.
 - `POST /api/voice/token` + `/audit` + `/settings` — unchanged.
 - `POST /api/research/*` — unchanged.
 
