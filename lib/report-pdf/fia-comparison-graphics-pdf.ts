@@ -189,9 +189,10 @@ export function appendFiaComparisonGraphicsPdf(
     drawFiaValueDeliveredPanel(layout, data);
     drawFiaProtectionCapPanel(layout, data);
     if (showRider && data.endingRiderBase != null && data.endingRiderBase > 0) {
+      const endingRiderBase = data.endingRiderBase;
       drawCalloutBox(layout, 22, (yTop, page) => {
         page.drawText(
-          `Illustrative rider benefit base (end): ${formatFiaMoneyCompact(data.endingRiderBase)}`,
+          `Illustrative rider benefit base (end): ${formatFiaMoneyCompact(endingRiderBase)}`,
           { x: layout.margin + 8, y: yTop - 14, size: 7.5, font: layout.bold, color: layout.ink },
         );
       });
