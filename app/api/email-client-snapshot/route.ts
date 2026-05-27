@@ -14,18 +14,6 @@ import { buildClientSnapshotPdfBytes } from "@/app/api/generate-report/route";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function base64UrlEncode(value: Buffer | string) {
-  return Buffer.from(value)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-function sanitizeHeader(value: string) {
-  return String(value || "").replace(/[\r\n]/g, " ").trim();
-}
-
 function normalizeEmail(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
@@ -399,81 +387,6 @@ function buildFollowUpClientEmailBodies(params: {
     plainText: plainLines.join("\n"),
     html: htmlBody,
   };
-}
-
-function buildEmailWithAttachment(params: {
-  from?: string;
-  to: string;
-  subject: string;
-  plainBody: string;
-  htmlBody: string;
-  pdfBytes: Buffer;
-  filename: string;
-}) {
-  const mixedBoundary = `advisorpilot_mixed_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const altBoundary = `advisorpilot_alt_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const to = sanitizeHeader(params.to);
-  const subject = sanitizeHeader(params.subject);
-  const from = sanitizeHeader(params.from || "");
-  const pdfBase64 = params.pdfBytes.toString("base64").replace(/(.{76})/g, "$1\r\n");
-
-  const messageParts = [
-    from ? `From: ${from}` : "",
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    "MIME-Version: 1.0",
-    `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
-    "",
-    `--${mixedBoundary}`,
-    `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
-    "",
-    `--${altBoundary}`,
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: 7bit",
-    "",
-    params.plainBody || "",
-    "",
-    `--${altBoundary}`,
-    'Content-Type: text/html; charset="UTF-8"',
-    "Content-Transfer-Encoding: 7bit",
-    "",
-    params.htmlBody || "",
-    "",
-    `--${altBoundary}--`,
-    "",
-    `--${mixedBoundary}`,
-    `Content-Type: application/pdf; name="${params.filename}"`,
-    "Content-Transfer-Encoding: base64",
-    `Content-Disposition: attachment; filename="${params.filename}"`,
-    "",
-    pdfBase64,
-    "",
-    `--${mixedBoundary}--`,
-  ];
-
-  return messageParts.join("\r\n");
-}
-
-function gmailSendNeedsGoogleReconnect(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const o = err as Record<string, unknown>;
-  const response = o.response as { status?: number; data?: { error?: string; error_description?: string } } | undefined;
-  const status = response?.status;
-  if (status === 401 || status === 403) return true;
-  const dataErr = String(response?.data?.error || "");
-  const dataDesc = String(response?.data?.error_description || "");
-  if (/invalid_grant|unauthorized_client|invalid_token|insufficient/i.test(dataErr + dataDesc)) return true;
-  const msg = String(o.message || err);
-  if (
-    /invalid_grant|invalid[_ ]token|Token has been expired|token expired|Invalid Credentials|UNAUTHENTICATED|Insufficient Permission|insufficient authentication scopes|no access token|401|403/i.test(
-      msg
-    )
-  ) {
-    return true;
-  }
-  const errCode = o.code;
-  if (errCode === 401 || errCode === "401" || errCode === 403 || errCode === "403") return true;
-  return false;
 }
 
 export async function POST(req: Request) {

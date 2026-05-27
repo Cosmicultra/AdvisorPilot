@@ -101,6 +101,7 @@ export async function sendAdvisorEmail(params: {
       subject: params.subject,
       plainBody: params.plainBody,
       htmlBody: params.htmlBody,
+      attachments: params.attachments,
       accessTokenOverride: params.accessTokenOverride,
     });
     if (!sendResult.ok) {

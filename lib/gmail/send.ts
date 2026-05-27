@@ -1,7 +1,12 @@
 import { google } from "googleapis";
 import { gmailSendNeedsGoogleReconnect } from "./errors";
 import { getGmailAccessToken, GmailNotConnectedError } from "./oauth";
-import { base64UrlEncode, buildSimpleMultipartEmail } from "./mime";
+import {
+  base64UrlEncode,
+  buildMultipartEmailWithAttachments,
+  buildSimpleMultipartEmail,
+  type GmailMimeAttachment,
+} from "./mime";
 
 export type SendGmailResult =
   | { ok: true }
@@ -13,6 +18,7 @@ export async function sendGmailMessage(params: {
   subject: string;
   plainBody: string;
   htmlBody: string;
+  attachments?: GmailMimeAttachment[];
   accessTokenOverride?: string;
 }): Promise<SendGmailResult> {
   try {
@@ -24,13 +30,23 @@ export async function sendGmailMessage(params: {
     oauth2Client.setCredentials({ access_token: accessToken });
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    const rawMessage = buildSimpleMultipartEmail({
-      from: params.advisorEmail,
-      to: params.to,
-      subject: params.subject,
-      plainBody: params.plainBody,
-      htmlBody: params.htmlBody,
-    });
+    const rawMessage =
+      params.attachments?.length
+        ? buildMultipartEmailWithAttachments({
+            from: params.advisorEmail,
+            to: params.to,
+            subject: params.subject,
+            plainBody: params.plainBody,
+            htmlBody: params.htmlBody,
+            attachments: params.attachments,
+          })
+        : buildSimpleMultipartEmail({
+            from: params.advisorEmail,
+            to: params.to,
+            subject: params.subject,
+            plainBody: params.plainBody,
+            htmlBody: params.htmlBody,
+          });
 
     await gmail.users.messages.send({
       userId: "me",
