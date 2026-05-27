@@ -1,22 +1,16 @@
 import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
-import { createClient } from "@supabase/supabase-js";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import {
+  getSupabaseServiceAdmin,
+  missingSupabaseServiceEnv,
+} from "@/lib/supabase-service-admin";
 import { writeAuditEvent } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
-
 const DEFAULT_EXPIRY_DAYS = 7;
-
-function missingEnv() {
-  return !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY;
-}
 
 function publicBaseUrl(request: Request) {
   const env = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
@@ -31,9 +25,10 @@ function publicBaseUrl(request: Request) {
  */
 export async function POST(request: Request) {
   try {
-    if (missingEnv()) {
+    if (missingSupabaseServiceEnv()) {
       return NextResponse.json({ error: "Missing Supabase environment variables." }, { status: 500 });
     }
+    const supabaseAdmin = getSupabaseServiceAdmin()!;
 
     const identity = await resolveAdvisorIdentity(request);
     if (!identity) {

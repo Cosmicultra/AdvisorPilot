@@ -1,17 +1,15 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import {
+  getSupabaseServiceAdmin,
+  missingSupabaseServiceEnv,
+} from "@/lib/supabase-service-admin";
 import { isGmailConnected } from "@/lib/gmail-connection";
 import { isOutlookConnected } from "@/lib/outlook-connection";
 import { getNextAuthAuthProvider } from "@/lib/outlook-connection";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
 
 type AdvisorProfileRecord = {
   owner_email: string;
@@ -34,10 +32,6 @@ type AdvisorProfileRecord = {
   created_at?: string | null;
   updated_at?: string | null;
 };
-
-function missingSupabaseEnv() {
-  return !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY;
-}
 
 function errorMessage(err: unknown, fallback: string) {
   return err instanceof Error ? err.message : fallback;
@@ -189,9 +183,10 @@ function buildMergedProfilePayload(
 
 export const GET = async (req: Request) => {
   try {
-    if (missingSupabaseEnv()) {
+    if (missingSupabaseServiceEnv()) {
       return NextResponse.json({ error: "Missing Supabase environment variables." }, { status: 500 });
     }
+    const supabaseAdmin = getSupabaseServiceAdmin()!;
 
     const identity = await resolveAdvisorIdentity(req);
     if (!identity) {
@@ -260,9 +255,10 @@ export const GET = async (req: Request) => {
 
 export const POST = async (req: Request) => {
   try {
-    if (missingSupabaseEnv()) {
+    if (missingSupabaseServiceEnv()) {
       return NextResponse.json({ error: "Missing Supabase environment variables." }, { status: 500 });
     }
+    const supabaseAdmin = getSupabaseServiceAdmin()!;
 
     const identity = await resolveAdvisorIdentity(req);
     if (!identity) {

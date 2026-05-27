@@ -1,16 +1,15 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+import {
+  getSupabaseServiceAdmin,
+  missingSupabaseServiceEnv,
+} from "@/lib/supabase-service-admin";
 
 export async function POST(req: Request) {
   try {
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    if (missingSupabaseServiceEnv()) {
       return NextResponse.json({ error: "Missing Supabase environment variables." }, { status: 500 });
     }
+    const supabaseAdmin = getSupabaseServiceAdmin()!;
 
     const body = await req.json().catch(() => ({}));
     const refresh_token = typeof body?.refresh_token === "string" ? body.refresh_token.trim() : "";

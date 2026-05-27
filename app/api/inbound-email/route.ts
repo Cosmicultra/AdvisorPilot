@@ -1,15 +1,13 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { DEFAULT_NEW_CLIENT_STAGE } from "@/lib/crm/stage";
+import {
+  getSupabaseServiceAdmin,
+  missingSupabaseServiceEnv,
+} from "@/lib/supabase-service-admin";
 import { writeAuditEvent } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
 
 type InboundAttachment = {
   fileName?: string;
@@ -39,9 +37,10 @@ function authorized(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    if (missingSupabaseServiceEnv()) {
       return NextResponse.json({ error: "Missing Supabase environment variables." }, { status: 500 });
     }
+    const supabaseAdmin = getSupabaseServiceAdmin()!;
     if (!authorized(req)) {
       return NextResponse.json({ error: "Unauthorized inbound email webhook." }, { status: 401 });
     }

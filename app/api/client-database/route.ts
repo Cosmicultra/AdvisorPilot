@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import {
+  getSupabaseServiceAdmin,
+  missingSupabaseServiceEnv,
+} from "@/lib/supabase-service-admin";
 import { writeAuditEvent } from "@/lib/audit-log";
 import {
   clientSaveChangedSections,
@@ -11,18 +14,6 @@ import { DEFAULT_NEW_CLIENT_STAGE } from "@/lib/crm/stage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
-
-function missingSupabaseEnv() {
-  return (
-    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    !process.env.SUPABASE_SERVICE_ROLE_KEY
-  );
-}
 
 type ClientRecord = {
   id: string;
@@ -134,12 +125,13 @@ function mapRecord(record: ClientRecord) {
 
 export const GET = async (req: Request) => {
   try {
-    if (missingSupabaseEnv()) {
+    if (missingSupabaseServiceEnv()) {
       return NextResponse.json(
         { error: "Missing Supabase environment variables." },
         { status: 500 }
       );
     }
+    const supabaseAdmin = getSupabaseServiceAdmin()!;
 
     const identity = await resolveAdvisorIdentity(req);
     if (!identity) {
@@ -175,12 +167,13 @@ export const GET = async (req: Request) => {
 
 export const POST = async (req: Request) => {
   try {
-    if (missingSupabaseEnv()) {
+    if (missingSupabaseServiceEnv()) {
       return NextResponse.json(
         { error: "Missing Supabase environment variables." },
         { status: 500 }
       );
     }
+    const supabaseAdmin = getSupabaseServiceAdmin()!;
 
     const identity = await resolveAdvisorIdentity(req);
     if (!identity) {
@@ -311,12 +304,13 @@ export const POST = async (req: Request) => {
 
 export const DELETE = async (req: Request) => {
   try {
-    if (missingSupabaseEnv()) {
+    if (missingSupabaseServiceEnv()) {
       return NextResponse.json(
         { error: "Missing Supabase environment variables." },
         { status: 500 }
       );
     }
+    const supabaseAdmin = getSupabaseServiceAdmin()!;
 
     const body = await req.json();
     const id = body?.id;

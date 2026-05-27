@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { createClient } from "@supabase/supabase-js";
 import { authOptions } from "../auth/[...nextauth]/route";
+import { getSupabaseServiceAdmin } from "@/lib/supabase-service-admin";
 import { clientDisplayName, clientFirstNameSalutation } from "@/lib/intake-config";
 import { writeAuditEvent } from "@/lib/audit-log";
 import {
@@ -13,11 +13,6 @@ import { buildClientSnapshotPdfBytes } from "@/app/api/generate-report/route";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
 
 function base64UrlEncode(value: Buffer | string) {
   return Buffer.from(value)
@@ -258,7 +253,8 @@ function appendBrandingToPlainSignature(plain: string, profile: AdvisorProfileRe
 }
 
 async function getAdvisorProfile(ownerEmail: string): Promise<AdvisorProfileRecord | null> {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  const supabaseAdmin = getSupabaseServiceAdmin();
+  if (!supabaseAdmin) {
     return null;
   }
 
@@ -634,7 +630,8 @@ export async function POST(req: Request) {
     });
 
     const clientId = typeof body?.clientId === "string" ? body.clientId : "";
-    if (clientId) {
+    const supabaseAdmin = getSupabaseServiceAdmin();
+    if (clientId && supabaseAdmin) {
       await supabaseAdmin
         .from("advisorpilot_clients")
         .update({

@@ -1,14 +1,12 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
+import {
+  getSupabaseServiceAdmin,
+  missingSupabaseServiceEnv,
+} from "@/lib/supabase-service-admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
 
 /** Public bucket; create in Supabase Dashboard → Storage (see docs/advisorpilot-database-reference.sql). */
 const BUCKET = "advisorpilot-advisor-branding";
@@ -25,9 +23,10 @@ function extForMime(mime: string) {
 
 export async function POST(req: Request) {
   try {
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    if (missingSupabaseServiceEnv()) {
       return NextResponse.json({ error: "Server storage is not configured." }, { status: 500 });
     }
+    const supabaseAdmin = getSupabaseServiceAdmin()!;
 
     const identity = await resolveAdvisorIdentity(req);
     if (!identity) {

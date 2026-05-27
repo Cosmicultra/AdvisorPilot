@@ -1,17 +1,11 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import {
+  getSupabaseServiceAdmin,
+  missingSupabaseServiceEnv,
+} from "@/lib/supabase-service-admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
-
-function missingEnv() {
-  return !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY;
-}
 
 /**
  * Public: lets the client page load advisor-prefilled intake (same token as upload).
@@ -22,9 +16,10 @@ export async function GET(
   context: { params: Promise<{ token: string }> }
 ) {
   try {
-    if (missingEnv()) {
+    if (missingSupabaseServiceEnv()) {
       return NextResponse.json({ error: "Server configuration error." }, { status: 500 });
     }
+    const supabaseAdmin = getSupabaseServiceAdmin()!;
 
     const { token: raw } = await context.params;
     const token = String(raw || "").trim();

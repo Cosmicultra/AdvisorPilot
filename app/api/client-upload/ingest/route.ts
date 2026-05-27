@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { Buffer } from "buffer";
-import { createClient } from "@supabase/supabase-js";
+import {
+  getSupabaseServiceAdmin,
+  missingSupabaseServiceEnv,
+} from "@/lib/supabase-service-admin";
 import { isAnnuityContractHolding } from "@/lib/annuity-contract-types";
 import { extractStatementFromFileBuffer } from "@/lib/statement-extract-router";
 import { writeAuditEvent } from "@/lib/audit-log";
@@ -33,16 +36,7 @@ import { LlmAttachmentError } from "@/lib/llm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
-
 const MAX_UPLOADS_PER_TOKEN = 25;
-
-function missingEnv() {
-  return !process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY;
-}
 
 async function normalizeHoldings(raw: unknown[]) {
   const masterOn = securitiesMasterFeatureEnabled();
@@ -131,9 +125,10 @@ async function normalizeHoldings(raw: unknown[]) {
  */
 export async function POST(request: Request) {
   try {
-    if (missingEnv()) {
+    if (missingSupabaseServiceEnv()) {
       return NextResponse.json({ error: "Server configuration error." }, { status: 500 });
     }
+    const supabaseAdmin = getSupabaseServiceAdmin()!;
 
     const formData = await request.formData();
     const token = String(formData.get("token") || "").trim();
