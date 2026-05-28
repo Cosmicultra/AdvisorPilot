@@ -24,7 +24,7 @@ export const POST = async (req: Request) => {
       return NextResponse.json({ error: result.message || "Sync failed." }, { status: 400 });
     }
 
-    return NextResponse.json({ ok: true, ...result });
+    return NextResponse.json(result);
   } catch (err) {
     console.error("[calendar:google] sync error", err);
     return NextResponse.json({ error: err instanceof Error ? err.message : "Sync failed." }, { status: 500 });
