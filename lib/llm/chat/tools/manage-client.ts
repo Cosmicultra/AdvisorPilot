@@ -31,6 +31,11 @@
  */
 
 import { toClientDetail, type ClientRow } from "@/lib/crm/clients-mapper";
+import {
+  applyManualNextMeetingProvenance,
+  manualMeetingActivityAction,
+  recordNextMeetingActivity,
+} from "@/lib/crm/next-meeting-activity";
 import type { ClientDetail, ClientStage } from "@/lib/crm/types";
 import { diffShallow, withConfirmation } from "./confirmation";
 import { isUuid } from "./query-crm-helpers";
@@ -182,6 +187,9 @@ interface UpdatePatch {
   email?: string | null;
   phone?: string | null;
   next_meeting_at?: string | null;
+  next_meeting_source?: string | null;
+  next_meeting_initiator?: string | null;
+  next_meeting_calendar_event_id?: string | null;
   review_due_at?: string | null;
   owner_initials?: string | null;
   household_label?: string | null;
@@ -332,6 +340,15 @@ async function executeUpdate(
     };
   }
 
+  const previousNextMeetingAt = visible.client.nextMeetingAt;
+  let meetingActivityAction: ReturnType<typeof manualMeetingActivityAction> = null;
+
+  if ("next_meeting_at" in patch) {
+    const nextAt = patch.next_meeting_at ?? null;
+    meetingActivityAction = manualMeetingActivityAction(previousNextMeetingAt, nextAt);
+    applyManualNextMeetingProvenance(patch as Record<string, unknown>, nextAt);
+  }
+
   const { data: updatedRow, error: updateError } = await ctx.supabase
     .from("advisorpilot_clients")
     .update(patch)
@@ -340,6 +357,18 @@ async function executeUpdate(
     .single();
   if (updateError || !updatedRow) {
     return { error: updateError?.message ?? "Failed to update client." };
+  }
+
+  if (meetingActivityAction) {
+    await recordNextMeetingActivity(ctx.supabase, {
+      ownerEmail: ctx.advisorEmail,
+      ownerUserId: null,
+      clientId,
+      action: meetingActivityAction,
+      source: "manual",
+      nextMeetingAt: patch.next_meeting_at ?? null,
+      previousMeetingAt: previousNextMeetingAt,
+    });
   }
 
   const detail = toClientDetail(updatedRow as ClientRow, {

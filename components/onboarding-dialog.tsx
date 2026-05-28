@@ -1027,6 +1027,55 @@ function BrandingStep({
 }
 
 function DoneStep() {
+  const [calendarBusy, setCalendarBusy] = useState(false);
+  const [calendarStatus, setCalendarStatus] = useState<string | null>(null);
+
+  const enableCalendarSync = useCallback(async () => {
+    setCalendarBusy(true);
+    setCalendarStatus(null);
+    try {
+      const res = await advisorFetch("/api/calendar/google/watch/start", {
+        method: "POST",
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = String(json?.error || `Failed (${res.status}).`);
+        setCalendarStatus(msg);
+        return;
+      }
+      setCalendarStatus("Google Calendar sync enabled.");
+    } catch (err) {
+      setCalendarStatus(err instanceof Error ? err.message : "Failed to enable calendar sync.");
+    } finally {
+      setCalendarBusy(false);
+    }
+  }, []);
+
+  const syncCalendarNow = useCallback(async () => {
+    setCalendarBusy(true);
+    setCalendarStatus(null);
+    try {
+      const res = await advisorFetch("/api/calendar/google/sync", {
+        method: "POST",
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = String(json?.error || json?.message || `Failed (${res.status}).`);
+        setCalendarStatus(msg);
+        return;
+      }
+      const updated = Number(json?.updatedClients ?? 0);
+      const cleared = Number(json?.clearedClients ?? 0);
+      setCalendarStatus(
+        `Calendar synced. Updated ${updated} client${updated === 1 ? "" : "s"}, cleared ${cleared}.`,
+      );
+    } catch (err) {
+      setCalendarStatus(err instanceof Error ? err.message : "Failed to sync calendar.");
+    } finally {
+      setCalendarBusy(false);
+    }
+  }, []);
+
   return (
     <div className="space-y-5 py-2">
       <div className="flex items-center gap-3">
@@ -1066,6 +1115,47 @@ function DoneStep() {
             Use the voice agent (⌘/Ctrl + Shift + V) to navigate and search clients hands-free.
           </li>
         </ul>
+        <div className="mt-4 border-t border-slate-200 pt-4">
+          <p className="font-semibold text-slate-900">Calendar sync (optional)</p>
+          <p className="mt-1 text-xs text-slate-600">
+            Enable Google Calendar sync to auto-populate <span className="font-semibold">Next meeting</span> in your CRM based
+            on calendar invites matched by client email. Client vs advisor initiated is inferred from Google when possible. No AI involved.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-none"
+              disabled={calendarBusy}
+              onClick={() => void enableCalendarSync()}
+            >
+              {calendarBusy ? "Enabling…" : "Enable Google Calendar sync"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-none"
+              disabled={calendarBusy}
+              onClick={() => void syncCalendarNow()}
+            >
+              {calendarBusy ? "Syncing…" : "Sync calendar now"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className="rounded-none text-slate-600"
+              disabled={calendarBusy}
+              onClick={() => setCalendarStatus(null)}
+            >
+              Clear
+            </Button>
+          </div>
+          {calendarStatus ? (
+            <p className="mt-2 text-xs text-slate-600" role="status">
+              {calendarStatus}
+            </p>
+          ) : null}
+        </div>
       </div>
     </div>
   );

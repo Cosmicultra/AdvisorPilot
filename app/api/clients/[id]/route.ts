@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { writeAuditEvent } from "@/lib/audit-log";
 import { clientSaveUpdateSummary, crmPatchChangedLabels } from "@/lib/crm/client-update-summary";
+import {
+  applyManualNextMeetingProvenance,
+  manualMeetingActivityAction,
+  recordNextMeetingActivity,
+} from "@/lib/crm/next-meeting-activity";
+import { rollForwardPastNextMeetingIfNeeded } from "@/lib/crm/roll-forward-past-meeting";
 import { toClientDetail, type ClientRow } from "@/lib/crm/clients-mapper";
 import {
   getCrmSupabaseAdmin,
@@ -102,9 +108,22 @@ export const GET = async (
       return NextResponse.json({ error: "Client not found." }, { status: 404 });
     }
 
+    const meetingFields =
+      "id, owner_email, next_meeting_at, last_contacted_at, next_meeting_source";
+    const { data: meetingRow } = await supabase
+      .from("advisorpilot_clients")
+      .select(meetingFields)
+      .eq("id", id)
+      .maybeSingle();
+    if (meetingRow) {
+      await rollForwardPastNextMeetingIfNeeded(supabase, meetingRow, {
+        ownerUserId: identity.userId,
+      });
+    }
+
     const clientSelect =
       view === "summary"
-        ? "id, owner_email, owner_user_id, client, holdings, demo_mode, total_value, status, last_contacted_at, source, created_at, updated_at, stage, owner_initials, household_label, tags, location, email, phone, inception_year, next_meeting_at, review_due_at, ytd_return, org_id, visibility"
+        ? "id, owner_email, owner_user_id, client, holdings, demo_mode, total_value, status, last_contacted_at, source, created_at, updated_at, stage, owner_initials, household_label, tags, location, email, phone, inception_year, next_meeting_at, next_meeting_source, next_meeting_initiator, review_due_at, ytd_return, org_id, visibility"
         : "*";
 
     const [rowResult, taskCount, noteCount] = await Promise.all([
@@ -273,7 +292,7 @@ export const PATCH = async (
     // will widen this once sharing UI lands).
     const { data: ownerRow, error: ownerErr } = await supabase
       .from("advisorpilot_clients")
-      .select("owner_email")
+      .select("owner_email, next_meeting_at")
       .eq("id", id)
       .maybeSingle();
     if (ownerErr || !ownerRow) {
@@ -294,6 +313,23 @@ export const PATCH = async (
       return await respondWithDetail(supabase, id);
     }
 
+    const previousNextMeetingAt = ownerRow.next_meeting_at
+      ? String(ownerRow.next_meeting_at)
+      : null;
+    let meetingActivityAction: ReturnType<typeof manualMeetingActivityAction> = null;
+
+    if ("next_meeting_at" in validation.patch) {
+      const nextAt =
+        validation.patch.next_meeting_at === undefined
+          ? null
+          : validation.patch.next_meeting_at;
+      meetingActivityAction = manualMeetingActivityAction(previousNextMeetingAt, nextAt);
+      applyManualNextMeetingProvenance(
+        validation.patch as Record<string, unknown>,
+        nextAt,
+      );
+    }
+
     const startedAt = Date.now();
     const { error: updateErr } = await supabase
       .from("advisorpilot_clients")
@@ -305,20 +341,46 @@ export const PATCH = async (
       return NextResponse.json({ error: updateErr.message }, { status: 400 });
     }
 
-    const patchKeys = Object.keys(validation.patch);
-    const changedSections = crmPatchChangedLabels(patchKeys);
-    await writeAuditEvent({
-      ownerEmail: identity.email,
-      ownerUserId: identity.userId,
-      action: "client.updated",
-      entityType: "client",
-      entityId: id,
-      metadata: {
-        changedSections,
-        summary: clientSaveUpdateSummary(changedSections),
-        source: "crm_patch",
-      },
-    });
+    if (meetingActivityAction) {
+      await recordNextMeetingActivity(supabase, {
+        ownerEmail: identity.email,
+        ownerUserId: identity.userId,
+        clientId: id,
+        action: meetingActivityAction,
+        source: "manual",
+        nextMeetingAt: validation.patch.next_meeting_at ?? null,
+        previousMeetingAt: previousNextMeetingAt,
+      });
+    }
+
+    const patchKeys = Object.keys(validation.patch).filter(
+      (k) =>
+        !(
+          meetingActivityAction &&
+          (k === "next_meeting_at" ||
+            k === "next_meeting_source" ||
+            k === "next_meeting_initiator" ||
+            k === "next_meeting_calendar_event_id")
+        ),
+    );
+    let changedSections = crmPatchChangedLabels(patchKeys);
+    if (meetingActivityAction) {
+      changedSections = changedSections.filter((s) => s !== "Next meeting");
+    }
+    if (changedSections.length > 0) {
+      await writeAuditEvent({
+        ownerEmail: identity.email,
+        ownerUserId: identity.userId,
+        action: "client.updated",
+        entityType: "client",
+        entityId: id,
+        metadata: {
+          changedSections,
+          summary: clientSaveUpdateSummary(changedSections),
+          source: "crm_patch",
+        },
+      });
+    }
 
     const response = await respondWithDetail(supabase, id);
     console.info(

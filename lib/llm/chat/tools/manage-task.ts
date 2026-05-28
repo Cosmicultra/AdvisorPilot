@@ -11,7 +11,7 @@
  *
  * Side effects mirror `app/api/tasks/route.ts` POST + `[id]/route.ts`
  * PATCH/DELETE: every create/update/delete writes an activity_log entry
- * to surface on the client's Timeline tab (or the global tasks list when
+ * to surface on the client's Activity tab (or the global tasks list when
  * client_id is null).
  *
  * Visibility:

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import { toRosterItem, type ClientRow } from "@/lib/crm/clients-mapper";
+import { rollForwardPastMeetingsForOwner } from "@/lib/crm/roll-forward-past-meeting";
 import {
   getCrmSupabaseAdmin,
   missingCrmSupabaseEnv,
@@ -96,6 +97,7 @@ export const GET = async (req: Request) => {
     const filters = parseFilters(new URL(req.url).searchParams);
 
     const supabase = getCrmSupabaseAdmin();
+    await rollForwardPastMeetingsForOwner(supabase, identity.email);
     const startedAt = Date.now();
     let data: ClientRow[] | null = null;
     let error: { message: string } | null = null;

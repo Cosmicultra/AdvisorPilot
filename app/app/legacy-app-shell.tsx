@@ -647,7 +647,6 @@ function advisorNavInitials(signatureName: string, sessionName?: string | null, 
 }
 
 function wizardRailLabel(item: string) {
-  if (item === "saved") return "Client Database";
   if (item === "intake") return "Client Profile";
   if (item === "fia") return "FIA calculator";
   if (item === "retIncome") return "Ret. Inc Calculator";
@@ -673,7 +672,6 @@ const WIZARD_STEP_ICONS: Record<string, LucideIcon> = {
   retIncome: DollarSign,
   feeAnalysis: Percent,
   report: FileText,
-  saved: FolderOpen,
 };
 
 function wizardRailIcon(item: string): LucideIcon {
@@ -834,7 +832,6 @@ function WizardStepRail({
               aria-current={active ? "step" : undefined}
               aria-label={label}
               onClick={() => {
-                if (item === "saved") void loadSavedReviews();
                 setStep(item);
               }}
             >
@@ -1339,8 +1336,8 @@ export default function AdvisorPilotPage() {
   const wizardSteps = useMemo(() => {
     const head = ["intake", "upload", "confirm", "analysis", "meeting", "fia"] as const;
     return showRothOptionReport
-      ? ([...head, "roth", "retIncome", "feeAnalysis", "report", "saved"] as const)
-      : ([...head, "retIncome", "feeAnalysis", "report", "saved"] as const);
+      ? ([...head, "roth", "retIncome", "feeAnalysis", "report"] as const)
+      : ([...head, "retIncome", "feeAnalysis", "report"] as const);
   }, [showRothOptionReport]);
 
   /** True when starting a new review could discard advisor work (prompt before reset). */
@@ -2615,7 +2612,6 @@ export default function AdvisorPilotPage() {
   const goNextWizardStep = useCallback(() => {
     const next = adjacentWizardStep(wizardSteps, step, 1);
     if (!next) return;
-    if (next === "saved") void loadSavedReviews();
     setStep(next);
   }, [wizardSteps, step]);
 
@@ -2780,7 +2776,6 @@ export default function AdvisorPilotPage() {
     "retIncome",
     "feeAnalysis",
     "report",
-    "saved",
   ];
 
   const searchParams = useSearchParams();
@@ -3378,11 +3373,9 @@ export default function AdvisorPilotPage() {
     window.location.replace("/login");
   }, [authLoaded, session, emailAuthUser]);
 
-  /** Leaving Client Database clears a stuck “Sending…” if navigation interrupted the request. */
+  /** Leaving the current step clears a stuck “Sending…” if navigation interrupted the request. */
   useEffect(() => {
-    if (step !== "saved") {
-      setFollowUpEmailSendingId(null);
-    }
+    setFollowUpEmailSendingId(null);
   }, [step]);
 
   /** Scroll follow-up / error banner into view when it appears. */
@@ -4447,7 +4440,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <p className="ap-eyebrow">Option A: Have the client upload</p>
                     <p className="font-serif text-xl font-semibold text-blue-950">Client upload link</p>
                     <p className="text-sm text-slate-600">
-                      Your client opens this on their phone and uploads their statement. The file is extracted and saved as a <strong>Draft</strong> on <strong>your</strong> Client Database only, not another advisor&apos;s.
+                      Your client opens this on their phone and uploads their statement. The file is extracted and saved as a <strong>Draft</strong> in <strong>your</strong> CRM only, not another advisor&apos;s.
                     </p>
                     {magicLinkExpiresAt ? (
                       <p className="text-xs text-slate-500">
@@ -4604,7 +4597,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
             <CardContent className="space-y-6 p-6 pb-28 md:p-8 md:pb-8">
               <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><div className="ap-icon-tile flex h-12 w-12 items-center justify-center rounded-none"><ShieldCheck className="h-6 w-6" /></div><div><h2 className="font-serif text-3xl font-bold">Confirm Holdings</h2><p className="text-sm text-slate-500">Review matches, choose alternate matches, enter manual tickers, and select asset classes.</p><p className="mt-1 max-w-2xl text-xs text-slate-500">Broker cash and sweep lines without a visible ticker are labeled <code className="rounded bg-slate-100 px-1 font-mono text-[0.85rem]">{SYNTHETIC_CASH_TICKER}</code> (placeholder, not listed). Allocation uses the cash sleeve; scenario models use a Treasury-bill–style proxy for cash returns.</p></div></div><Badge className={`rounded-none ${reviewCount ? "bg-red-600" : "bg-emerald-600"}`}>{reviewCount} need review</Badge></div>
               {!demoMode && !String(session?.user?.email || emailAuthUser?.email || "").trim() && (
-                <p className="rounded-none border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">Sign in to auto-save this confirmation as a <strong>Draft</strong> in your Client Database (helps if the tab closes mid-meeting).</p>
+                <p className="rounded-none border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">Sign in to auto-save this confirmation as a <strong>Draft</strong> in your CRM (helps if the tab closes mid-meeting).</p>
               )}
               {!demoMode && String(session?.user?.email || emailAuthUser?.email || "").trim() && draftAutosaveStatus !== "idle" && (
                 <p className="text-xs text-slate-500" aria-live="polite">
@@ -7660,17 +7653,6 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                     <Button variant="outline" className="h-12 justify-start rounded-none bg-white/85 touch-manipulation" onClick={saveCurrentReview}>
                       <Save className="mr-2 h-4 w-4" />
                       Save Client Profile
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="h-12 justify-start rounded-none bg-white/85 touch-manipulation"
-                      onClick={() => {
-                        void loadSavedReviews();
-                        setStep("saved");
-                      }}
-                    >
-                      <FolderOpen className="mr-2 h-4 w-4" />
-                      Client Database
                     </Button>
                   </div>
                 </div>

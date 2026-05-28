@@ -10,6 +10,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { mergeLastContactedWithMeeting } from "./last-contacted-merge";
 import type { ActivityType } from "./types";
 
 export interface WriteActivityInput {
@@ -51,19 +52,36 @@ export async function writeActivityLog(
 }
 
 /**
- * Bumps advisorpilot_clients.last_contacted_at to NOW. Called by the notes
- * POST route — a logged note counts as a touchpoint with the client.
+ * Bumps advisorpilot_clients.last_contacted_at. Defaults to now().
+ * Uses the later of the existing value and the new timestamp when both exist.
  *
  * Best-effort like writeActivityLog: errors are logged but don't bubble.
  */
 export async function bumpLastContactedAt(
   supabase: SupabaseClient,
-  clientId: string
+  clientId: string,
+  options?: { at?: string },
 ): Promise<void> {
   try {
+    const atIso =
+      options?.at && Number.isFinite(Date.parse(options.at))
+        ? new Date(options.at).toISOString()
+        : new Date().toISOString();
+
+    const { data: row } = await supabase
+      .from("advisorpilot_clients")
+      .select("last_contacted_at")
+      .eq("id", clientId)
+      .maybeSingle();
+
+    const merged = mergeLastContactedWithMeeting(
+      row?.last_contacted_at ?? null,
+      atIso,
+    );
+
     const { error } = await supabase
       .from("advisorpilot_clients")
-      .update({ last_contacted_at: new Date().toISOString() })
+      .update({ last_contacted_at: merged })
       .eq("id", clientId);
     if (error) {
       console.error(

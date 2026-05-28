@@ -4,7 +4,7 @@
  * Sticky tab bar below the Profile header. Phase 1 v1 surface (per
  * docs/crm/20-technical-specs.md §7.1):
  *
- *   Overview · Portfolio · Workflow · Notes · Timeline · Tasks · Documents · Contacts
+ *   Overview · Portfolio · Workflow · Notes · Activity · Tasks · Documents · Contacts
  *
  * Each tab is a Next.js Link to /app/crm/[id]/[tab]. Active tab is detected
  * from `usePathname()`. Tabs whose content isn't built yet (everything but
@@ -28,7 +28,7 @@ const TABS: Tab[] = [
   { id: "workflow", label: "Workflow" },
   { id: "drippers", label: "Drippers" },
   { id: "notes", label: "Notes" },
-  { id: "timeline", label: "Timeline" },
+  { id: "activity", label: "Activity" },
   { id: "tasks", label: "Tasks" },
   { id: "documents", label: "Documents" },
   { id: "contacts", label: "Contacts" },

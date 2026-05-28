@@ -1,11 +1,36 @@
 -- =============================================================================
--- AdvisorPilot — apply all 5 new migrations for the multi-provider LLM + voice
--- agent work. Idempotent: every CREATE / ALTER uses IF NOT EXISTS.
+-- AdvisorPilot — apply all incremental migrations (bundle)
 --
--- Run order matters (the provenance sidecar references the existing
--- security-enrichment-cache table). Just paste the whole file into the
--- Supabase Dashboard → SQL Editor → Run.
+-- Idempotent: every CREATE / ALTER uses IF NOT EXISTS / IF NOT EXISTS.
+--
+-- Prerequisites: run advisorpilot_full_schema_rls.sql first on a fresh DB.
+-- Run order matters inside this file (e.g. enrichment provenance needs the
+-- security-enrichment-cache table).
+--
+-- Paste this entire file into Supabase Dashboard → SQL Editor → Run.
+--
+-- Sections:
+--   1  LLM columns on advisor_profiles
+--   2  Enrichment provenance sidecar
+--   3  Deep research jobs
+--   4  Voice settings
+--   5  Voice audit log
+--   6  Client drippers + dripper runs
+--   7  Gmail tokens + dripper email columns
+--   8  Annuity reminder sends
+--   9  Outlook tokens
+--  10  Fee analysis worksheet column
+--  10  Fee analysis worksheet column
+--  11  Roster list RPC
+--  13  Google Calendar webhook channels + CRM email / next_meeting_at
+--  14  Next meeting provenance (source / initiator / event id)
+--      (13–14 grouped at the bottom under one part header)
 -- =============================================================================
+
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- LLM, enrichment, research, voice
+-- ═════════════════════════════════════════════════════════════════════════════
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 1. advisorpilot_advisor_profiles_llm_columns.sql
@@ -15,9 +40,10 @@ alter table public.advisorpilot_advisor_profiles
   add column if not exists llm_model_overrides jsonb,
   add column if not exists default_research_tier text;
 
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 2. advisorpilot_enrichment_provenance.sql
--- (Requires public.set_advisorpilot_updated_at() + the enrichment cache table.)
+-- (Requires public.set_advisorpilot_updated_at() + enrichment cache table.)
 -- ─────────────────────────────────────────────────────────────────────────────
 create table if not exists public.advisorpilot_enrichment_provenance (
   cache_key text not null
@@ -40,10 +66,11 @@ drop trigger if exists set_advisorpilot_enrich_provenance_updated_at
   on public.advisorpilot_enrichment_provenance;
 
 create trigger set_advisorpilot_enrich_provenance_updated_at
-before update on public.advisorpilot_enrichment_provenance
-for each row execute function public.set_advisorpilot_updated_at();
+  before update on public.advisorpilot_enrichment_provenance
+  for each row execute function public.set_advisorpilot_updated_at();
 
 alter table public.advisorpilot_enrichment_provenance enable row level security;
+
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 3. advisorpilot_deep_research_jobs.sql
@@ -75,10 +102,11 @@ drop trigger if exists set_advisorpilot_deep_research_updated_at
   on public.advisorpilot_deep_research_jobs;
 
 create trigger set_advisorpilot_deep_research_updated_at
-before update on public.advisorpilot_deep_research_jobs
-for each row execute function public.set_advisorpilot_updated_at();
+  before update on public.advisorpilot_deep_research_jobs
+  for each row execute function public.set_advisorpilot_updated_at();
 
 alter table public.advisorpilot_deep_research_jobs enable row level security;
+
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 4. advisorpilot_voice_settings.sql
@@ -105,10 +133,11 @@ drop trigger if exists set_advisorpilot_voice_settings_updated_at
   on public.advisorpilot_voice_settings;
 
 create trigger set_advisorpilot_voice_settings_updated_at
-before update on public.advisorpilot_voice_settings
-for each row execute function public.set_advisorpilot_updated_at();
+  before update on public.advisorpilot_voice_settings
+  for each row execute function public.set_advisorpilot_updated_at();
 
 alter table public.advisorpilot_voice_settings enable row level security;
+
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 5. advisorpilot_voice_audit_log.sql
@@ -132,6 +161,11 @@ create index if not exists advisorpilot_voice_audit_tool_idx
   on public.advisorpilot_voice_audit_log (tool, created_at desc);
 
 alter table public.advisorpilot_voice_audit_log enable row level security;
+
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- Drippers, email tokens, worksheets, roster RPC
+-- ═════════════════════════════════════════════════════════════════════════════
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 6. advisorpilot_client_drippers.sql (+ dripper run history)
@@ -222,6 +256,7 @@ create policy "dripper_runs_insert_own" on public.advisorpilot_dripper_runs
   for insert to authenticated
   with check ( owner_email = lower(auth.jwt() ->> 'email') );
 
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 7. advisorpilot_advisor_gmail_tokens.sql (+ dripper run email columns)
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -242,6 +277,7 @@ alter table public.advisorpilot_dripper_runs
   add column if not exists email_status text,
   add column if not exists email_error text,
   add column if not exists client_email_to text;
+
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 8. advisorpilot_annuity_reminder_sends.sql
@@ -285,8 +321,9 @@ create policy "annuity_reminder_sends_insert_own" on public.advisorpilot_annuity
     )
   );
 
+
 -- ─────────────────────────────────────────────────────────────────────────────
--- 10. advisorpilot_advisor_outlook_tokens.sql
+-- 9. advisorpilot_advisor_outlook_tokens.sql
 -- ─────────────────────────────────────────────────────────────────────────────
 create table if not exists public.advisorpilot_advisor_outlook_tokens (
   advisor_email text primary key,
@@ -303,14 +340,17 @@ create trigger set_advisorpilot_advisor_outlook_tokens_updated_at
 
 -- No RLS: only server routes with service role access this table.
 
+
 -- ─────────────────────────────────────────────────────────────────────────────
--- 11. advisorpilot_fee_analysis_worksheet.sql (column must exist before roster RPC)
+-- 10. advisorpilot_fee_analysis_worksheet.sql
+-- (Column must exist before roster RPC in section 11.)
 -- ─────────────────────────────────────────────────────────────────────────────
 alter table public.advisorpilot_clients
   add column if not exists fee_analysis_worksheet jsonb;
 
+
 -- ─────────────────────────────────────────────────────────────────────────────
--- 12. advisorpilot_roster_list_rpc.sql
+-- 11. advisorpilot_roster_list_rpc.sql
 -- ─────────────────────────────────────────────────────────────────────────────
 create or replace function public.list_visible_clients_roster(viewer_email text)
 returns setof public.advisorpilot_clients
@@ -338,3 +378,49 @@ $$;
 grant execute on function public.list_visible_clients_roster(text)
   to anon, authenticated, service_role;
 
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- CRM: Google Calendar sync + next meeting provenance (sections 13–14)
+-- Requires advisorpilot_clients (full schema or CRM Phase 0).
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 13. advisorpilot_google_calendar_channels.sql
+--     Webhook channel registry + base CRM meeting columns on clients.
+-- ─────────────────────────────────────────────────────────────────────────────
+create table if not exists public.advisorpilot_google_calendar_channels (
+  advisor_email text primary key,
+  calendar_id text not null default 'primary',
+  channel_id text not null,
+  resource_id text not null,
+  channel_token text not null,
+  expires_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.advisorpilot_clients
+  add column if not exists email text,
+  add column if not exists next_meeting_at timestamptz;
+
+create index if not exists advisorpilot_google_calendar_channels_channel_idx
+  on public.advisorpilot_google_calendar_channels (channel_id);
+
+drop trigger if exists set_advisorpilot_google_calendar_channels_updated_at
+  on public.advisorpilot_google_calendar_channels;
+
+create trigger set_advisorpilot_google_calendar_channels_updated_at
+  before update on public.advisorpilot_google_calendar_channels
+  for each row execute function public.set_advisorpilot_updated_at();
+
+alter table public.advisorpilot_google_calendar_channels enable row level security;
+
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 14. advisorpilot_next_meeting_provenance.sql
+--     How the next meeting was set (manual vs calendar, who initiated).
+-- ─────────────────────────────────────────────────────────────────────────────
+alter table public.advisorpilot_clients
+  add column if not exists next_meeting_source text,
+  add column if not exists next_meeting_initiator text,
+  add column if not exists next_meeting_calendar_event_id text;

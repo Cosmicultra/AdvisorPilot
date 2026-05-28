@@ -282,6 +282,12 @@ export interface DripperRun {
   clientEmailTo: string | null;
 }
 
+/** How the CRM next-meeting date was set. */
+export type NextMeetingSource = "manual" | "calendar";
+
+/** Who initiated a calendar-linked meeting (best-effort from Google). */
+export type NextMeetingInitiator = "advisor" | "client" | "unknown";
+
 // ─── Roster row ───────────────────────────────────────────────────────────
 //
 // One per client. The Roster's left-pane list renders an array of these.
@@ -313,6 +319,10 @@ export interface ClientRosterItem {
   ownerInitials: string | null;
   lastContactedAt: string | null;
   nextMeetingAt: string | null;
+  /** `manual` = advisor entered in CRM; `calendar` = Google Calendar sync. */
+  nextMeetingSource?: NextMeetingSource | null;
+  /** Populated when source is `calendar`. */
+  nextMeetingInitiator?: NextMeetingInitiator | null;
   reviewDueAt: string | null;
   isOverdue: boolean;
   tags: string[];

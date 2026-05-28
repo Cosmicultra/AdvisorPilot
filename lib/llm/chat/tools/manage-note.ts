@@ -91,7 +91,7 @@ const PARAMETERS = {
 export const manageNoteTool: ChatTool = {
   name: "manage_note",
   description:
-    "Write tool for client-scoped notes. Operations: `create` (T2, no confirmation), `update` (T3, preview-then-confirm), `delete` (T4, preview-then-confirm). Visibility (private / shared / organization) is enforced server-side. Side effects: every successful create/update/delete writes a corresponding activity-log entry that shows in the client's Timeline tab; create also bumps the client's last_contacted_at touchpoint.",
+    "Write tool for client-scoped notes. Operations: `create` (T2, no confirmation), `update` (T3, preview-then-confirm), `delete` (T4, preview-then-confirm). Visibility (private / shared / organization) is enforced server-side. Side effects: every successful create/update/delete writes a corresponding activity-log entry that shows in the client's Activity tab; create also bumps the client's last_contacted_at touchpoint.",
   parameters: PARAMETERS,
   handler: handleManageNote,
 };

@@ -35,6 +35,8 @@ import type {
   ClientDetail,
   ClientRosterItem,
   ClientStage,
+  NextMeetingInitiator,
+  NextMeetingSource,
   Visibility,
 } from "./types";
 
@@ -66,6 +68,9 @@ export interface ClientRow {
   phone: string | null;
   inception_year: number | null;
   next_meeting_at: string | null;
+  next_meeting_source?: string | null;
+  next_meeting_initiator?: string | null;
+  next_meeting_calendar_event_id?: string | null;
   review_due_at: string | null;
   ytd_return: number | string | null;
   org_id: string | null;
@@ -109,6 +114,8 @@ export function toRosterItem(
     ownerInitials: row.owner_initials,
     lastContactedAt: row.last_contacted_at,
     nextMeetingAt: row.next_meeting_at,
+    nextMeetingSource: parseNextMeetingSource(row.next_meeting_source),
+    nextMeetingInitiator: parseNextMeetingInitiator(row.next_meeting_initiator),
     reviewDueAt: row.review_due_at,
     isOverdue: isOverdue({ reviewDueAt: row.review_due_at }, options.now),
     tags,
@@ -244,4 +251,14 @@ function isClientStage(value: unknown): value is ClientStage {
 
 function isVisibility(value: unknown): value is Visibility {
   return value === "private" || value === "shared" || value === "organization";
+}
+
+function parseNextMeetingSource(value: unknown): NextMeetingSource | null {
+  if (value === "manual" || value === "calendar") return value;
+  return null;
+}
+
+function parseNextMeetingInitiator(value: unknown): NextMeetingInitiator | null {
+  if (value === "advisor" || value === "client" || value === "unknown") return value;
+  return null;
 }

@@ -596,7 +596,7 @@ function EmptyAll({ onLogNote }: { onLogNote(): void }) {
       </p>
       <p className="max-w-[360px] text-[12px]" style={{ color: "var(--ap-gray)" }}>
         Logged notes capture the gist of conversations and surface in the
-        Overview&apos;s Pinned Note card and the Timeline.
+        Overview&apos;s Pinned Note card and Activity.
       </p>
       <button
         type="button"

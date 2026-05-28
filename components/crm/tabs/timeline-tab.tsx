@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Per-client Timeline tab. Mounted at /app/crm/[id]/timeline.
+ * Per-client Activity tab. Mounted at /app/crm/[id]/activity (legacy: /timeline).
  *
  * - Filter chips: All / Notes / Tasks / Documents / Email / Analysis / System
  * - Same union data source as <TimelineCard /> (the Overview-rail variant)

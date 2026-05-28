@@ -13,6 +13,7 @@
 
 import { Calendar, Link2, Mail, MapPin, MoreHorizontal, Phone, User } from "lucide-react";
 import Link from "next/link";
+import { formatNextMeetingBookingHint } from "@/lib/crm/next-meeting-activity";
 import type { ClientDetail } from "@/lib/crm/types";
 import { ClientStageSelect } from "./client-stage-select";
 
@@ -185,7 +186,7 @@ export function ProfileHeader({
       </div>
 
       <div
-        className="grid grid-cols-2 gap-3 sm:grid-cols-4"
+        className="grid grid-cols-2 gap-3 sm:grid-cols-5"
         style={{ borderTop: "1px solid var(--ap-border)", paddingTop: "16px" }}
       >
         <KpiCell label="Total AUM" value={formatAum(client.aum)} />
@@ -194,7 +195,15 @@ export function ProfileHeader({
           label="Accounts"
           value={client.accountsCount !== null ? String(client.accountsCount) : "—"}
         />
-        <KpiCell label="Next meeting" value={formatNextMeeting(client.nextMeetingAt)} />
+        <KpiCell label="Last contacted" value={formatLastContacted(client.lastContactedAt)} />
+        <KpiCell
+          label="Next meeting"
+          value={formatNextMeeting(client.nextMeetingAt)}
+          hint={formatNextMeetingBookingHint(
+            client.nextMeetingSource,
+            client.nextMeetingInitiator,
+          )}
+        />
       </div>
     </header>
   );
@@ -268,7 +277,27 @@ function formatNextMeeting(iso: string | null): string {
   });
 }
 
-function KpiCell({ label, value }: { label: string; value: string }) {
+function formatLastContacted(iso: string | null): string {
+  if (!iso) return "—";
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return "—";
+  const date = new Date(ts);
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function KpiCell({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string | null;
+}) {
   return (
     <div className="flex flex-col gap-1">
       <span
@@ -286,6 +315,11 @@ function KpiCell({ label, value }: { label: string; value: string }) {
       >
         {value}
       </span>
+      {hint ? (
+        <span className="text-[10.5px] leading-snug" style={{ color: "var(--ap-gray)" }}>
+          {hint}
+        </span>
+      ) : null}
     </div>
   );
 }

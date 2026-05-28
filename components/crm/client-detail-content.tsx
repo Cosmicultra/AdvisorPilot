@@ -72,7 +72,8 @@ const TAB_LABELS: Record<string, string> = {
   "fee-analysis": "Comparative fee analysis",
   report: "Report",
   notes: "Notes",
-  timeline: "Timeline",
+  activity: "Activity",
+  timeline: "Activity", // legacy tab slug
   tasks: "Tasks",
   documents: "Documents",
   contacts: "Contacts",
@@ -342,7 +343,7 @@ function TabBody({
     );
   }
 
-  if (tab === "timeline") {
+  if (tab === "activity" || tab === "timeline") {
     return <TimelineTab clientId={client.id} refreshKey={refreshKey} />;
   }
 

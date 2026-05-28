@@ -18,7 +18,7 @@
  *
  * Side effects:
  *   - create / update / delete each write to activity_log so the report
- *     surfaces on the client's Timeline tab (when client_id is set).
+ *     surfaces on the client's Activity tab (when client_id is set).
  *   - create with `clientId` does NOT bump last_contacted_at (reports
  *     aren't a client touchpoint the way notes are).
  *
@@ -164,7 +164,7 @@ const PARAMETERS = {
 export const manageReportTool: ChatTool = {
   name: "manage_report",
   description:
-    "Write tool for markdown reports. v1 operations: `create` (T2), `update` (T3, preview-then-confirm), `delete` (T4, preview-then-confirm). For listing or reading reports use `query_crm.list:reports` / `query_crm.get:reports` instead — that's the read surface. Reports are visibility-gated (private/shared/organization) and link to an optional client_id so they surface on the client's Timeline tab. The model should typically draft the markdown FIRST (via thinking) and then `create` once the advisor approves the outline.",
+    "Write tool for markdown reports. v1 operations: `create` (T2), `update` (T3, preview-then-confirm), `delete` (T4, preview-then-confirm). For listing or reading reports use `query_crm.list:reports` / `query_crm.get:reports` instead — that's the read surface. Reports are visibility-gated (private/shared/organization) and link to an optional client_id so they surface on the client's Activity tab. The model should typically draft the markdown FIRST (via thinking) and then `create` once the advisor approves the outline.",
   parameters: PARAMETERS,
   handler: handleManageReport,
 };
@@ -282,7 +282,7 @@ async function handleCreate(
   }
   const report = toReport(inserted as ReportRow);
 
-  // Side effect: activity_log entry so the Timeline surfaces report creation.
+  // Side effect: activity_log entry so the Activity tab surfaces report creation.
   // Best-effort — does NOT block on failure.
   await writeActivityLog(ctx.supabase, {
     ownerEmail: ctx.advisorEmail,
