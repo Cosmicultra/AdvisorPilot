@@ -9,6 +9,7 @@
 import dynamic from "next/dynamic";
 import type { ReactNode } from "react";
 import { AuthTokenResponder } from "@/components/auth/auth-token-responder";
+import { ProductGuideProvider } from "@/components/product-guide-provider";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { AdvisorProfileProvider } from "@/lib/advisor-profile-context";
 import { ChatLocationProvider } from "@/lib/chat/chat-location-context";
@@ -25,11 +26,13 @@ export function AppAuthenticatedChrome({ children }: { children: ReactNode }) {
   return (
     <ConfirmProvider>
       <AdvisorProfileProvider>
-        <ChatLocationProvider>
-          <AuthTokenResponder />
-          {children}
-          <GlobalChatLauncher />
-        </ChatLocationProvider>
+        <ProductGuideProvider>
+          <ChatLocationProvider>
+            <AuthTokenResponder />
+            {children}
+            <GlobalChatLauncher />
+          </ChatLocationProvider>
+        </ProductGuideProvider>
       </AdvisorProfileProvider>
     </ConfirmProvider>
   );

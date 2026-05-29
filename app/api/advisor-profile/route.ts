@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { resolveAdvisorIdentity } from "@/lib/advisor-auth";
 import {
+  DEFAULT_ADVISOR_LLM_PROVIDER,
+  DEFAULT_ADVISOR_RESEARCH_TIER,
+} from "@/lib/llm/advisor-profile-defaults";
+import {
   getSupabaseServiceAdmin,
   missingSupabaseServiceEnv,
 } from "@/lib/supabase-service-admin";
@@ -178,7 +182,26 @@ function buildMergedProfilePayload(
     payload.default_research_tier = sanitizeTier(body.defaultResearchTier);
   }
 
+  // First profile create: seed Gemini + Agentic when the client did not send LLM keys.
+  if (!existing) {
+    if (!Object.hasOwn(body, "llmProvider")) {
+      payload.llm_provider = DEFAULT_ADVISOR_LLM_PROVIDER;
+    }
+    if (!Object.hasOwn(body, "defaultResearchTier")) {
+      payload.default_research_tier = DEFAULT_ADVISOR_RESEARCH_TIER;
+    }
+  }
+
   return payload;
+}
+
+function newAdvisorProfileSeed(identity: { email: string; userId: string | null }) {
+  return {
+    owner_email: identity.email,
+    owner_user_id: identity.userId,
+    llm_provider: DEFAULT_ADVISOR_LLM_PROVIDER,
+    default_research_tier: DEFAULT_ADVISOR_RESEARCH_TIER,
+  };
 }
 
 export const GET = async (req: Request) => {
@@ -242,8 +265,33 @@ export const GET = async (req: Request) => {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
+    let profileRecord = data as AdvisorProfileRecord | null;
+    if (!profileRecord) {
+      const { data: inserted, error: insertError } = await supabaseAdmin
+        .from("advisorpilot_advisor_profiles")
+        .insert(newAdvisorProfileSeed(identity))
+        .select("*")
+        .single();
+      if (insertError) {
+        const msg = insertError.message || "";
+        const missingLlmColumn = /Could not find the '(llm_provider|llm_model_overrides|default_research_tier)'/i.test(
+          msg
+        );
+        if (missingLlmColumn) {
+          return NextResponse.json({
+            profile: null,
+            emailConnected,
+            emailProvider,
+            migrationRequired: "supabase/advisorpilot_advisor_profiles_llm_columns.sql",
+          });
+        }
+        return NextResponse.json({ error: insertError.message }, { status: 400 });
+      }
+      profileRecord = inserted as AdvisorProfileRecord;
+    }
+
     return NextResponse.json({
-      profile: data ? mapProfile(data as AdvisorProfileRecord) : null,
+      profile: mapProfile(profileRecord),
       emailConnected,
       emailProvider,
     });

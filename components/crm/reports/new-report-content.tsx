@@ -61,7 +61,7 @@ export function NewReportContent() {
   };
 
   return (
-    <div className="flex flex-1 flex-col gap-4 px-6 py-5">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
       <Link
         href="/app/reports"
         className="inline-flex items-center gap-1 self-start text-[12px] font-medium underline-offset-2 hover:underline"

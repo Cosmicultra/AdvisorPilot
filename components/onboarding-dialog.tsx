@@ -59,12 +59,12 @@ const PROVIDERS: { id: LlmProvider; label: string; hint: string }[] = [
   {
     id: "openai",
     label: "ChatGPT (OpenAI)",
-    hint: "Default. Highest-quality vision + research across statement types.",
+    hint: "Highest-quality vision + research across statement types.",
   },
   {
     id: "gemini",
-    label: "Gemini (Google)",
-    hint: "Native PDF handling, long context, strong cost performance.",
+    label: "Gemini (Google) — recommended",
+    hint: "Best statement reading speed and accuracy; native PDF handling.",
   },
   {
     id: "grok",
@@ -199,9 +199,9 @@ export function OnboardingDialog({
         setSignatureDisclosuresText(prof.disclosuresText || "");
         setSignatureDisclosuresImageUrl(prof.disclosuresImageUrl || "");
       } else {
-        // First-time user: pick the first configured provider as a sensible default.
-        if (map.openai) setProvider("openai");
-        else if (map.gemini) setProvider("gemini");
+        // First-time user: Gemini + Agentic are the product defaults when configured.
+        if (map.gemini) setProvider("gemini");
+        else if (map.openai) setProvider("openai");
         else if (map.grok) setProvider("grok");
       }
     } catch (e) {

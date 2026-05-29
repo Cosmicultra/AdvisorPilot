@@ -45,19 +45,19 @@ afterEach(() => {
 });
 
 describe("resolveChatContext", () => {
-  it("uses the hardcoded default (openai/gpt-4o) when no overrides are set", () => {
+  it("uses the hardcoded default (gemini/gemini-2.5-flash) when no overrides are set", () => {
     delete process.env.ADVISORPILOT_DEFAULT_LLM_PROVIDER;
-    delete process.env.LLM_OPENAI_CHAT_MODEL;
+    delete process.env.LLM_GEMINI_CHAT_MODEL;
     const { ctx } = resolveChatContext();
-    expect(ctx.provider).toBe("openai");
-    expect(ctx.model).toBe("gpt-4o");
+    expect(ctx.provider).toBe("gemini");
+    expect(ctx.model).toBe("gemini-2.5-flash");
     expect(ctx.pass).toBe("chat");
   });
 
-  it("env override LLM_OPENAI_CHAT_MODEL beats the hardcoded default", () => {
-    process.env.LLM_OPENAI_CHAT_MODEL = "gpt-4o-mini";
+  it("env override LLM_GEMINI_CHAT_MODEL beats the hardcoded default", () => {
+    process.env.LLM_GEMINI_CHAT_MODEL = "gemini-3-flash-preview";
     const { ctx } = resolveChatContext();
-    expect(ctx.model).toBe("gpt-4o-mini");
+    expect(ctx.model).toBe("gemini-3-flash-preview");
   });
 
   it("env override ADVISORPILOT_DEFAULT_LLM_PROVIDER switches the provider", () => {

@@ -22,7 +22,7 @@ import { LlmConfigError } from "./types";
 // Hardcoded defaults (last-resort fallbacks)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const HARDCODED_DEFAULT_PROVIDER: LlmProvider = "openai";
+const HARDCODED_DEFAULT_PROVIDER: LlmProvider = "gemini";
 
 const HARDCODED_MODEL_DEFAULTS: Record<LlmProvider, Record<LlmPass, string>> = {
   openai: {

@@ -13,13 +13,17 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  DEFAULT_ADVISOR_LLM_PROVIDER,
+  DEFAULT_ADVISOR_RESEARCH_TIER,
+} from "@/lib/llm/advisor-profile-defaults";
 import { MODEL_CATALOG, modelOptionsForProvider } from "@/lib/llm/model-catalog";
 import { advisorFetch } from "@/lib/advisor-fetch";
 import type { LlmPass, LlmProvider, ResearchTier } from "@/lib/llm";
 
 const PROVIDERS: { id: LlmProvider; label: string }[] = [
   { id: "openai", label: "ChatGPT (OpenAI)" },
-  { id: "gemini", label: "Gemini (Google)" },
+  { id: "gemini", label: "Gemini (Google) — recommended" },
   { id: "grok", label: "Grok (xAI)" },
 ];
 
@@ -83,9 +87,9 @@ export function LlmSettingsDrawer({ open, onClose, onSaved }: LlmSettingsDrawerP
       const savedProvider = pr.profile?.llmProvider ?? null;
       const savedOverrides = pr.profile?.llmModelOverrides ?? {};
       const savedTier = pr.profile?.defaultResearchTier ?? null;
-      setProvider(savedProvider);
+      setProvider(savedProvider ?? DEFAULT_ADVISOR_LLM_PROVIDER);
       setOverrides(savedOverrides);
-      setResearchTier(savedTier);
+      setResearchTier(savedTier ?? DEFAULT_ADVISOR_RESEARCH_TIER);
       setUseProviderEverywhere(Object.keys(savedOverrides).length === 0);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load settings.");

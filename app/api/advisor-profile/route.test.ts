@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   identity: null as null | { email: string; userId: string | null; provider: "google" | "supabase" },
   upsertPayload: null as unknown,
+  insertPayload: null as unknown,
   existingRow: null as null | Record<string, unknown>,
 }));
 
@@ -25,6 +26,19 @@ vi.mock("@supabase/supabase-js", () => ({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn(async () => ({ data: mocks.existingRow, error: null })),
+      insert: vi.fn((payload: unknown) => {
+        mocks.insertPayload = payload;
+        return {
+          select: vi.fn().mockReturnThis(),
+          single: vi.fn(async () => ({
+            data: {
+              owner_email: "advisor@example.com",
+              ...(typeof payload === "object" && payload !== null ? payload : {}),
+            },
+            error: null,
+          })),
+        };
+      }),
       upsert: vi.fn((payload: unknown) => {
         mocks.upsertPayload = payload;
         return {
@@ -48,6 +62,7 @@ describe("advisor-profile route auth", () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
     mocks.identity = null;
     mocks.upsertPayload = null;
+    mocks.insertPayload = null;
     mocks.existingRow = null;
     vi.resetModules();
   });
@@ -56,6 +71,47 @@ describe("advisor-profile route auth", () => {
     const { GET } = await import("./route");
     const res = await GET(new Request("https://app.test/api/advisor-profile"));
     expect(res.status).toBe(401);
+  });
+
+  it("seeds gemini + agentic on first authenticated GET when no profile row exists", async () => {
+    mocks.identity = { email: "advisor@example.com", userId: "user-id", provider: "supabase" };
+    mocks.existingRow = null;
+
+    const { GET } = await import("./route");
+    const res = await GET(new Request("https://app.test/api/advisor-profile"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(mocks.insertPayload).toMatchObject({
+      owner_email: "advisor@example.com",
+      owner_user_id: "user-id",
+      llm_provider: "gemini",
+      default_research_tier: "agentic-research",
+    });
+    expect(body.profile).toMatchObject({
+      llmProvider: "gemini",
+      defaultResearchTier: "agentic-research",
+    });
+  });
+
+  it("does not insert defaults when an existing profile row is present", async () => {
+    mocks.identity = { email: "advisor@example.com", userId: "user-id", provider: "supabase" };
+    mocks.existingRow = {
+      owner_email: "advisor@example.com",
+      llm_provider: "openai",
+      default_research_tier: "fast-grounded",
+    };
+
+    const { GET } = await import("./route");
+    const res = await GET(new Request("https://app.test/api/advisor-profile"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(mocks.insertPayload).toBeNull();
+    expect(body.profile).toMatchObject({
+      llmProvider: "openai",
+      defaultResearchTier: "fast-grounded",
+    });
   });
 
   it("cannot write another advisor profile from body ownerEmail", async () => {
@@ -76,6 +132,8 @@ describe("advisor-profile route auth", () => {
       owner_email: "advisor@example.com",
       owner_user_id: "user-id",
       email_signature: "Regards",
+      llm_provider: "gemini",
+      default_research_tier: "agentic-research",
     });
   });
 });
@@ -86,6 +144,7 @@ describe("advisor-profile POST merge", () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role";
     mocks.identity = { email: "advisor@example.com", userId: "user-id", provider: "supabase" };
     mocks.upsertPayload = null;
+    mocks.insertPayload = null;
     mocks.existingRow = {
       owner_email: "advisor@example.com",
       email_signature: "Jane Advisor\nCFP",
@@ -158,6 +217,24 @@ describe("advisor-profile POST merge", () => {
     expect(mocks.upsertPayload).toMatchObject({
       llm_provider: null,
       email_signature: "Jane Advisor\nCFP",
+    });
+  });
+
+  it("first POST without LLM fields seeds gemini + agentic-research", async () => {
+    mocks.existingRow = null;
+    const { POST } = await import("./route");
+    const res = await POST(
+      new Request("https://app.test/api/advisor-profile", {
+        method: "POST",
+        body: JSON.stringify({ emailSignature: "Regards" }),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(mocks.upsertPayload).toMatchObject({
+      email_signature: "Regards",
+      llm_provider: "gemini",
+      default_research_tier: "agentic-research",
     });
   });
 });

@@ -14,13 +14,14 @@
  * Spec: docs/crm/00-fundamentals.md §2 (the app rail / replacing top nav).
  */
 
-import { ChevronDown, LogOut, Settings, User } from "lucide-react";
+import { BookOpen, ChevronDown, LogOut, Settings, User } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { DropdownMenu } from "radix-ui";
 import { useCallback, useMemo, useState } from "react";
 import { AP_SUPABASE_AT, AP_SUPABASE_RT } from "@/lib/advisor-fetch";
 import { useAdvisorProfileContextOptional } from "@/lib/advisor-profile-context";
 import { LlmSettingsDrawer } from "@/components/llm-settings-drawer";
+import { useProductGuide } from "@/components/product-guide-provider";
 import { useSettingsDialog } from "./settings-dialog-provider";
 
 /**
@@ -36,6 +37,7 @@ import { useSettingsDialog } from "./settings-dialog-provider";
 
 export function UserMenu() {
   const settingsDialog = useSettingsDialog();
+  const productGuide = useProductGuide();
   const profileCtx = useAdvisorProfileContextOptional();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -159,6 +161,15 @@ export function UserMenu() {
             >
               <User size={14} strokeWidth={1.75} />
               Profile &amp; signature
+            </DropdownMenu.Item>
+
+            <DropdownMenu.Item
+              className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[12.5px] outline-none data-[highlighted]:bg-[rgba(12,25,41,0.04)]"
+              onSelect={() => productGuide.open()}
+              style={{ color: "var(--ap-navy)" }}
+            >
+              <BookOpen size={14} strokeWidth={1.75} />
+              How AdvisorPilot works
             </DropdownMenu.Item>
 
             <DropdownMenu.Separator

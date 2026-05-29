@@ -105,7 +105,7 @@ export function ReportViewer({ reportId }: ReportViewerProps) {
   }, [reportId]);
 
   return (
-    <div className="flex flex-1 flex-col gap-4 px-6 py-5">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
       <BackLink />
 
       {state.status === "loading" ? (

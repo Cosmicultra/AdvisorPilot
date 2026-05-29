@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildRothConversionModel, RMD_ILLUSTRATION_START_AGE } from "@/lib/roth-conversion-analysis";
 import {
   computeOptimizedRothPremiumAmount,
+  computeQualifiedIncomeHoldDuringConversions,
   isFullyConvertedBeforeRmd,
   traditionalRemainingBeforeRmd,
   type OptimizeRothPremiumInput,
@@ -36,6 +37,10 @@ describe("roth-premium-optimizer", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.amount).toBeGreaterThan(0);
+    if (result.qualifiedIncomeHold != null && result.qualifiedIncomeHold > 0) {
+      expect(result.amount + result.qualifiedIncomeHold).toBeLessThanOrEqual(optimizeBase.fullQualifiedBalance + 1);
+      expect(result.amount).toBeLessThan(optimizeBase.fullQualifiedBalance);
+    }
     const model = buildRothConversionModel({
       ...optimizeBase,
       totalAccountValue: result.amount,
@@ -115,5 +120,79 @@ describe("roth-premium-optimizer", () => {
     if (!result.ok) return;
     expect(result.amount).toBeGreaterThan(0);
     expect(result.amount).toBeLessThan(500_000);
+  });
+
+  it("includes qualifiedIncomeHold when income is from conversion account", () => {
+    const result = computeOptimizedRothPremiumAmount({
+      ...optimizeBase,
+      protectInitialInvestment: false,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.qualifiedIncomeHold).toBeDefined();
+    expect(result.qualifiedIncomeHold!).toBeGreaterThan(0);
+    expect(result.amount + result.qualifiedIncomeHold!).toBeLessThanOrEqual(
+      optimizeBase.fullQualifiedBalance + 1
+    );
+  });
+
+  it("omits qualifiedIncomeHold when income is not from conversion account", () => {
+    const result = computeOptimizedRothPremiumAmount({
+      ...optimizeBase,
+      retirementIncomeFromConversionAccount: false,
+      protectInitialInvestment: false,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.qualifiedIncomeHold).toBeUndefined();
+  });
+
+  it("qualifiedIncomeHold is zero when conversion ends before retirement", () => {
+    const model = buildRothConversionModel({
+      ...optimizeBase,
+      currentAge: 60,
+      retirementAge: 75,
+      totalAccountValue: 200_000,
+      protectInitialInvestment: false,
+      endAge: 72,
+    });
+    expect(computeQualifiedIncomeHoldDuringConversions(model, true)).toBe(0);
+  });
+
+  it("qualifiedIncomeHold increases with higher retirement spendable income", () => {
+    const low = computeOptimizedRothPremiumAmount({
+      ...optimizeBase,
+      retirementSpendableIncomeAnnual: 50_000,
+      protectInitialInvestment: false,
+    });
+    const high = computeOptimizedRothPremiumAmount({
+      ...optimizeBase,
+      retirementSpendableIncomeAnnual: 120_000,
+      protectInitialInvestment: false,
+    });
+    expect(low.ok).toBe(true);
+    expect(high.ok).toBe(true);
+    if (!low.ok || !high.ok) return;
+    expect(high.qualifiedIncomeHold!).toBeGreaterThan(low.qualifiedIncomeHold!);
+  });
+
+  it("caps conversion premium so premium plus income hold fits within total qualified", () => {
+    const fullQualifiedBalance = 1_170_419;
+    const result = computeOptimizedRothPremiumAmount({
+      fullQualifiedBalance,
+      currentAge: 60,
+      retirementAge: 67,
+      retirementSpendableIncomeAnnual: 85_000,
+      federalTaxBracketId: "24",
+      annualAdjustedGrossIncomePreRetirement: 250_000,
+      marriedFilingJointly: true,
+      protectInitialInvestment: true,
+      retirementIncomeFromConversionAccount: true,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.qualifiedIncomeHold).toBeGreaterThan(0);
+    expect(result.amount).toBeLessThan(fullQualifiedBalance);
+    expect(result.amount + result.qualifiedIncomeHold!).toBeLessThanOrEqual(fullQualifiedBalance + 1);
   });
 });

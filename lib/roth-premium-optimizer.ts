@@ -7,6 +7,9 @@ import {
 /** Epsilon for "traditional IRA depleted" before RMD illustration age. */
 const TRAD_DEPLETED_EPSILON = 1;
 
+/** Epsilon for premium + income hold fitting within total qualified balance. */
+const PREMIUM_HOLD_FIT_EPSILON = 0.5;
+
 export type RothConversionModelInput = Parameters<typeof buildRothConversionModel>[0];
 
 export type OptimizeRothPremiumInput = Omit<RothConversionModelInput, "totalAccountValue"> & {
@@ -18,6 +21,8 @@ export type OptimizeRothPremiumResult =
   | {
       ok: true;
       amount: number;
+      /** Separate qualified reserve for IRA income during conversion years (Yes on income question only). */
+      qualifiedIncomeHold?: number;
       marginalRateNominalPct: number;
       protectInitialInvestment: boolean;
       rmdStartAge: number;
@@ -43,13 +48,105 @@ export function isFullyConvertedBeforeRmd(
   return traditionalRemainingBeforeRmd(model, rmdStartAge) <= TRAD_DEPLETED_EPSILON;
 }
 
-function simulateAndCheckConverted(
+function isFeasibleConversionPremium(
   params: OptimizeRothPremiumInput,
-  totalAccountValue: number,
+  premium: number,
   rmdStartAge: number
 ): boolean {
-  const model = buildRothConversionModel({ ...params, totalAccountValue });
-  return isFullyConvertedBeforeRmd(model, rmdStartAge);
+  const { fullQualifiedBalance: _cap, rmdStartAge: _rmd, ...modelParams } = params;
+  const model = buildRothConversionModel({ ...modelParams, totalAccountValue: premium });
+  if (!isFullyConvertedBeforeRmd(model, rmdStartAge)) return false;
+  if (params.retirementIncomeFromConversionAccount !== true) return true;
+  const hold = computeQualifiedIncomeHoldDuringConversions(model, true);
+  return premium + hold <= params.fullQualifiedBalance + PREMIUM_HOLD_FIT_EPSILON;
+}
+
+/**
+ * Minimum qualified balance at illustration start to fund retirement income shortfall
+ * (after Social Security) during years that overlap the Roth conversion window.
+ * Advisory only — illustration still uses a single combined pool.
+ */
+export function computeQualifiedIncomeHoldDuringConversions(
+  model: RothConversionModelResult,
+  retirementIncomeFromConversionAccount: boolean
+): number {
+  if (retirementIncomeFromConversionAccount !== true) return 0;
+
+  const conversionRows = model.rothConversion.filter((r) => !r.rothOnlyPhase);
+  if (conversionRows.length === 0) return 0;
+
+  const lastConversionAge = conversionRows[conversionRows.length - 1]!.age;
+  const { startingAge, retirementAge, retirementSpendableIncomeAnnual: need, annualSocialSecurityGross } =
+    model;
+
+  if (retirementAge > lastConversionAge) return 0;
+
+  const rowByAge = new Map(conversionRows.map((r) => [r.age, r]));
+  const schedule: { growthRate: number; withdrawal: number }[] = [];
+
+  for (let age = startingAge; age <= lastConversionAge; age++) {
+    const row = rowByAge.get(age);
+    if (!row) continue;
+    const retired = age >= retirementAge;
+    const ssThisYear = retired && annualSocialSecurityGross > 0 ? annualSocialSecurityGross : 0;
+    const withdrawal = retired ? Math.max(0, need - ssThisYear) : 0;
+    schedule.push({ growthRate: row.growthRate, withdrawal });
+  }
+
+  if (!schedule.some((s) => s.withdrawal > 0)) return 0;
+
+  const reserveSurvives = (startReserve: number): boolean => {
+    let reserve = startReserve;
+    for (const { growthRate, withdrawal } of schedule) {
+      reserve = reserve * (1 + growthRate) - withdrawal;
+      if (reserve < -0.01) return false;
+    }
+    return true;
+  };
+
+  if (reserveSurvives(0)) return 0;
+
+  let high = schedule.reduce((sum, s) => sum + s.withdrawal, 0) * 2 + 1;
+  while (!reserveSurvives(high)) {
+    high *= 2;
+    if (high > 1e12) break;
+  }
+
+  let low = 0;
+  while (high - low > 1) {
+    const mid = Math.floor((low + high) / 2);
+    if (reserveSurvives(mid)) {
+      high = mid;
+    } else {
+      low = mid;
+    }
+  }
+
+  const amount = reserveSurvives(low) ? low : high;
+  return Math.round(amount);
+}
+
+function optimizeSuccessResult(
+  input: OptimizeRothPremiumInput,
+  model: RothConversionModelResult,
+  amount: number,
+  protectInitialInvestment: boolean,
+  rmdStartAge: number
+): Extract<OptimizeRothPremiumResult, { ok: true }> {
+  const result: Extract<OptimizeRothPremiumResult, { ok: true }> = {
+    ok: true,
+    amount,
+    marginalRateNominalPct: model.marginalRateNominalPct,
+    protectInitialInvestment,
+    rmdStartAge,
+  };
+  if (input.retirementIncomeFromConversionAccount === true) {
+    result.qualifiedIncomeHold = computeQualifiedIncomeHoldDuringConversions(
+      model,
+      true
+    );
+  }
+  return result;
 }
 
 /**
@@ -90,21 +187,16 @@ export function computeOptimizedRothPremiumAmount(
 
   const { fullQualifiedBalance: _cap, rmdStartAge: _rmd, ...modelParams } = input;
 
-  if (simulateAndCheckConverted(input, fullQualifiedBalance, rmdStartAge)) {
+  if (isFeasibleConversionPremium(input, Math.floor(fullQualifiedBalance), rmdStartAge)) {
+    const amount = Math.round(fullQualifiedBalance);
     const model = buildRothConversionModel({
       ...modelParams,
-      totalAccountValue: fullQualifiedBalance,
+      totalAccountValue: amount,
     });
-    return {
-      ok: true,
-      amount: Math.round(fullQualifiedBalance),
-      marginalRateNominalPct: model.marginalRateNominalPct,
-      protectInitialInvestment,
-      rmdStartAge,
-    };
+    return optimizeSuccessResult(input, model, amount, protectInitialInvestment, rmdStartAge);
   }
 
-  if (!simulateAndCheckConverted(input, 1, rmdStartAge)) {
+  if (!isFeasibleConversionPremium(input, 1, rmdStartAge)) {
     return {
       ok: false,
       error:
@@ -117,21 +209,15 @@ export function computeOptimizedRothPremiumAmount(
 
   while (high - low > 1) {
     const mid = Math.floor((low + high) / 2);
-    if (simulateAndCheckConverted(input, mid, rmdStartAge)) {
+    if (isFeasibleConversionPremium(input, mid, rmdStartAge)) {
       low = mid;
     } else {
       high = mid;
     }
   }
 
-  const amount = simulateAndCheckConverted(input, high, rmdStartAge) ? high : low;
+  const amount = isFeasibleConversionPremium(input, high, rmdStartAge) ? high : low;
   const finalModel = buildRothConversionModel({ ...modelParams, totalAccountValue: amount });
 
-  return {
-    ok: true,
-    amount,
-    marginalRateNominalPct: finalModel.marginalRateNominalPct,
-    protectInitialInvestment,
-    rmdStartAge,
-  };
+  return optimizeSuccessResult(input, finalModel, amount, protectInitialInvestment, rmdStartAge);
 }

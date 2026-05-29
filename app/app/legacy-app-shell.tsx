@@ -13,6 +13,10 @@ import {
   AP_ONBOARDING_DISMISSED_AT,
   OnboardingDialog,
 } from "@/components/onboarding-dialog";
+import {
+  openProductGuideIfNotDismissed,
+  useProductGuide,
+} from "@/components/product-guide-provider";
 // Voice (v3): the voice agent now lives inside <ChatWidget /> (see
 // components/chat/chat-widget.tsx) and is toggled from the chat
 // input's mic button. It's no longer mounted as a separate FAB here.
@@ -28,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { ViewportModal } from "@/components/ui/viewport-modal";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -85,6 +90,7 @@ import {
   FEDERAL_TAX_BRACKET_IDS,
   RISK_PROFILES,
 } from "@/lib/intake-config";
+import { scrollWorkflowMainToTop } from "@/lib/workflow-scroll";
 import {
   useAdvisorProfileContextOptional,
   type AdvisorProfileApiBody,
@@ -690,6 +696,7 @@ function AppTopNav({
   onNewReview,
   setShowSignatureSetup,
   onOpenOnboarding,
+  onOpenProductGuide,
   handleEmailPasswordLogout,
   analysisReady,
 }: {
@@ -705,6 +712,7 @@ function AppTopNav({
   setShowSignatureSetup: (v: boolean) => void;
   /** Re-opens the first-run wizard from the account menu. */
   onOpenOnboarding: () => void;
+  onOpenProductGuide: () => void;
   handleEmailPasswordLogout: () => void;
   analysisReady: boolean;
 }) {
@@ -789,6 +797,12 @@ function AppTopNav({
                   onSelect={() => setShowSignatureSetup(true)}
                 >
                   Email signature
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  className="cursor-pointer px-3 py-2.5 text-sm outline-none data-[highlighted]:bg-[#f0f4fa] data-[highlighted]:text-[var(--ap-navy)]"
+                  onSelect={() => onOpenProductGuide()}
+                >
+                  How AdvisorPilot works
                 </DropdownMenu.Item>
                 <DropdownMenu.Separator className="my-1 h-px bg-[var(--ap-border)]" />
                 <DropdownMenu.Item
@@ -1098,6 +1112,7 @@ function applyAdvisorProfileFromApi(
 
 export default function AdvisorPilotPage() {
   const confirm = useConfirm();
+  const productGuide = useProductGuide();
   const advisorProfileCtx = useAdvisorProfileContextOptional();
   const [session, setSession] = useState<Session | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
@@ -1106,6 +1121,7 @@ export default function AdvisorPilotPage() {
   const [intakeStep, setIntakeStep] = useState(0);
   /** Scroll Statement Capture to client link vs advisor upload after handoff. */
   const [uploadSectionFocus, setUploadSectionFocus] = useState<"client_link" | "advisor_upload" | null>(null);
+  const skipWorkflowScrollRef = useRef(true);
 
   useEffect(() => {
     if (step !== "upload" || !uploadSectionFocus) return;
@@ -1124,6 +1140,26 @@ export default function AdvisorPilotPage() {
     ...INITIAL_CLIENT_STATE,
     riskQuizAnswers: { ...INITIAL_CLIENT_STATE.riskQuizAnswers },
   }));
+
+  useEffect(() => {
+    if (skipWorkflowScrollRef.current) {
+      skipWorkflowScrollRef.current = false;
+      return;
+    }
+    if (step === "upload" && uploadSectionFocus) return;
+
+    const frame = requestAnimationFrame(() => {
+      scrollWorkflowMainToTop();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [
+    step,
+    intakeStep,
+    uploadSectionFocus,
+    step === "intake" && intakeStep === 7 ? client.riskIntakeScreen : null,
+    step === "intake" && intakeStep === 7 ? client.riskQuizStepIndex : null,
+  ]);
+
   const [statementUploadQueue, setStatementUploadQueue] = useState<StatementUploadQueueItem[]>([]);
   /** Bump to remount file inputs after **remove** so a new pick always fires `change`. */
   const [statementFileInputRevision, setStatementFileInputRevision] = useState(0);
@@ -3932,6 +3968,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
           }
           setShowOnboarding(true);
         }}
+        onOpenProductGuide={() => productGuide.open()}
         handleEmailPasswordLogout={handleEmailPasswordLogout}
         analysisReady={Boolean(analysis)}
       />
@@ -3948,6 +3985,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
             );
           }
           setShowOnboarding(false);
+          openProductGuideIfNotDismissed(productGuide.open);
         }}
         onFinish={async () => {
           if (typeof window !== "undefined") {
@@ -3962,11 +4000,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
           const ownerEmail =
             session?.user?.email || emailAuthUser?.email || null;
           if (ownerEmail) await loadAdvisorProfile(ownerEmail);
+          openProductGuideIfNotDismissed(productGuide.open);
         }}
       />
       <WizardStepRail wizardSteps={wizardSteps} step={step} setStep={setStep} loadSavedReviews={loadSavedReviews} />
 
-      <div className="mx-auto max-w-7xl space-y-6 px-4 pt-0 pb-6 md:px-8 md:pb-8 print:max-w-none print:space-y-0 print:p-0">
+      <div
+        id="workflow-main"
+        className="mx-auto max-w-7xl space-y-6 px-4 pt-0 pb-6 md:px-8 md:pb-8 print:max-w-none print:space-y-0 print:p-0"
+      >
         {saveMessage && (
           <div className="rounded-none border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-medium text-emerald-800">
             {saveMessage}
@@ -5687,22 +5729,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 </>
               )}
 
-              {fiaTemplateLoadSpecConfirmOpen && fiaPendingLoadTemplate ? (
-                <div
-                  className="fixed inset-0 z-[400] flex items-center justify-center bg-slate-950/55 p-4"
-                  role="presentation"
-                  onClick={() => {
-                    setFiaTemplateLoadSpecConfirmOpen(false);
-                    setFiaPendingLoadTemplate(null);
-                  }}
-                >
-                  <div
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="fia-template-load-spec-heading"
-                    className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-none border border-slate-200 bg-white p-6 shadow-xl"
-                    onClick={(e) => e.stopPropagation()}
-                  >
+              {fiaPendingLoadTemplate ? (
+              <ViewportModal
+                open={fiaTemplateLoadSpecConfirmOpen}
+                onClose={() => {
+                  setFiaTemplateLoadSpecConfirmOpen(false);
+                  setFiaPendingLoadTemplate(null);
+                }}
+                ariaLabelledBy="fia-template-load-spec-heading"
+              >
                     <h3 id="fia-template-load-spec-heading" className="font-serif text-xl font-bold text-slate-950">
                       Update product specifications?
                     </h3>
@@ -5764,23 +5799,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         Yes, remap specs
                       </Button>
                     </div>
-                  </div>
-                </div>
+              </ViewportModal>
               ) : null}
 
-              {fiaTemplateSaveOpen ? (
-                <div
-                  className="fixed inset-0 z-[400] flex items-center justify-center bg-slate-950/55 p-4"
-                  role="presentation"
-                  onClick={() => setFiaTemplateSaveOpen(false)}
-                >
-                  <div
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="fia-template-save-heading"
-                    className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-none border border-slate-200 bg-white p-6 shadow-xl"
-                    onClick={(e) => e.stopPropagation()}
-                  >
+              <ViewportModal
+                open={fiaTemplateSaveOpen}
+                onClose={() => setFiaTemplateSaveOpen(false)}
+                ariaLabelledBy="fia-template-save-heading"
+              >
                     <h3 id="fia-template-save-heading" className="font-serif text-xl font-bold text-slate-950">
                       Save this product template?
                     </h3>
@@ -5829,9 +5855,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         Save template
                       </Button>
                     </div>
-                  </div>
-                </div>
-              ) : null}
+              </ViewportModal>
 
               <WorkflowStepFooter
                 onBack={goPrevWizardStep}
@@ -6003,9 +6027,12 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                               specificConversionAmount: result.amount.toLocaleString("en-US"),
                             })
                           );
-                          setRothOptimizePremiumHint(
-                            `Optimized to convert within your ${result.marginalRateNominalPct}% bracket before RMD age ${result.rmdStartAge} (Protect initial investment ${result.protectInitialInvestment ? "on" : "off"}).`
-                          );
+                          const baseHint = `Optimized to convert ${currency(result.amount)} within your ${result.marginalRateNominalPct}% bracket before RMD age ${result.rmdStartAge} (Protect initial investment ${result.protectInitialInvestment ? "on" : "off"}).`;
+                          const holdHint =
+                            result.qualifiedIncomeHold != null && result.qualifiedIncomeHold > 0
+                              ? ` Keep ${currency(result.qualifiedIncomeHold)} in your qualified IRA for retirement income liquidity during conversion years (not part of the conversion). Total qualified used: ${currency(result.amount + result.qualifiedIncomeHold)}.`
+                              : "";
+                          setRothOptimizePremiumHint(baseHint + holdHint);
                         })}
                       >
                         Optimize premium
@@ -6481,22 +6508,15 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                 ) : null}
               </div>
 
-              {rothFicTemplateLoadSpecConfirmOpen && rothFicPendingLoadTemplate ? (
-                <div
-                  className="fixed inset-0 z-[400] flex items-center justify-center bg-slate-950/55 p-4"
-                  role="presentation"
-                  onClick={() => {
-                    setRothFicTemplateLoadSpecConfirmOpen(false);
-                    setRothFicPendingLoadTemplate(null);
-                  }}
-                >
-                  <div
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="roth-fic-template-load-spec-heading"
-                    className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-none border border-slate-200 bg-white p-6 shadow-xl"
-                    onClick={(e) => e.stopPropagation()}
-                  >
+              {rothFicPendingLoadTemplate ? (
+              <ViewportModal
+                open={rothFicTemplateLoadSpecConfirmOpen}
+                onClose={() => {
+                  setRothFicTemplateLoadSpecConfirmOpen(false);
+                  setRothFicPendingLoadTemplate(null);
+                }}
+                ariaLabelledBy="roth-fic-template-load-spec-heading"
+              >
                     <h3 id="roth-fic-template-load-spec-heading" className="font-serif text-xl font-bold text-slate-950">
                       Load Roth FIC template?
                     </h3>
@@ -6557,23 +6577,14 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         Yes, remap specs
                       </Button>
                     </div>
-                  </div>
-                </div>
+              </ViewportModal>
               ) : null}
 
-              {rothFicTemplateSaveOpen ? (
-                <div
-                  className="fixed inset-0 z-[400] flex items-center justify-center bg-slate-950/55 p-4"
-                  role="presentation"
-                  onClick={() => setRothFicTemplateSaveOpen(false)}
-                >
-                  <div
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="roth-fic-template-save-heading"
-                    className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-none border border-slate-200 bg-white p-6 shadow-xl"
-                    onClick={(e) => e.stopPropagation()}
-                  >
+              <ViewportModal
+                open={rothFicTemplateSaveOpen}
+                onClose={() => setRothFicTemplateSaveOpen(false)}
+                ariaLabelledBy="roth-fic-template-save-heading"
+              >
                     <h3 id="roth-fic-template-save-heading" className="font-serif text-xl font-bold text-slate-950">
                       Save this Roth FIC template?
                     </h3>
@@ -6623,9 +6634,7 @@ async function downloadPDFReport(mode: "client" | "advisor") {
                         Save template
                       </Button>
                     </div>
-                  </div>
-                </div>
-              ) : null}
+              </ViewportModal>
 
               {rothAnalysisBusy ? (
                 <p className="text-sm text-amber-900" role="status" aria-live="polite">
